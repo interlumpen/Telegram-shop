@@ -31,6 +31,12 @@ class EnvKeys(ABC):
     LOG_TO_FILE: Final = os.getenv("LOG_TO_FILE", "1")
     DEBUG: Final = os.getenv("DEBUG", "0")
 
+    # Redis
+    REDIS_HOST: Final = os.getenv("REDIS_HOST")
+    REDIS_PORT: Final = int(os.getenv("REDIS_PORT", 6379))
+    REDIS_DB: Final = int(os.getenv("REDIS_DB", 0))
+    REDIS_PASSWORD: Final = os.getenv("REDIS_PASSWORD")
+
     # Database (for Docker)
     POSTGRES_DB: Final = os.getenv("POSTGRES_DB")
     POSTGRES_USER: Final = os.getenv("POSTGRES_USER", "postgres")

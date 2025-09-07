@@ -56,6 +56,19 @@ The application requires the following environment variables:
 </details>
 
 <details>
+<summary><b>Redis storage</b></summary>
+
+| Variable       | Description                                                                                                         |
+|----------------|---------------------------------------------------------------------------------------------------------------------|
+| REDIS_HOST     | Redis host (server address). In the Docker setup the default is `redis`. Used to connect session/cache/FSM storage. |
+| REDIS_PORT     | Redis port (default `6379`).                                                                                        |
+| REDIS_DB       | Redis database number (default `0`). Allows separating data between environments/apps.                              |
+| REDIS_PASSWORD | Password for Redis access (if enabled).)                                                                            |
+
+</details>
+
+
+<details>
 <summary><b>Database (for Docker)</b></summary>
 
 | Variable          | Description                                                                                           |

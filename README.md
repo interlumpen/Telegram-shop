@@ -29,6 +29,7 @@ The administrator has an "admin panel" button in the menu:
 ![](assets/menu_as_admin_picture.png)
 
 ### Referral system
+
 The bot has a customizable referral system:
 
 ![](assets/referral_system.png)
@@ -75,6 +76,9 @@ The bot has configured logging that reports errors or actions of administrators
 - #### Database:
     - PostgreSQL
     - Sqlalchemy
+
+- #### Storage:
+    - Redis Storage
 
 - #### Payment:
     - CryptoPay

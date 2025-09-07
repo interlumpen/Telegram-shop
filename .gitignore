@@ -141,4 +141,3 @@ cython_debug/
 .idea
 .vscode
 .ruff_cache
-database.db
