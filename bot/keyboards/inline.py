@@ -2,7 +2,7 @@ from typing import Callable, Iterable, Tuple
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 from bot.i18n import localize
-from bot.misc import LazyPaginator
+from bot.misc import LazyPaginator # noqa: F401
 
 
 def main_menu(role: int, channel: str | None = None, helper: str | None = None) -> InlineKeyboardMarkup:

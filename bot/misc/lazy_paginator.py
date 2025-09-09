@@ -1,4 +1,5 @@
-from typing import Callable, List, Optional, Dict
+from typing import Callable, List, Optional, Dict, Any
+from datetime import datetime
 
 
 class LazyPaginator:
@@ -26,7 +27,8 @@ class LazyPaginator:
 
         # Восстанавливаем из словаря или создаем новое
         if state and isinstance(state, dict):
-            self._cache = state.get('cache', {})
+            # Don't restore cache from state - it contains non-serializable objects
+            self._cache = {}
             self._total_count = state.get('total_count')
             self.current_page = state.get('current_page', 0)
         else:
@@ -86,12 +88,41 @@ class LazyPaginator:
         total = await self.get_total_count()
         return max(1, (total + self.per_page - 1) // self.per_page)
 
+    def _serialize_item(self, item: Any) -> Dict:
+        """Convert item to serializable format"""
+        if hasattr(item, '__dict__'):
+            # SQLAlchemy object
+            result = {}
+            for key, value in item.__dict__.items():
+                if key.startswith('_'):
+                    continue
+                if isinstance(value, datetime):
+                    result[key] = value.isoformat()
+                elif hasattr(value, '__dict__'):
+                    # Skip nested objects
+                    continue
+                else:
+                    result[key] = value
+            return result
+        elif isinstance(item, dict):
+            # Already a dict
+            result = {}
+            for key, value in item.items():
+                if isinstance(value, datetime):
+                    result[key] = value.isoformat()
+                else:
+                    result[key] = value
+            return result
+        else:
+            # Simple type
+            return {'value': item}
+
     def get_state(self) -> Dict:
-        """Get current state for FSM storage"""
+        """Get current state for FSM storage - without cache to avoid serialization issues"""
         return {
-            'cache': self._cache.copy(),  # Copying to avoid mutation problems
             'total_count': self._total_count,
             'current_page': self.current_page
+            # Don't include cache - it contains non-serializable SQLAlchemy objects
         }
 
     def clear_cache(self):

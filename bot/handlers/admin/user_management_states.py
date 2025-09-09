@@ -1,3 +1,4 @@
+from decimal import Decimal
 from functools import partial
 
 from aiogram import Router, F
@@ -18,7 +19,7 @@ from bot.states import UserMgmtStates
 
 import datetime
 
-from bot.misc import EnvKeys, LazyPaginator
+from bot.misc import EnvKeys, LazyPaginator, validate_telegram_id, validate_money_amount, UserDataUpdate
 
 router = Router()
 
@@ -38,96 +39,111 @@ async def user_callback_handler(call: CallbackQuery, state: FSMContext):
 
 @router.message(UserMgmtStates.waiting_user_id_for_check, F.text)
 async def check_user_data(message: Message, state: FSMContext):
-    """
-    Validates ID and shows user profile directly.
-    """
-    user_id_text = message.text.strip()
-    if not user_id_text.isdigit():
+    """Validates ID and shows user profile directly."""
+    try:
+        # Validate user ID
+        target_id = validate_telegram_id(message.text.strip())
+
+        user = check_user(target_id)
+        if not user:
+            await message.answer(
+                localize('admin.users.profile_unavailable'),
+                reply_markup=back('console')
+            )
+            return
+        user_id_text = message.text.strip()
+        if not user_id_text.isdigit():
+            await message.answer(
+                localize('admin.users.invalid_id'),
+                reply_markup=back('console')
+            )
+            return
+
+        target_id = int(user_id_text)
+        user = check_user(target_id)
+        if not user:
+            await message.answer(
+                localize('admin.users.profile_unavailable'),
+                reply_markup=back('console')
+            )
+            return
+
+        # Get user profile data
+        user_info = await message.bot.get_chat(target_id)
+        operations = select_user_operations(target_id)
+        overall_balance = sum(operations) if operations else 0
+        items_count = select_user_items(target_id)
+        role = check_role_name_by_id(user.role_id)
+        referrals = check_user_referrals(user.telegram_id)
+
+        # Get referral earnings stats for the user
+        earnings_stats = get_referral_earnings_stats(target_id)
+        has_referrals = referrals > 0
+        has_earnings = earnings_stats['total_earnings_count'] > 0
+
+        # Action buttons
+        actions: list[tuple[str, str]] = []
+        role_name = role  # 'USER' | 'ADMIN' | 'OWNER'
+
+        if role_name == 'OWNER':
+            # Do nothing: owner's role is immutable for safety
+            pass
+        elif role_name == 'ADMIN':
+            actions.append((localize('btn.admin.demote'), f"remove-admin_{target_id}"))
+        else:  # USER
+            actions.append((localize('btn.admin.promote'), f"set-admin_{target_id}"))
+
+        actions.append((localize('btn.admin.replenish_user'), f"fill-user-balance_{target_id}"))
+
+        if items_count:
+            actions.append((localize('btn.purchased'), f"user-items_{target_id}"))
+
+        # Add referral-related buttons
+        if has_referrals:
+            actions.append((localize('admin.users.btn.view_referrals'), f"admin-view-referrals_{target_id}"))
+
+        if has_earnings:
+            actions.append((localize('admin.users.btn.view_earnings'), f"admin-view-earnings_{target_id}"))
+
+        actions.append((localize('btn.back'), "user_management"))
+
+        markup = simple_buttons(actions, per_row=1)
+
+        lines = [
+            localize('profile.caption', name=user_info.first_name, id=target_id),
+            '',
+            localize('profile.id', id=target_id),
+            localize('profile.balance', amount=user.balance, currency=EnvKeys.PAY_CURRENCY),
+            localize('profile.total_topup', amount=overall_balance, currency=EnvKeys.PAY_CURRENCY),
+            localize('profile.purchased_count', count=items_count),
+            '',
+            localize('admin.users.referrals', count=referrals),
+            localize('admin.users.role', role=role),
+            localize('profile.registration_date', dt=user.registration_date.strftime("%d.%m.%Y %H:%M")),
+        ]
+
+        # Add referral earnings stats if available
+        if has_earnings:
+            lines.append('')
+            lines.append(localize('referrals.stats.template',
+                                  active_count=earnings_stats['active_referrals_count'],
+                                  total_earned=int(earnings_stats['total_amount']),
+                                  total_original=int(earnings_stats['total_original_amount']),
+                                  earnings_count=earnings_stats['total_earnings_count'],
+                                  currency=EnvKeys.PAY_CURRENCY))
+
+        await message.answer(
+            '\n'.join(lines),
+            parse_mode='HTML',
+            reply_markup=markup
+        )
+        await state.clear()
+    except ValueError as e:
         await message.answer(
             localize('admin.users.invalid_id'),
             reply_markup=back('console')
         )
         return
-
-    target_id = int(user_id_text)
-    user = check_user(target_id)
-    if not user:
-        await message.answer(
-            localize('admin.users.profile_unavailable'),
-            reply_markup=back('console')
-        )
-        return
-
-    # Get user profile data
-    user_info = await message.bot.get_chat(target_id)
-    operations = select_user_operations(target_id)
-    overall_balance = sum(operations) if operations else 0
-    items_count = select_user_items(target_id)
-    role = check_role_name_by_id(user.role_id)
-    referrals = check_user_referrals(user.telegram_id)
-
-    # Get referral earnings stats for the user
-    earnings_stats = get_referral_earnings_stats(target_id)
-    has_referrals = referrals > 0
-    has_earnings = earnings_stats['total_earnings_count'] > 0
-
-    # Action buttons
-    actions: list[tuple[str, str]] = []
-    role_name = role  # 'USER' | 'ADMIN' | 'OWNER'
-
-    if role_name == 'OWNER':
-        # Do nothing: owner's role is immutable for safety
-        pass
-    elif role_name == 'ADMIN':
-        actions.append((localize('btn.admin.demote'), f"remove-admin_{target_id}"))
-    else:  # USER
-        actions.append((localize('btn.admin.promote'), f"set-admin_{target_id}"))
-
-    actions.append((localize('btn.admin.replenish_user'), f"fill-user-balance_{target_id}"))
-
-    if items_count:
-        actions.append((localize('btn.purchased'), f"user-items_{target_id}"))
-
-    # Add referral-related buttons
-    if has_referrals:
-        actions.append((localize('admin.users.btn.view_referrals'), f"admin-view-referrals_{target_id}"))
-
-    if has_earnings:
-        actions.append((localize('admin.users.btn.view_earnings'), f"admin-view-earnings_{target_id}"))
-
-    actions.append((localize('btn.back'), "user_management"))
-
-    markup = simple_buttons(actions, per_row=1)
-
-    lines = [
-        localize('profile.caption', name=user_info.first_name, id=target_id),
-        '',
-        localize('profile.id', id=target_id),
-        localize('profile.balance', amount=user.balance, currency=EnvKeys.PAY_CURRENCY),
-        localize('profile.total_topup', amount=overall_balance, currency=EnvKeys.PAY_CURRENCY),
-        localize('profile.purchased_count', count=items_count),
-        '',
-        localize('admin.users.referrals', count=referrals),
-        localize('admin.users.role', role=role),
-        localize('profile.registration_date', dt=user.registration_date.strftime("%d.%m.%Y %H:%M")),
-    ]
-
-    # Add referral earnings stats if available
-    if has_earnings:
-        lines.append('')
-        lines.append(localize('referrals.stats.template',
-                              active_count=earnings_stats['active_referrals_count'],
-                              total_earned=int(earnings_stats['total_amount']),
-                              total_original=int(earnings_stats['total_original_amount']),
-                              earnings_count=earnings_stats['total_earnings_count'],
-                              currency=EnvKeys.PAY_CURRENCY))
-
-    await message.answer(
-        '\n'.join(lines),
-        parse_mode='HTML',
-        reply_markup=markup
-    )
-    await state.clear()
 
 
 @router.callback_query(F.data.startswith('check-user_'), HasPermissionFilter(Permission.USERS_MANAGE))
@@ -626,56 +642,66 @@ async def replenish_user_balance_callback_handler(call: CallbackQuery, state: FS
 
 @router.message(UserMgmtStates.waiting_user_replenish, F.text)
 async def process_replenish_user_balance(message: Message, state: FSMContext):
-    """
-    Processes entered amount and tops up user's balance.
-    """
+    """Processes entered amount and tops up user's balance."""
     data = await state.get_data()
     user_id = data.get('target_user')
 
-    # Validation
-    min_amount, max_amount = EnvKeys.MIN_AMOUNT, EnvKeys.MAX_AMOUNT
-    text = (message.text or '').strip()
-    if not text.isdigit():
-        await message.answer(
-            localize('payments.replenish_invalid', min_amount=min_amount, max_amount=max_amount,
-                     currency=EnvKeys.PAY_CURRENCY),
-            reply_markup=back(f'check-user_{user_id}')
-        )
-        return
-
-    amount = int(text)
-    if not (min_amount <= amount <= max_amount):
-        await message.answer(
-            localize('payments.replenish_invalid', min_amount=min_amount, max_amount=max_amount,
-                     currency=EnvKeys.PAY_CURRENCY),
-            reply_markup=back(f'check-user_{user_id}')
-        )
-        return
-
-    # Apply top-up
-    create_operation(user_id, amount, datetime.datetime.now())
-    update_balance(user_id, amount)
-
-    user_info = await message.bot.get_chat(user_id)
-    await message.answer(
-        localize('admin.users.balance.topped', name=user_info.first_name, amount=amount, currency=EnvKeys.PAY_CURRENCY),
-        reply_markup=back(f'check-user_{user_id}')
-    )
-
-    admin_info = await message.bot.get_chat(message.from_user.id)
-    audit_logger.info(
-        f"User {message.from_user.id} ({admin_info.first_name}) topped up the balance of user "
-        f"{user_id} ({user_info.first_name}) by {amount}"
-    )
     try:
-        await message.bot.send_message(
-            chat_id=user_id,
-            text=localize('admin.users.balance.topped.notify', amount=amount, currency=EnvKeys.PAY_CURRENCY),
-            reply_markup=close()
+        # Validate amount
+        amount = validate_money_amount(
+            message.text.strip(),
+            min_amount=Decimal(EnvKeys.MIN_AMOUNT),
+            max_amount=Decimal(EnvKeys.MAX_AMOUNT)
         )
-    except Exception:
-        pass
-    await state.clear()
+
+        # Validate user update
+        user_update = UserDataUpdate(
+            telegram_id=user_id,
+            balance=amount
+        )
+
+        # Apply top-up
+        create_operation(user_update.telegram_id, int(amount), datetime.datetime.now())
+        update_balance(user_update.telegram_id, int(amount))
+
+        user_info = await message.bot.get_chat(user_id)
+        await message.answer(
+            localize('admin.users.balance.topped',
+                     name=user_info.first_name,
+                     amount=int(amount),
+                     currency=EnvKeys.PAY_CURRENCY),
+            reply_markup=back(f'check-user_{user_id}')
+        )
+
+        # Audit logging
+        admin_info = await message.bot.get_chat(message.from_user.id)
+        audit_logger.info(
+            f"User {message.from_user.id} ({admin_info.first_name}) topped up the balance of user "
+            f"{user_id} ({user_info.first_name}) by {int(amount)}"
+        )
+
+        # Notify user
+        try:
+            await message.bot.send_message(
+                chat_id=user_id,
+                text=localize('admin.users.balance.topped.notify',
+                              amount=int(amount),
+                              currency=EnvKeys.PAY_CURRENCY),
+                reply_markup=close()
+            )
+        except Exception:
+            pass
+
+        await state.clear()
+
+    except ValueError as e:
+        await message.answer(
+            localize('payments.replenish_invalid',
+                     min_amount=EnvKeys.MIN_AMOUNT,
+                     max_amount=EnvKeys.MAX_AMOUNT,
+                     currency=EnvKeys.PAY_CURRENCY),
+            reply_markup=back(f'check-user_{user_id}')
+        )
 
 
 @router.callback_query(F.data.startswith('check-user_'), HasPermissionFilter(permission=Permission.USERS_MANAGE))

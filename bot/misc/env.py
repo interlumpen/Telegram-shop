@@ -4,6 +4,8 @@ from typing import Final
 
 
 class EnvKeys(ABC):
+    """Secure environment configuration with validation"""
+
     # Telegram
     TOKEN: Final = os.environ.get('TOKEN')
     OWNER_ID: Final = os.environ.get('OWNER_ID')
@@ -41,7 +43,7 @@ class EnvKeys(ABC):
     POSTGRES_DB: Final = os.getenv("POSTGRES_DB")
     POSTGRES_USER: Final = os.getenv("POSTGRES_USER", "postgres")
     POSTGRES_PASSWORD: Final = os.getenv("POSTGRES_PASSWORD")
-    DB_PORT: Final = os.getenv("DB_PORT", 5432)
+    DB_PORT: Final = int(os.getenv("DB_PORT", 5432))
     DB_DRIVER: Final = os.getenv("DB_DRIVER", "postgresql+psycopg2")
 
     # Database (for manual deploy)

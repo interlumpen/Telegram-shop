@@ -44,9 +44,19 @@ def configure_logging(console: bool = True, debug: bool = False):
         audit_fh.setFormatter(fmt)
         audit_logger.addHandler(audit_fh)
 
-    for name in ("aiogram.client", "aiogram.methods", "aiogram.fsm", "aiogram.event"):
+    # Disable redundant logs from aiogram
+    # Show only WARNINGS and above for these components
+    for name in (
+            "aiogram.client",
+            "aiogram.methods",
+            "aiogram.fsm",
+            "aiogram.event",
+            "aiogram.middlewares",
+            "aiogram.dispatcher"
+    ):
         logging.getLogger(name).setLevel(logging.WARNING)
 
-    logging.getLogger("aiogram.dispatcher").setLevel(logging.INFO)
+    if not debug:
+        logging.getLogger("aiogram.dispatcher").setLevel(logging.ERROR)
 
     return logger, audit_logger

@@ -16,7 +16,8 @@ from bot.database.methods import (
 )
 from bot.keyboards import back, simple_buttons, lazy_paginated_keyboard
 from bot.filters import HasPermissionFilter
-from bot.misc import EnvKeys, LazyPaginator
+from bot.logger_mesh import audit_logger
+from bot.misc import EnvKeys, LazyPaginator, sanitize_html, SearchQuery
 from bot.i18n import localize
 from bot.states import GoodsFSM
 
@@ -240,26 +241,49 @@ async def show_bought_item_callback_handler(call: CallbackQuery, state: FSMConte
 
 @router.message(GoodsFSM.waiting_bought_item_id, F.text, HasPermissionFilter(Permission.SHOP_MANAGE))
 async def process_item_show(message: Message, state: FSMContext):
-    """
-    Show purchased item details by unique ID.
-    """
-    msg = (message.text or "").strip()
-    if not msg.isdigit():
-        await message.answer(localize("errors.id_should_be_number"), reply_markup=back("show_bought_item"))
-        return
-
-    item = select_bought_item(int(msg))
-    if item:
-        text = (
-            f"{localize('purchases.item.name', name=item['item_name'])}\n"
-            f"{localize('purchases.item.price', amount=item['price'], currency=EnvKeys.PAY_CURRENCY)}\n"
-            f"{localize('purchases.item.datetime', dt=item['bought_datetime'])}\n"
-            f"{localize('purchases.item.buyer', buyer=item['buyer_id'])}\n"
-            f"{localize('purchases.item.unique_id', uid=item['unique_id'])}\n"
-            f"{localize('purchases.item.value', value=item['value'])}"
+    """Show purchased item details by unique ID."""
+    try:
+        # Validate search query
+        search_query = SearchQuery(
+            query=message.text.strip(),
+            limit=1
         )
-        await message.answer(text, parse_mode="HTML", reply_markup=back("show_bought_item"))
-    else:
-        await message.answer(localize("admin.shop.bought.not_found"), reply_markup=back("show_bought_item"))
+
+        # Sanitize and validate ID
+        msg = search_query.sanitize_query(search_query.query)
+
+        if not msg.isdigit():
+            await message.answer(
+                localize("errors.id_should_be_number"),
+                reply_markup=back("show_bought_item")
+            )
+            return
+
+        item = select_bought_item(int(msg))
+        if item:
+            # Sanitize output values
+            safe_value = sanitize_html(item['value'])
+
+            text = (
+                f"{localize('purchases.item.name', name=item['item_name'])}\n"
+                f"{localize('purchases.item.price', amount=item['price'], currency=EnvKeys.PAY_CURRENCY)}\n"
+                f"{localize('purchases.item.datetime', dt=item['bought_datetime'])}\n"
+                f"{localize('purchases.item.buyer', buyer=item['buyer_id'])}\n"
+                f"{localize('purchases.item.unique_id', uid=item['unique_id'])}\n"
+                f"{localize('purchases.item.value', value=safe_value)}"
+            )
+            await message.answer(text, parse_mode="HTML", reply_markup=back("show_bought_item"))
+        else:
+            await message.answer(
+                localize("admin.shop.bought.not_found"),
+                reply_markup=back("show_bought_item")
+            )
+
+    except Exception as e:
+        await message.answer(
+            localize("errors.invalid_data"),
+            reply_markup=back("show_bought_item")
+        )
+        audit_logger.error(f"Search error: {e}")
 
     await state.clear()

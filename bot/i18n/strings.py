@@ -327,6 +327,10 @@ TRANSLATIONS: dict[str, dict[str, str]] = {
         "middleware.ban": "⏳ Вы временно заблокированы. Подождите {time} секунд",
         "middleware.above_limits": "⚠️ Слишком много запросов! Вы временно заблокированы.",
         "middleware.waiting": "⏳ Подождите {time} секунд перед следующим действием.",
+        "middleware.security.session_outdated": "⚠️ Сессия устарела. Пожалуйста, начните заново.",
+        "middleware.security.invalid_data": "❌ Недопустимые данные",
+        "middleware.security.blocked": "❌ Доступ заблокирован",
+        "middleware.security.not_admin": "⛔ Недостаточно прав",
 
         # === Errors ===
         "errors.not_subscribed": "Вы не подписались",
@@ -665,6 +669,10 @@ TRANSLATIONS: dict[str, dict[str, str]] = {
         "middleware.ban": "⏳ You are temporarily blocked. Wait {time} seconds.",
         "middleware.above_limits": "⚠️ Too many requests! You are temporarily blocked.",
         "middleware.waiting": "⏳ Wait {time} seconds for the next action.",
+        "middleware.security.session_outdated": "⚠️ Session is outdated. Please start again.",
+        "middleware.security.invalid_data": "❌ Invalid data",
+        "middleware.security.blocked": "❌ Access blocked",
+        "middleware.security.not_admin": "⛔ Insufficient permissions",
 
         # === Errors ===
         "errors.not_subscribed": "You are not subscribed",

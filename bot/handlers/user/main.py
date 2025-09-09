@@ -40,7 +40,7 @@ async def start(message: Message, state: FSMContext):
     create_user(
         telegram_id=int(user_id),
         registration_date=datetime.datetime.now(),
-        referral_id=referral_id,
+        referral_id=int(referral_id) if referral_id else None,
         role=user_role
     )
 

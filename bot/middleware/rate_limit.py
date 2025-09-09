@@ -27,7 +27,7 @@ class RateLimitConfig:
     })
 
     # Temporary ban after exceeding
-    ban_duration: int = 300  # 5 минут
+    ban_duration: int = 300  # 5 minutes
 
     # Exceptions for admins
     admin_bypass: bool = True
@@ -169,7 +169,7 @@ class RateLimitMiddleware(BaseMiddleware):
         try:
             from bot.database.methods import check_role
             role = check_role(user_id)
-            return role > 1  # ADMIN или OWNER
+            return role > 1  # ADMIN or OWNER
         except Exception:
             return False
 

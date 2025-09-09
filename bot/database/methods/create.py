@@ -8,7 +8,7 @@ from bot.database.models import User, ItemValues, Goods, Categories, Operations,
 from bot.database import Database
 
 
-def create_user(telegram_id: int, registration_date: datetime, referral_id: int | str, role: int = 1) -> None:
+def create_user(telegram_id: int, registration_date: datetime, referral_id: int | None, role: int = 1) -> None:
     """Create user if missing; commit."""
     with Database().session() as s:
         if s.query(exists().where(User.telegram_id == telegram_id)).scalar():
@@ -18,7 +18,7 @@ def create_user(telegram_id: int, registration_date: datetime, referral_id: int 
                 telegram_id=telegram_id,
                 role_id=role,
                 registration_date=registration_date,
-                referral_id=None if referral_id in ("", None) else referral_id,
+                referral_id=referral_id,
             )
         )
 

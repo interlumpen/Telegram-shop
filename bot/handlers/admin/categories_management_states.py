@@ -7,6 +7,7 @@ from bot.database.methods import check_category, create_category, delete_categor
 from bot.keyboards.inline import back, simple_buttons
 from bot.filters import HasPermissionFilter
 from bot.logger_mesh import audit_logger
+from bot.misc import CategoryRequest
 from bot.states import CategoryFSM
 
 router = Router()
@@ -43,26 +44,35 @@ async def add_category_callback_handler(call: CallbackQuery, state):
 
 @router.message(CategoryFSM.waiting_add_category, F.text)
 async def process_category_for_add(message: Message, state):
-    """
-    Creates a category if it doesn't exist yet.
-    """
-    category_name = message.text.strip()
+    """Creates a category if it doesn't exist yet."""
+    try:
+        # Validate category name
+        category_request = CategoryRequest(name=message.text.strip())
+        category_name = category_request.sanitize_name()
 
-    if check_category(category_name):
+        if check_category(category_name):
+            await message.answer(
+                localize("admin.categories.add.exist"),
+                reply_markup=back("categories_management"),
+            )
+        else:
+            create_category(category_name)
+            await message.answer(
+                localize("admin.categories.add.success"),
+                reply_markup=back("categories_management"),
+            )
+
+            admin_info = await message.bot.get_chat(message.from_user.id)
+            audit_logger.info(
+                f'Admin {message.from_user.id} ({admin_info.first_name}) created category "{category_name}"'
+            )
+
+    except Exception as e:
         await message.answer(
-            localize("admin.categories.add.exist"),
+            localize("errors.invalid_data"),
             reply_markup=back("categories_management"),
         )
-    else:
-        create_category(category_name)
-        await message.answer(
-            localize("admin.categories.add.success"),
-            reply_markup=back("categories_management"),
-        )
-        admin_info = await message.bot.get_chat(message.from_user.id)
-        audit_logger.info(
-            f'Admin {message.from_user.id} ({admin_info.first_name}) created category "{category_name}"'
-        )
+        audit_logger.error(f"Category creation error: {e}")
 
     await state.clear()
 
