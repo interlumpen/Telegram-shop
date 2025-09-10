@@ -1,6 +1,6 @@
 from decimal import Decimal
-from typing import Optional, Annotated
-from pydantic import BaseModel, Field, StringConstraints, field_validator
+from typing import Optional, Annotated, Self
+from pydantic import BaseModel, Field, StringConstraints, field_validator, model_validator
 import re
 
 
@@ -46,6 +46,7 @@ class UserDataUpdate(BaseModel):
     """Validate user data updates"""
     telegram_id: int = Field(..., gt=0)
     balance: Optional[Decimal] = Field(None, ge=0, le=1000000)
+
     # Removed role_id as it's not used in the current implementation
 
     @field_validator('balance')
@@ -74,26 +75,31 @@ class BroadcastMessage(BaseModel):
     text: Annotated[str, StringConstraints(min_length=1, max_length=4096)]
     parse_mode: Optional[str] = Field("HTML", pattern="^(HTML|Markdown|MarkdownV2)$")
 
-    @field_validator('text')
-    @classmethod
-    def validate_html(cls, v: str, info) -> str:
-        if info.data.get('parse_mode') == 'HTML':
+    @model_validator(mode='after')
+    def validate_html_tags(self) -> Self:
+        """Validate HTML tags after all fields are set"""
+        if self.parse_mode == 'HTML':
             # Basic HTML validation - check for balanced tags
             allowed_tags = ['b', 'i', 'u', 's', 'code', 'pre', 'a']
 
             # Simple check for unclosed tags
             for tag in allowed_tags:
-                open_count = v.count(f'<{tag}')
-                close_count = v.count(f'</{tag}>')
-                if open_count != close_count:
+                open_count = self.text.count(f'<{tag}>')
+                # Also check for tags with attributes
+                open_with_attrs = self.text.count(f'<{tag} ')
+                total_open = open_count + open_with_attrs
+                close_count = self.text.count(f'</{tag}>')
+
+                if total_open != close_count:
                     raise ValueError(f'Unbalanced HTML tag: {tag}')
-        return v
+        return self
 
 
 class SearchQuery(BaseModel):
     """Validate search queries"""
     query: Annotated[str, StringConstraints(min_length=1, max_length=255, strip_whitespace=True)]
     limit: int = Field(10, ge=1, le=100)
+
     # Removed offset as it's not used in the current implementation
 
     def sanitize_query(self, v: str) -> str:
