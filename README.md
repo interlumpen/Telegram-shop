@@ -309,7 +309,7 @@ docker compose logs -f bot
 1. **Clone the repository**
 
 ```bash
-git clone https://github.com/yourusername/telegram-shop-bot.git
+git clone https://github.com/interlumpen/Telegram-shop.git
 cd telegram-shop-bot
 ```
 
@@ -653,4 +653,4 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 
 ## 📞 Support
 
-- Create an [Issue](https://github.com/yourusername/telegram-shop-bot/issues) for bug reports
+- Create an [Issue](https://github.com/interlumpen/Telegram-shop/issues) for bug reports
