@@ -7,7 +7,7 @@ from aiogram.types import CallbackQuery, Message
 from bot.handlers.other import generate_short_hash
 from bot.i18n import localize
 from bot.database.models import Permission
-from bot.database.methods import check_item, delete_item, get_item_info, get_goods_info, delete_item_from_position, \
+from bot.database.methods import check_item_cached, delete_item, get_item_info_cached, get_goods_info, delete_item_from_position, \
     query_items_in_position
 from bot.keyboards.inline import back, simple_buttons, lazy_paginated_keyboard
 from bot.logger_mesh import audit_logger
@@ -51,7 +51,7 @@ async def delete_str_item(message: Message, state):
     Deletes a position by the provided name.
     """
     item_name = message.text
-    item = check_item(item_name)
+    item = await check_item_cached(item_name)
     if not item:
         await message.answer(
             localize('admin.goods.delete.position.not_found'),
@@ -85,7 +85,7 @@ async def show_str_item(message: Message, state: FSMContext):
     Shows all items in the selected position with lazy loading pagination.
     """
     item_name = message.text.strip()
-    item = check_item(item_name)
+    item = await check_item_cached(item_name)
     if not item:
         await message.answer(
             localize('admin.goods.position.not_found'),
@@ -223,7 +223,7 @@ async def item_info_callback_handler(call: CallbackQuery, state: FSMContext):
         await call.answer(localize("admin.goods.item.not_found"), show_alert=True)
         return
 
-    position_info = get_item_info(item_info["item_name"])
+    position_info = await get_item_info_cached(item_info["item_name"])
 
     # Store item info in state for delete handler
     await state.update_data(

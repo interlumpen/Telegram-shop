@@ -5,9 +5,8 @@ from aiogram.exceptions import TelegramForbiddenError, TelegramBadRequest, Teleg
 from aiogram.types import CallbackQuery, Message
 
 from bot.database.models import Permission
-from bot.database.methods import (
-    check_item, add_values_to_item, update_item, check_value, delete_only_items
-)
+from bot.database.methods import check_item_cached, add_values_to_item, update_item, check_value, delete_only_items
+
 from bot.keyboards.inline import back, question_buttons, simple_buttons
 from bot.logger_mesh import audit_logger
 from bot.filters import HasPermissionFilter
@@ -35,7 +34,7 @@ async def check_item_name_for_amount_upd(message: Message, state):
     If item is infinite — values cannot be added.
     """
     item_name = message.text.strip()
-    item = check_item(item_name)
+    item = await check_item_cached(item_name)
     if not item:
         await message.answer(
             localize('admin.goods.update.amount.not_exists'),
@@ -167,7 +166,7 @@ async def update_item_callback_handler(call: CallbackQuery, state):
 async def check_item_name_for_update(message: Message, state):
     """Validate item and ask for a new name."""
     item_name = message.text.strip()
-    item = check_item(item_name)
+    item = await check_item_cached(item_name)
     if not item:
         await message.answer(
             localize('admin.goods.update.not_exists'),

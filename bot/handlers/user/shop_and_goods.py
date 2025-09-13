@@ -5,8 +5,8 @@ from aiogram.types import CallbackQuery
 from aiogram.fsm.context import FSMContext
 
 from bot.database.methods import (
-    get_bought_item_info, get_item_info, select_item_values_amount,
-    check_value, query_categories, query_user_bought_items
+    get_bought_item_info, check_value, query_categories, query_user_bought_items, get_item_info_cached,
+    select_item_values_amount_cached
 )
 from bot.keyboards import item_info, back, lazy_paginated_keyboard
 from bot.i18n import localize
@@ -185,7 +185,7 @@ async def item_info_callback_handler(call: CallbackQuery):
         back_data = "shop"
         category = ""
 
-    item_info_data = get_item_info(item_name)
+    item_info_data = await get_item_info_cached(item_name)
     if not item_info_data:
         await call.answer(localize("shop.item.not_found"), show_alert=True)
         return
@@ -194,10 +194,12 @@ async def item_info_callback_handler(call: CallbackQuery):
     if not category:
         category = item_info_data.get('category_name', '')
 
+    quantity = await select_item_values_amount_cached(item_name)
+
     quantity_line = (
         localize("shop.item.quantity_unlimited")
         if check_value(item_name)
-        else localize("shop.item.quantity_left", count=select_item_values_amount(item_name))
+        else localize("shop.item.quantity_left", count=quantity)
     )
 
     markup = item_info(item_name, back_data)

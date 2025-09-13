@@ -1,3 +1,6 @@
+import asyncio
+from typing import Optional
+
 from aiogram import Router, F
 from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, Message
@@ -11,17 +14,29 @@ from bot.database.methods import (
     select_today_users, select_admins, get_user_count, select_today_orders,
     select_all_orders, select_today_operations, select_users_balance, select_all_operations,
     select_count_items, select_count_goods, select_count_categories, select_count_bought_items,
-    select_bought_item, check_user, check_user_referrals, check_role_name_by_id, select_user_items,
-    select_user_operations, query_admins, query_all_users
+    select_bought_item, check_user_referrals, check_role_name_by_id, select_user_items,
+    select_user_operations, query_admins, query_all_users, check_user_cached
 )
 from bot.keyboards import back, simple_buttons, lazy_paginated_keyboard
 from bot.filters import HasPermissionFilter
 from bot.logger_mesh import audit_logger
-from bot.misc import EnvKeys, LazyPaginator, sanitize_html, SearchQuery
+from bot.misc import EnvKeys, LazyPaginator, sanitize_html, SearchQuery, StatsCache, get_cache_manager
 from bot.i18n import localize
 from bot.states import GoodsFSM
 
 router = Router()
+
+# Initialize StatsCache as a global variable
+stats_cache: Optional[StatsCache] = None
+
+
+def init_stats_cache():
+    """Initializing the statistics cache"""
+    global stats_cache
+    cache_manager = get_cache_manager()
+    if cache_manager:
+        stats_cache = StatsCache(cache_manager)
+        asyncio.create_task(stats_cache.warm_up_cache())
 
 
 @router.callback_query(F.data == "shop_management", HasPermissionFilter(Permission.SHOP_MANAGE))
@@ -65,22 +80,46 @@ async def statistics_callback_handler(call: CallbackQuery):
     """
     today_str = datetime.date.today().isoformat()
 
-    text = localize(
-        "admin.shop.stats.template",
-        today_users=select_today_users(today_str),
-        admins=select_admins(),
-        users=get_user_count(),
-        today_orders=select_today_orders(today_str),
-        all_orders=select_all_orders(),
-        today_topups=select_today_operations(today_str),
-        system_balance=select_users_balance(),
-        all_topups=select_all_operations(),
-        items=select_count_items(),
-        goods=select_count_goods(),
-        categories=select_count_categories(),
-        sold_count=select_count_bought_items(),
-        currency=EnvKeys.PAY_CURRENCY
-    )
+    # Use cached statistics
+    if stats_cache:
+        daily_stats = await stats_cache.get_daily_stats(today_str)
+        global_stats = await stats_cache.get_global_stats()
+
+        text = localize(
+            "admin.shop.stats.template",
+            today_users=daily_stats['users'],
+            admins=global_stats['total_admins'],
+            users=global_stats['total_users'],
+            today_orders=daily_stats['orders'],
+            all_orders=global_stats['total_revenue'],
+            today_topups=daily_stats['operations'],
+            system_balance=select_users_balance(),
+            all_topups=select_all_operations(),
+            items=global_stats['total_items'],
+            goods=global_stats['total_goods'],
+            categories=select_count_categories(),
+            sold_count=select_count_bought_items(),
+            currency=EnvKeys.PAY_CURRENCY
+        )
+
+    else:
+        # Fallback on direct requests if cache is unavailable
+        text = localize(
+            "admin.shop.stats.template",
+            today_users=select_today_users(today_str),
+            admins=select_admins(),
+            users=get_user_count(),
+            today_orders=select_today_orders(today_str),
+            all_orders=select_all_orders(),
+            today_topups=select_today_operations(today_str),
+            system_balance=select_users_balance(),
+            all_topups=select_all_operations(),
+            items=select_count_items(),
+            goods=select_count_goods(),
+            categories=select_count_categories(),
+            sold_count=select_count_bought_items(),
+            currency=EnvKeys.PAY_CURRENCY
+        )
 
     await call.message.edit_text(text, reply_markup=back("shop_management"), parse_mode="HTML")
 
@@ -204,7 +243,7 @@ async def show_user_info(call: CallbackQuery):
     origin, user_id = query.split("-")  # origin: 'user' | 'admin'
     back_target = "users_list" if origin == "user" else "admins_list"
 
-    user = check_user(user_id)
+    user = await check_user_cached(user_id)
     user_info = await call.message.bot.get_chat(user_id)
     operations = select_user_operations(user_id)
     overall_balance = sum(operations) if operations else 0

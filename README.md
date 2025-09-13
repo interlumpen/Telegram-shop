@@ -108,19 +108,7 @@ tools.
 
 ### System Architecture
 
-```
-┌─────────────────┐     ┌──────────────┐     ┌─────────────┐
-│                 │────▶│              │────▶│             │
-│  Telegram API   │     │   Bot Core   │     │  PostgreSQL │
-│                 │◀────│   (Aiogram)  │◀────│   Database  │
-└─────────────────┘     └──────────────┘     └─────────────┘
-         │                      │                    │
-         │              ┌───────▼───────┐            │
-         │              │  Redis Cache  │            │
-         │              │   (FSM/Rate   │            │
-         └──────────────│   Limiting)   │────────────┘
-                        └───────────────┘
-```
+![System Architecture](assets/system_architecture.png)
 
 ### Database Schema
 

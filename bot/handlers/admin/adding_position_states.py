@@ -6,7 +6,7 @@ from aiogram.types import CallbackQuery, Message
 
 from bot.database.models import Permission
 from bot.database.methods import (
-    check_category, check_item, create_item, add_values_to_item
+    check_category_cached, check_item_cached, create_item, add_values_to_item
 )
 from bot.keyboards.inline import back, question_buttons, simple_buttons
 from bot.logger_mesh import audit_logger
@@ -33,7 +33,7 @@ async def check_item_name_for_add(message: Message, state):
     If position already exists — inform the user; otherwise save name and ask for description.
     """
     item_name = (message.text or "").strip()
-    item = check_item(item_name)
+    item = await check_item_cached(item_name)
     if item:
         await message.answer(
             localize('admin.goods.add.name.exists'),
@@ -78,7 +78,7 @@ async def check_category_for_add_item(message: Message, state):
     Category must exist; then ask about infinite mode.
     """
     category_name = (message.text or "").strip()
-    category = check_category(category_name)
+    category = await check_category_cached(category_name)
     if not category:
         await message.answer(
             localize('admin.goods.add.category.not_found'),

@@ -1,11 +1,44 @@
+import asyncio
 import datetime
 from decimal import Decimal
-from typing import Optional, List, Dict
+from functools import wraps
+from typing import Optional, Dict
 
-from sqlalchemy import func, exists, desc
+from sqlalchemy import func, exists
 
 from bot.database.models import Database, User, ItemValues, Goods, Categories, Role, BoughtGoods, \
     Operations, ReferralEarnings
+from bot.misc.cache import get_cache_manager
+
+
+# Wrapper for synchronous functions to asynchronous functions with caching
+def async_cached(ttl: int = 300, key_prefix: str = ""):
+    def decorator(sync_func):
+        @wraps(sync_func)
+        async def async_wrapper(*args, **kwargs):
+            # Generate the cache key
+            cache_key = f"{key_prefix or sync_func.__name__}:{':'.join(str(arg) for arg in args)}"
+
+            cache = get_cache_manager()
+            if cache:
+                # Trying to get it from the cache
+                cached_value = await cache.get(cache_key)
+                if cached_value is not None:
+                    return cached_value
+
+            # Execute synchronous function in executor
+            loop = asyncio.get_event_loop()
+            result = await loop.run_in_executor(None, sync_func, *args)
+
+            # Save to cache
+            if cache and result is not None:
+                await cache.set(cache_key, result, ttl)
+
+            return result
+
+        return async_wrapper
+
+    return decorator
 
 
 def _day_window(date_str: str) -> tuple[datetime.datetime, datetime.datetime]:
@@ -262,3 +295,90 @@ def get_one_referral_earning(earning_id: int) -> dict | None:
     with Database().session() as s:
         result = s.query(ReferralEarnings).filter(ReferralEarnings.id == earning_id).first()
         return result.__dict__ if result else None
+
+
+@async_cached(ttl=600, key_prefix="user")
+def check_user_cached(telegram_id: int | str):
+    """Cached version of check_user"""
+    return check_user(telegram_id)
+
+
+@async_cached(ttl=300, key_prefix="role")
+def check_role_cached(telegram_id: int):
+    """Cached Role Verification"""
+    return check_role(telegram_id)
+
+
+@async_cached(ttl=1800, key_prefix="category")
+def check_category_cached(category_name: str):
+    """Cached Category Check"""
+    return check_category(category_name)
+
+
+@async_cached(ttl=1800, key_prefix="item")
+def check_item_cached(item_name: str):
+    """Cached product verification"""
+    return check_item(item_name)
+
+
+@async_cached(ttl=900, key_prefix="item_info")
+def get_item_info_cached(item_name: str):
+    """Cached product information"""
+    return get_item_info(item_name)
+
+
+@async_cached(ttl=300, key_prefix="item_values")
+def select_item_values_amount_cached(item_name: str):
+    """Cached quantity of goods"""
+    return select_item_values_amount(item_name)
+
+
+@async_cached(ttl=60, key_prefix="user_count")
+def get_user_count_cached():
+    """Cached number of users"""
+    return get_user_count()
+
+
+@async_cached(ttl=60, key_prefix="admin_count")
+def select_admins_cached():
+    """Cached number of admins"""
+    return select_admins()
+
+
+# Cache invalidation functions
+async def invalidate_user_cache(user_id: int):
+    """Invalidate user cache"""
+    cache = get_cache_manager()
+    if cache:
+        await cache.delete(f"user:{user_id}")
+        await cache.delete(f"role:{user_id}")
+        await cache.invalidate_pattern(f"user_stats:{user_id}:*")
+        await cache.invalidate_pattern(f"user_items:{user_id}:*")
+
+
+async def invalidate_item_cache(item_name: str):
+    """Invalidate product cache"""
+    cache = get_cache_manager()
+    if cache:
+        await cache.delete(f"item:{item_name}")
+        await cache.delete(f"item_info:{item_name}")
+        await cache.delete(f"item_values:{item_name}")
+        # Also invalidate categories, as the number of items may have changed
+        await cache.invalidate_pattern("category:*")
+
+
+async def invalidate_category_cache(category_name: str):
+    """Invalidate category cache"""
+    cache = get_cache_manager()
+    if cache:
+        await cache.delete(f"category:{category_name}")
+        await cache.invalidate_pattern(f"category_items:{category_name}:*")
+
+
+async def invalidate_stats_cache():
+    """Invalidate the entire statistics cache"""
+    cache = get_cache_manager()
+    if cache:
+        await cache.invalidate_pattern("stats:*")
+        await cache.delete("user_count")
+        await cache.delete("admin_count")

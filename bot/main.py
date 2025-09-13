@@ -5,12 +5,16 @@ from aiogram.client.default import DefaultBotProperties
 from aiogram.fsm.storage.memory import MemoryStorage
 from aiogram.fsm.storage.redis import RedisStorage
 
+from bot.database.methods import check_category_cached
+from bot.handlers.admin.shop_management_states import init_stats_cache
 from bot.misc import EnvKeys
 from bot.handlers import register_all_handlers
 from bot.database.models import register_models
 from bot.logger_mesh import configure_logging
 from bot.middleware import setup_rate_limiting, RateLimitConfig
 from bot.middleware.security import SecurityMiddleware, AuthenticationMiddleware
+from bot.misc.cache import init_cache_manager, get_cache_manager
+from bot.misc.cache_scheduler import CacheScheduler
 from bot.misc.storage import get_redis_storage
 
 
@@ -51,6 +55,49 @@ async def __on_start_up(dp: Dispatcher) -> None:
 
     logging.info("Security middleware initialized")
 
+    storage = get_redis_storage()
+    if isinstance(storage, RedisStorage):
+        # Use the same Redis for caching
+        await init_cache_manager(storage.redis)
+
+        # Initialize the statistics cache
+        init_stats_cache()
+
+        # Warm up critical caches at startup
+        await warm_up_critical_caches()
+
+        logging.info("Cache system initialized and warmed up")
+    else:
+        logging.warning("Redis not available - caching disabled")
+
+
+async def warm_up_critical_caches():
+    """Warming of critical caches at startup"""
+    from bot.database.methods.read import (
+        get_user_count_cached,
+        select_admins_cached
+    )
+
+    cache_manager = get_cache_manager()
+    if not cache_manager:
+        return
+
+    try:
+        # Warming up the base stats
+        await get_user_count_cached()
+        await select_admins_cached()
+
+        # Warming up popular categories and products
+        from bot.database.methods import query_categories
+        categories = await query_categories(limit=5)
+        for category in categories:
+            await check_category_cached(category)
+
+        logging.info("Critical caches warmed up successfully")
+    except Exception as e:
+        logging.error(f"Failed to warm up caches: {e}")
+
+
 
 async def start_bot() -> None:
     """Start the bot with enhanced security"""
@@ -89,6 +136,9 @@ async def start_bot() -> None:
             "Using MemoryStorage - FSM states will be lost on restart! "
             "Consider setting up Redis for production."
         )
+
+    cache_scheduler = CacheScheduler()
+    await cache_scheduler.start()
 
     # Creating a dispatcher
     dp = Dispatcher(storage=storage)

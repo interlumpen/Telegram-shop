@@ -7,8 +7,8 @@ from urllib.parse import urlparse
 import datetime
 
 from bot.database.methods import (
-    select_max_role_id, create_user, check_role, check_user,
-    select_user_operations, select_user_items
+    select_max_role_id, create_user, check_role,
+    select_user_operations, select_user_items, check_user_cached
 )
 from bot.handlers.other import check_sub_channel
 from bot.keyboards import main_menu, back, profile_keyboard, check_sub
@@ -79,7 +79,7 @@ async def back_to_menu_callback_handler(call: CallbackQuery, state: FSMContext):
     Return user to the main menu.
     """
     user_id = call.from_user.id
-    user = check_user(user_id)
+    user = await check_user_cached(user_id)
 
     channel_url = EnvKeys.CHANNEL_URL or ""
     parsed = urlparse(channel_url)
@@ -113,7 +113,7 @@ async def profile_callback_handler(call: CallbackQuery, state: FSMContext):
     """
     user_id = call.from_user.id
     tg_user = call.from_user
-    user_info = check_user(user_id)
+    user_info = check_user_cached(user_id)
     balance = user_info.balance
     operations = select_user_operations(user_id)
     overall_balance = sum(operations) if operations else 0
@@ -149,7 +149,7 @@ async def check_sub_to_channel(call: CallbackQuery, state: FSMContext):
     if channel_username:
         chat_member = await call.bot.get_chat_member(chat_id='@' + channel_username, user_id=user_id)
         if await check_sub_channel(chat_member):
-            user = check_user(user_id)
+            user = await check_user_cached(user_id)
             markup = main_menu(user.role_id, channel_username, helper)
             await call.message.edit_text(localize("menu.title"), reply_markup=markup)
             await state.clear()

@@ -3,7 +3,7 @@ from aiogram.types import CallbackQuery, Message
 
 from bot.i18n import localize
 from bot.database.models import Permission
-from bot.database.methods import check_category, create_category, delete_category, update_category
+from bot.database.methods import check_category_cached, create_category, delete_category, update_category
 from bot.keyboards.inline import back, simple_buttons
 from bot.filters import HasPermissionFilter
 from bot.logger_mesh import audit_logger
@@ -50,7 +50,7 @@ async def process_category_for_add(message: Message, state):
         category_request = CategoryRequest(name=message.text.strip())
         category_name = category_request.sanitize_name()
 
-        if check_category(category_name):
+        if await check_category_cached(category_name):
             await message.answer(
                 localize("admin.categories.add.exist"),
                 reply_markup=back("categories_management"),
@@ -97,7 +97,7 @@ async def process_category_for_delete(message: Message, state):
     """
     category_name = message.text.strip()
 
-    if not check_category(category_name):
+    if not await check_category_cached(category_name):
         await message.answer(
             localize("admin.categories.delete.not_found"),
             reply_markup=back("categories_management"),
@@ -135,7 +135,7 @@ async def check_category_for_update(message: Message, state):
     """
     old_name = message.text.strip()
 
-    if not check_category(old_name):
+    if not await check_category_cached(old_name):
         await message.answer(
             localize("admin.categories.rename.not_found"),
             reply_markup=back("categories_management"),
@@ -160,7 +160,7 @@ async def check_category_name_for_update(message: Message, state):
     data = await state.get_data()
     old_name = data.get("old_category")
 
-    if check_category(new_name):
+    if await check_category_cached(new_name):
         await message.answer(
             localize("admin.categories.rename.exist"),
             reply_markup=back("categories_management"),
