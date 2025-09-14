@@ -1,6 +1,7 @@
 import asyncio
 
 from bot.database.methods import invalidate_item_cache, invalidate_category_cache
+from bot.database.methods.cache_utils import safe_create_task
 from bot.database.models import Database, Goods, ItemValues, Categories
 
 
@@ -10,7 +11,7 @@ def delete_item(item_name: str) -> None:
         s.query(Goods).filter(Goods.name == item_name).delete(synchronize_session=False)
 
     # Invalidate the cache
-    asyncio.create_task(invalidate_item_cache(item_name))
+    safe_create_task(invalidate_item_cache(item_name))
 
 
 def delete_only_items(item_name: str) -> None:
@@ -31,4 +32,4 @@ def delete_category(category_name: str) -> None:
         s.query(Categories).filter(Categories.name == category_name).delete(synchronize_session=False)
 
     # Invalidate the cache
-    asyncio.create_task(invalidate_category_cache(category_name))
+    safe_create_task(invalidate_category_cache(category_name))

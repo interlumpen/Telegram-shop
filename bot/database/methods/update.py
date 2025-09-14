@@ -1,9 +1,8 @@
-import asyncio
-
 from sqlalchemy import exc
 
 from bot.database.methods import invalidate_user_cache, invalidate_stats_cache, invalidate_item_cache, \
     invalidate_category_cache
+from bot.database.methods.cache_utils import safe_create_task
 from bot.database.models import User, ItemValues, Goods, Categories, BoughtGoods
 from bot.database import Database
 from bot.i18n import localize
@@ -17,7 +16,7 @@ def set_role(telegram_id: int, role: int) -> None:
         )
 
     # Invalidate the user cache
-    asyncio.create_task(invalidate_user_cache(telegram_id))
+    safe_create_task(invalidate_user_cache(telegram_id))
 
 
 def update_balance(telegram_id: int | str, summ: int) -> None:
@@ -28,8 +27,8 @@ def update_balance(telegram_id: int | str, summ: int) -> None:
         )
 
     # Invalidate the cache
-    asyncio.create_task(invalidate_user_cache(int(telegram_id)))
-    asyncio.create_task(invalidate_stats_cache())
+    safe_create_task(invalidate_user_cache(int(telegram_id)))
+    safe_create_task(invalidate_stats_cache())
 
 
 def update_item(item_name: str, new_name: str, description: str, price, category: str) -> tuple[bool, str | None]:
@@ -71,9 +70,9 @@ def update_item(item_name: str, new_name: str, description: str, price, category
             # Remove the old merchandise
             session.query(Goods).filter(Goods.name == item_name).delete(synchronize_session=False)
 
-            asyncio.create_task(invalidate_item_cache(item_name))
+            safe_create_task(invalidate_item_cache(item_name))
             if new_name != item_name:
-                asyncio.create_task(invalidate_item_cache(new_name))
+                safe_create_task(invalidate_item_cache(new_name))
 
             return True, None
 
@@ -106,9 +105,9 @@ def update_category(category_name: str, new_name: str) -> None:
 
             s.commit()
 
-            asyncio.create_task(invalidate_category_cache(category_name))
+            safe_create_task(invalidate_category_cache(category_name))
             if new_name != category_name:
-                asyncio.create_task(invalidate_category_cache(new_name))
+                safe_create_task(invalidate_category_cache(new_name))
 
         except Exception:
             s.rollback()
