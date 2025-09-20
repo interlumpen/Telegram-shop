@@ -15,7 +15,7 @@ from bot.database.methods import (
     select_all_orders, select_today_operations, select_users_balance, select_all_operations,
     select_count_items, select_count_goods, select_count_categories, select_count_bought_items,
     select_bought_item, check_user_referrals, check_role_name_by_id, select_user_items,
-    select_user_operations, query_admins, query_all_users, check_user_cached
+    select_user_operations, query_admins, query_all_users, check_user
 )
 from bot.keyboards import back, simple_buttons, lazy_paginated_keyboard
 from bot.filters import HasPermissionFilter
@@ -243,7 +243,7 @@ async def show_user_info(call: CallbackQuery):
     origin, user_id = query.split("-")  # origin: 'user' | 'admin'
     back_target = "users_list" if origin == "user" else "admins_list"
 
-    user = await check_user_cached(user_id)
+    user = check_user(user_id)
     user_info = await call.message.bot.get_chat(user_id)
     operations = select_user_operations(user_id)
     overall_balance = sum(operations) if operations else 0

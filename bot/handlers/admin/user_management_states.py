@@ -8,10 +8,9 @@ from aiogram.types import CallbackQuery, Message
 from bot.i18n import localize
 from bot.database.models import Permission
 from bot.database.methods import (
-    select_user_operations, select_user_items, check_role_name_by_id, check_user_referrals, set_role,
+    select_user_operations, select_user_items, check_role_name_by_id, check_user_referrals, set_role, check_user,
     create_operation, update_balance, get_role_id_by_name, get_referral_earnings_stats, get_one_referral_earning,
-    query_user_bought_items, query_user_referrals, query_referral_earnings_from_user, query_all_referral_earnings,
-    check_user_cached
+    query_user_bought_items, query_user_referrals, query_referral_earnings_from_user, query_all_referral_earnings
 )
 from bot.keyboards import back, close, simple_buttons, lazy_paginated_keyboard
 from bot.logger_mesh import audit_logger
@@ -45,7 +44,7 @@ async def check_user_data(message: Message, state: FSMContext):
         # Validate user ID
         target_id = validate_telegram_id(message.text.strip())
 
-        user = await check_user_cached(target_id)
+        user = check_user(target_id)
         if not user:
             await message.answer(
                 localize('admin.users.profile_unavailable'),
@@ -61,7 +60,7 @@ async def check_user_data(message: Message, state: FSMContext):
             return
 
         target_id = int(user_id_text)
-        user = check_user_cached(target_id)
+        user = check_user(target_id)
         if not user:
             await message.answer(
                 localize('admin.users.profile_unavailable'),
@@ -159,7 +158,7 @@ async def user_profile_view(call: CallbackQuery):
         await call.answer(localize('errors.invalid_data'), show_alert=True)
         return
 
-    user = await check_user_cached(target_id)
+    user = check_user(target_id)
     if not user:
         await call.answer(localize('admin.users.not_found'), show_alert=True)
         return
@@ -541,7 +540,7 @@ async def process_admin_for_purpose(call: CallbackQuery):
         await call.answer(localize('errors.invalid_data'), show_alert=True)
         return
 
-    db_user = await check_user_cached(user_id)
+    db_user = check_user(user_id)
     if not db_user:
         await call.answer(localize('admin.users.not_found'), show_alert=True)
         return
@@ -587,7 +586,7 @@ async def process_admin_for_remove(call: CallbackQuery):
         await call.answer(localize('errors.invalid_data'), show_alert=True)
         return
 
-    db_user = await check_user_cached(user_id)
+    db_user = check_user(user_id)
     if not db_user:
         await call.answer(localize('admin.users.not_found'), show_alert=True)
         return

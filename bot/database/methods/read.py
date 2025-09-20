@@ -297,12 +297,6 @@ def get_one_referral_earning(earning_id: int) -> dict | None:
         return result.__dict__ if result else None
 
 
-@async_cached(ttl=600, key_prefix="user")
-def check_user_cached(telegram_id: int | str):
-    """Cached version of check_user"""
-    return check_user(telegram_id)
-
-
 @async_cached(ttl=300, key_prefix="role")
 def check_role_cached(telegram_id: int):
     """Cached Role Verification"""
