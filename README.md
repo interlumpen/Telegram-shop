@@ -1,7 +1,7 @@
 # 🛍️ Telegram Shop Bot
 
-A production-ready Telegram shop bot with advanced security features, transactional integrity, and comprehensive admin
-tools.
+A production-ready Telegram shop bot with advanced security features, transactional integrity, comprehensive admin
+tools, real-time monitoring, and disaster recovery capabilities.
 
 [![Python](https://img.shields.io/badge/Python-3.11+-blue.svg)](https://www.python.org/downloads/)
 [![Aiogram](https://img.shields.io/badge/aiogram-3.22+-green.svg)](https://docs.aiogram.dev/)
@@ -24,6 +24,7 @@ tools.
 - [Tech Stack](#-tech-stack)
 - [Environment Variables](#-environment-variables)
 - [Installation](#-installation)
+- [Monitoring & Metrics](#-monitoring--metrics)
 - [Usage](#-usage)
 - [API Documentation](#-api-documentation)
 - [Testing](#-testing)
@@ -63,7 +64,7 @@ tools.
 - **Referral Dashboard**: Track earnings and referrals
 - **Channel Integration**: Optional news channel with subscription checks
 
-### Performance & Caching
+### Performance & Reliability
 
 - **Advanced Connection Pooling**: Optimized PostgreSQL connection management with QueuePool
     - 20 persistent connections with up to 40 overflow connections
@@ -75,6 +76,49 @@ tools.
     - Statistics caching (1-minute TTL)
     - Smart cache invalidation on data updates
 - **Performance Optimizations**: Up to 60% reduction in database queries for read operations
+
+### Monitoring & Analytics
+
+- **Real-Time Metrics Collection**:
+    - Event tracking (purchases, payments, user actions)
+    - Performance metrics (response times, query durations)
+    - Error tracking and categorization
+    - Conversion funnel analysis
+- **Web-Based Monitoring Dashboard**:
+    - Interactive UI at `/dashboard`
+    - Live statistics and system health
+    - Error tracking and analysis
+    - Performance visualization
+- **Prometheus-Compatible Metrics**:
+    - Export endpoint at `/metrics/prometheus`
+    - Ready for integration with Grafana
+    - Custom metrics for business KPIs
+- **Health Check Endpoint**:
+    - System status at `/health`
+    - Database connectivity check
+    - Redis status monitoring
+    - Bot API availability
+
+### Disaster Recovery System
+
+- **Automatic Recovery Manager**:
+    - Pending payment recovery
+    - Interrupted broadcast resumption
+    - Failed transaction rollback
+    - Connection pool recovery
+- **State Persistence**:
+    - Critical state saving to disk
+    - Recovery checkpoint creation
+    - Graceful shutdown handling
+- **Health Monitoring**:
+    - Periodic system health checks
+    - Automatic component restart
+    - Dead connection detection
+    - Resource leak prevention
+- **Payment Recovery**:
+    - Automatic check for stuck payments
+    - Idempotent payment processing
+    - User notification on recovery
 
 ## 🔒 Security
 
@@ -125,6 +169,8 @@ tools.
 
 ### Database Schema
 
+![Database Schema](assets/database_schema.png)
+
 - **Users**: Telegram ID, balance, referral tracking
 - **Roles**: Permission-based access control
 - **Products**: Categories, items, stock management
@@ -138,6 +184,7 @@ tools.
 - **Middleware Pipeline**: Request processing chain
 - **State Pattern**: FSM for multi-step processes
 - **Transaction Script**: Business logic encapsulation
+- **Observer Pattern**: Metrics collection and event tracking
 
 ### Performance Architecture
 
@@ -145,6 +192,7 @@ tools.
 - **Multi-Level Caching**: Redis-based intelligent caching with TTL-based expiration
 - **Cache Invalidation**: Smart cache clearing on data modifications
 - **Concurrent Load Handling**: Optimized for high-traffic scenarios with connection queuing
+- **Metrics Pipeline**: Asynchronous metrics collection without performance impact
 
 ## 💻 Tech Stack
 
@@ -169,12 +217,20 @@ tools.
 - **Telegram Stars API**: Native digital currency
 - **Telegram Payments API**: Traditional payment providers
 
+### Monitoring & Analytics
+
+- **Metrics Collection**: Custom MetricsCollector with event tracking
+- **Web Server**: aiohttp for monitoring dashboard
+- **Export Formats**: JSON, Prometheus metrics format
+- **Visualization**: Built-in HTML/CSS dashboard
+
 ### DevOps
 
 - **Containerization**: Docker & Docker Compose
 - **Logging**: Rotating file handlers with audit trails
 - **Testing**: Pytest with async support
 - **CI/CD Ready**: Environment-based configuration
+- **Health Checks**: Built-in health monitoring endpoints
 
 ## ⚙️ Environment Variables
 
@@ -228,6 +284,18 @@ The application requires the following environment variables:
 | `LOG_TO_STDOUT` | Console logging (1/0)         | `1`         |
 | `LOG_TO_FILE`   | File logging (1/0)            | `1`         |
 | `DEBUG`         | Debug mode (1/0)              | `0`         |
+
+</details>
+
+<details>
+<summary><b>📊 Monitoring</b></summary>
+
+| Variable          | Description                    | Default     |
+|-------------------|--------------------------------|-------------|
+| `MONITORING_HOST` | Monitoring server bind address | `localhost` |
+| `MONITORING_PORT` | Monitoring server port         | `9090`      |
+
+**Note**: When running in Docker, set `MONITORING_HOST=0.0.0.0` to allow external access.
 
 </details>
 
@@ -305,12 +373,18 @@ The bot will automatically:
 - Apply all migrations
 - Initialize roles and permissions
 - Start accepting messages
+- Launch monitoring dashboard on port 9090
+- Initialize recovery systems
 
 4. **View logs** (optional)
 
 ```bash
 docker compose logs -f bot
 ```
+
+5. Access monitoring dashboard
+
+Open in browser: http://localhost:9090/dashboard
 
 ### 🔧 Manual Deployment
 
@@ -374,6 +448,10 @@ alembic upgrade head
 python run.py
 ```
 
+9. Access monitoring (optional)
+
+Open in browser: http://localhost:9090/
+
 ### 📝 Post-Installation
 
 1. **Add bot to channel** (if using news channel feature):
@@ -394,6 +472,53 @@ alembic upgrade head
     - Send `/start` to your bot
     - Check that main menu appears
     - Access admin panel (owner only initially)
+    - Check monitoring dashboard at http://localhost:9090/
+
+## 📊 Monitoring & Metrics
+
+### Dashboard Overview
+
+The bot includes a comprehensive web-based monitoring system accessible at http://localhost:9090/
+
+#### Available Endpoints
+
+- / - Overview page with system status
+- /dashboard - Real-time metrics dashboard
+- /events - Event tracking and statistics
+- /performance - Performance metrics and timing analysis
+- /errors - Error tracking and debugging
+- /metrics - Raw metrics in JSON format
+- /metrics/prometheus - Prometheus-compatible metrics export
+- /health - Health check endpoint for monitoring tools
+
+### Recovery System
+
+The bot includes an automatic disaster recovery system that handles:
+
+#### Payment Recovery
+
+- Checks for stuck payments every 5 minutes
+- Automatically processes confirmed but uncredited payments
+- Notifies users when recovery succeeds
+
+#### Broadcast Recovery
+
+- Saves broadcast state during execution
+- Resumes interrupted broadcasts on restart
+- Tracks delivery statistics
+
+#### Health Monitoring
+
+- Periodic checks of all system components
+- Automatic restart of failed services
+- Connection pool health verification
+- Memory leak detection
+
+#### State Persistence
+
+- Critical state saved to data/ directory
+- Automatic backup before shutdown
+- Recovery checkpoints during long operations
 
 ## 📱 Usage
 
@@ -539,6 +664,31 @@ RateLimitConfig(
 # Security layers
 SecurityMiddleware(secret_key="...")
 AuthenticationMiddleware()
+```
+
+### Metrics Collection
+
+```python
+# Track custom events
+metrics.track_event("purchase", user_id, metadata={"item": item_name})
+metrics.track_timing("database_query", duration_ms)
+metrics.track_conversion("purchase_funnel", "view_item", user_id)
+
+# Get metrics summary
+summary = metrics.get_metrics_summary()
+prometheus_format = await metrics.export_to_prometheus()
+```
+
+### Recovery Management
+
+```python
+# Initialize recovery manager
+recovery_manager = RecoveryManager(bot)
+await recovery_manager.start()
+
+# Manual recovery trigger
+await recovery_manager.recover_pending_payments()
+await recovery_manager.recover_interrupted_broadcasts()
 ```
 
 ### Caching & Performance

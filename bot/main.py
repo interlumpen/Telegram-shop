@@ -1,5 +1,7 @@
 import logging
 import sys
+import json
+from pathlib import Path
 from aiogram import Bot, Dispatcher
 from aiogram.client.default import DefaultBotProperties
 from aiogram.fsm.storage.memory import MemoryStorage
@@ -16,10 +18,19 @@ from bot.middleware.security import SecurityMiddleware, AuthenticationMiddleware
 from bot.misc.cache import init_cache_manager, get_cache_manager
 from bot.misc.cache_scheduler import CacheScheduler
 from bot.misc.storage import get_redis_storage
+from bot.misc.recovery import RecoveryManager, StateManager
+from bot.misc.metrics import init_metrics, get_metrics, AnalyticsMiddleware
+from bot.misc.monitoring import MonitoringServer
+
+# Global variables for components
+recovery_manager = None
+monitoring_server = None
+cache_scheduler = None
 
 
-async def __on_start_up(dp: Dispatcher) -> None:
+async def __on_start_up(dp: Dispatcher, bot: Bot) -> None:
     """Initialize bot on startup"""
+    global recovery_manager, monitoring_server
 
     # Registration of handlers and models
     register_all_handlers(dp)
@@ -41,6 +52,14 @@ async def __on_start_up(dp: Dispatcher) -> None:
         }
     )
     setup_rate_limiting(dp, rate_config)
+
+    # Initializing metrics
+    metrics = init_metrics()
+    analytics_middleware = AnalyticsMiddleware(metrics)
+
+    # Adding middleware for analytics (first in the chain)
+    dp.message.middleware(analytics_middleware)
+    dp.callback_query.middleware(analytics_middleware)
 
     # Add security middleware
     security_middleware = SecurityMiddleware()
@@ -70,6 +89,46 @@ async def __on_start_up(dp: Dispatcher) -> None:
     else:
         logging.warning("Redis not available - caching disabled")
 
+    # Start the recovery system
+    recovery_manager = RecoveryManager(bot)
+    await recovery_manager.start()
+
+    # Start the monitoring server
+    monitoring_host = EnvKeys.MONITORING_HOST
+    monitoring_port = EnvKeys.MONITORING_PORT
+    monitoring_server = MonitoringServer(host=monitoring_host, port=monitoring_port)
+    await monitoring_server.start()
+
+    logging.info(f"Recovery and monitoring systems initialized on {monitoring_host}:{monitoring_port}")
+
+
+async def __on_shutdown(dp: Dispatcher, bot: Bot) -> None:
+    """Initialize bot shutdown"""
+    global recovery_manager, monitoring_server
+
+    logging.info("Starting shutdown...")
+
+    # Create a data directory if it does not exist
+    Path("data").mkdir(exist_ok=True)
+
+    # Saving status
+    state_manager = StateManager()
+    metrics = get_metrics()
+    if metrics:
+        summary = metrics.get_metrics_summary()
+        with open("data/final_metrics.json", "w") as f:
+            json.dump(summary, f, indent=2)
+
+    # Recovery Manager Stop
+    if recovery_manager:
+        await recovery_manager.stop()
+
+    # Monitoring server stop
+    if monitoring_server:
+        await monitoring_server.stop()
+
+    logging.info("Shutdown completed")
+
 
 async def warm_up_critical_caches():
     """Warming of critical caches at startup"""
@@ -98,9 +157,9 @@ async def warm_up_critical_caches():
         logging.error(f"Failed to warm up caches: {e}")
 
 
-
 async def start_bot() -> None:
-    """Start the bot with enhanced security"""
+    """Start the bot with enhanced security and monitoring"""
+    global cache_scheduler
 
     # Logging Configuration
     configure_logging(
@@ -119,6 +178,9 @@ async def start_bot() -> None:
     logging.getLogger("aiogram.dispatcher").setLevel(logging.WARNING)
     logging.getLogger("aiogram.event").setLevel(logging.WARNING)
     logging.getLogger("aiogram.middlewares").setLevel(logging.WARNING)
+    logging.getLogger("aiohttp.access").setLevel(logging.WARNING)
+    logging.getLogger("aiohttp.server").setLevel(logging.WARNING)
+    logging.getLogger("aiohttp.web").setLevel(logging.WARNING)
 
     # Checking critical environment variables
     if not EnvKeys.TOKEN:
@@ -143,9 +205,6 @@ async def start_bot() -> None:
     # Creating a dispatcher
     dp = Dispatcher(storage=storage)
 
-    # Initialization at startup
-    await __on_start_up(dp)
-
     # Create and run the bot
     async with Bot(
             token=EnvKeys.TOKEN,
@@ -158,6 +217,9 @@ async def start_bot() -> None:
         # Getting information about the bot
         bot_info = await bot.get_me()
         logging.info(f"Starting bot: @{bot_info.username} (ID: {bot_info.id})")
+
+        # Initialization at startup
+        await __on_start_up(dp, bot)
 
         try:
             # Start polling with signal processing
@@ -173,9 +235,16 @@ async def start_bot() -> None:
             )
         except Exception as e:
             logging.error(f"Bot polling error: {e}")
+            # Saving the state in case of emergency termination
+            await __on_shutdown(dp, bot)
             raise
         finally:
             # Correctly closing connections
+            await __on_shutdown(dp, bot)
+
+            if cache_scheduler:
+                await cache_scheduler.stop()
+
             if isinstance(storage, RedisStorage):
                 await storage.close()
                 logging.info("Redis connection closed")

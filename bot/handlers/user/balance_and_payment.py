@@ -12,6 +12,7 @@ from bot.logger_mesh import audit_logger, logger
 from bot.misc import EnvKeys, ItemPurchaseRequest, validate_telegram_id, validate_money_amount, PaymentRequest, \
     sanitize_html
 from bot.handlers.other import _any_payment_method_enabled, is_safe_item_name
+from bot.misc.metrics import get_metrics
 from bot.misc.payment import CryptoPayAPI, send_stars_invoice, send_fiat_invoice
 from bot.filters import ValidAmountFilter
 from bot.i18n import localize
@@ -390,6 +391,11 @@ async def successful_payment_handler(message: Message):
 async def buy_item_callback_handler(call: CallbackQuery):
     """Processing the purchase of goods with full transactional security."""
     try:
+        metrics = get_metrics()
+        if metrics:
+            # Tracking the purchase funnel
+            metrics.track_conversion("purchase_funnel", "view_item", call.from_user.id)
+
         # Extract and validate the product name
         raw_item_name = call.data[4:]
 
@@ -453,6 +459,14 @@ async def buy_item_callback_handler(call: CallbackQuery):
             return
 
         # Successful purchase - sanitize the output
+
+        if metrics:
+            metrics.track_event("purchase", call.from_user.id, {
+                "item": purchase_request.item_name,
+                "price": purchase_data['price']
+            })
+            metrics.track_conversion("purchase_funnel", "purchase", call.from_user.id)
+
         safe_value = sanitize_html(purchase_data['value'])
 
         await call.message.edit_text(

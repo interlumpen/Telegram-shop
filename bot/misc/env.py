@@ -46,5 +46,9 @@ class EnvKeys(ABC):
     DB_PORT: Final = int(os.getenv("DB_PORT", 5432))
     DB_DRIVER: Final = os.getenv("DB_DRIVER", "postgresql+psycopg2")
 
+    # Monitoring
+    MONITORING_HOST: Final = os.getenv("MONITORING_HOST", "localhost")
+    MONITORING_PORT: Final = int(os.getenv("MONITORING_PORT", 9090))
+
     # Database (for manual deploy)
     DATABASE_URL: Final = "postgresql+psycopg2://user:password@localhost:5432/db_name"  # (setup if you deploy manually)
