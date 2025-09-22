@@ -8,7 +8,7 @@ from aiogram.types import CallbackQuery, Message
 from bot.i18n import localize
 from bot.database.models import Permission
 from bot.database.methods import (
-    select_user_operations, select_user_items, check_role_name_by_id, check_user_referrals, set_role, check_user,
+    select_user_operations, select_user_items, check_role_name_by_id, check_user_referrals, set_role, check_user_cached,
     create_operation, update_balance, get_role_id_by_name, get_referral_earnings_stats, get_one_referral_earning,
     query_user_bought_items, query_user_referrals, query_referral_earnings_from_user, query_all_referral_earnings
 )
@@ -44,23 +44,7 @@ async def check_user_data(message: Message, state: FSMContext):
         # Validate user ID
         target_id = validate_telegram_id(message.text.strip())
 
-        user = check_user(target_id)
-        if not user:
-            await message.answer(
-                localize('admin.users.profile_unavailable'),
-                reply_markup=back('console')
-            )
-            return
-        user_id_text = message.text.strip()
-        if not user_id_text.isdigit():
-            await message.answer(
-                localize('admin.users.invalid_id'),
-                reply_markup=back('console')
-            )
-            return
-
-        target_id = int(user_id_text)
-        user = check_user(target_id)
+        user = await check_user_cached(target_id)
         if not user:
             await message.answer(
                 localize('admin.users.profile_unavailable'),
@@ -73,8 +57,8 @@ async def check_user_data(message: Message, state: FSMContext):
         operations = select_user_operations(target_id)
         overall_balance = sum(operations) if operations else 0
         items_count = select_user_items(target_id)
-        role = check_role_name_by_id(user.role_id)
-        referrals = check_user_referrals(user.telegram_id)
+        role = check_role_name_by_id(user.get('role_id'))
+        referrals = check_user_referrals(user.get('telegram_id'))
 
         # Get referral earnings stats for the user
         earnings_stats = get_referral_earnings_stats(target_id)
@@ -113,13 +97,13 @@ async def check_user_data(message: Message, state: FSMContext):
             localize('profile.caption', name=user_info.first_name, id=target_id),
             '',
             localize('profile.id', id=target_id),
-            localize('profile.balance', amount=user.balance, currency=EnvKeys.PAY_CURRENCY),
+            localize('profile.balance', amount=user.get('balance'), currency=EnvKeys.PAY_CURRENCY),
             localize('profile.total_topup', amount=overall_balance, currency=EnvKeys.PAY_CURRENCY),
             localize('profile.purchased_count', count=items_count),
             '',
             localize('admin.users.referrals', count=referrals),
             localize('admin.users.role', role=role),
-            localize('profile.registration_date', dt=user.registration_date.strftime("%d.%m.%Y %H:%M")),
+            localize('profile.registration_date', dt=user.get('registration_date')),
         ]
 
         # Add referral earnings stats if available
@@ -158,7 +142,7 @@ async def user_profile_view(call: CallbackQuery):
         await call.answer(localize('errors.invalid_data'), show_alert=True)
         return
 
-    user = check_user(target_id)
+    user = await check_user_cached(target_id)
     if not user:
         await call.answer(localize('admin.users.not_found'), show_alert=True)
         return
@@ -168,8 +152,8 @@ async def user_profile_view(call: CallbackQuery):
     operations = select_user_operations(target_id)
     overall_balance = sum(operations) if operations else 0
     items_count = select_user_items(target_id)
-    role = check_role_name_by_id(user.role_id)
-    referrals = check_user_referrals(user.telegram_id)
+    role = check_role_name_by_id(user.get('role_id'))
+    referrals = check_user_referrals(user.get('telegram_id'))
 
     # Get referral earnings stats for the user
     earnings_stats = get_referral_earnings_stats(target_id)
@@ -208,13 +192,13 @@ async def user_profile_view(call: CallbackQuery):
         localize('profile.caption', name=user_info.first_name, id=target_id),
         '',
         localize('profile.id', id=target_id),
-        localize('profile.balance', amount=user.balance, currency=EnvKeys.PAY_CURRENCY),
+        localize('profile.balance', amount=user.get('balance'), currency=EnvKeys.PAY_CURRENCY),
         localize('profile.total_topup', amount=overall_balance, currency=EnvKeys.PAY_CURRENCY),
         localize('profile.purchased_count', count=items_count),
         '',
         localize('admin.users.referrals', count=referrals),
         localize('admin.users.role', role=role),
-        localize('profile.registration_date', dt=user.registration_date.strftime("%d.%m.%Y %H:%M")),
+        localize('profile.registration_date', dt=user.get('registration_date')),
     ]
 
     # Add referral earnings stats if available
@@ -540,12 +524,12 @@ async def process_admin_for_purpose(call: CallbackQuery):
         await call.answer(localize('errors.invalid_data'), show_alert=True)
         return
 
-    db_user = check_user(user_id)
+    db_user = await check_user_cached(user_id)
     if not db_user:
         await call.answer(localize('admin.users.not_found'), show_alert=True)
         return
 
-    role_name = check_role_name_by_id(db_user.role_id)
+    role_name = check_role_name_by_id(db_user.get('role_id'))
     if role_name == 'OWNER':
         await call.answer(localize('admin.users.cannot_change_owner'), show_alert=True)
         return
@@ -586,12 +570,12 @@ async def process_admin_for_remove(call: CallbackQuery):
         await call.answer(localize('errors.invalid_data'), show_alert=True)
         return
 
-    db_user = check_user(user_id)
+    db_user = await check_user_cached(user_id)
     if not db_user:
         await call.answer(localize('admin.users.not_found'), show_alert=True)
         return
 
-    role_name = check_role_name_by_id(db_user.role_id)
+    role_name = check_role_name_by_id(db_user.get('role_id'))
     if role_name == 'OWNER':
         await call.answer(localize('admin.users.cannot_change_owner'), show_alert=True)
         return

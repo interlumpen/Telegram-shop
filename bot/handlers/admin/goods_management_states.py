@@ -132,7 +132,6 @@ async def show_str_item(message: Message, state: FSMContext):
     await state.update_data(
         items_in_position_paginator=paginator.get_state()
     )
-    await state.clear()
 
 
 @router.callback_query(F.data.startswith('gip_'), HasPermissionFilter(permission=Permission.SHOP_MANAGE))

@@ -51,7 +51,8 @@ def _day_window(date_str: str) -> tuple[datetime.datetime, datetime.datetime]:
 def check_user(telegram_id: int | str) -> Optional[User]:
     """Return user by Telegram ID or None if not found."""
     with Database().session() as s:
-        return s.query(User).filter(User.telegram_id == telegram_id).one_or_none()
+        result = s.query(User).filter(User.telegram_id == telegram_id).one_or_none()
+        return result.__dict__ if result else None
 
 
 def check_role(telegram_id: int) -> int:
@@ -295,6 +296,12 @@ def get_one_referral_earning(earning_id: int) -> dict | None:
     with Database().session() as s:
         result = s.query(ReferralEarnings).filter(ReferralEarnings.id == earning_id).first()
         return result.__dict__ if result else None
+
+
+@async_cached(ttl=600, key_prefix="user")
+def check_user_cached(telegram_id: int | str):
+    """Cached version of check_user"""
+    return check_user(telegram_id)
 
 
 @async_cached(ttl=300, key_prefix="role")

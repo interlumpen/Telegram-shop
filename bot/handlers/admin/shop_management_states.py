@@ -15,7 +15,7 @@ from bot.database.methods import (
     select_all_orders, select_today_operations, select_users_balance, select_all_operations,
     select_count_items, select_count_goods, select_count_categories, select_count_bought_items,
     select_bought_item, check_user_referrals, check_role_name_by_id, select_user_items,
-    select_user_operations, query_admins, query_all_users, check_user
+    select_user_operations, query_admins, query_all_users, check_user_cached
 )
 from bot.keyboards import back, simple_buttons, lazy_paginated_keyboard
 from bot.filters import HasPermissionFilter
@@ -59,16 +59,29 @@ async def shop_callback_handler(call: CallbackQuery):
 @router.callback_query(F.data == "show_logs", HasPermissionFilter(Permission.SHOP_MANAGE))
 async def logs_callback_handler(call: CallbackQuery):
     """
-    Send bot logs (audit) file if it exists and is not empty.
+    Send bot logs (audit and bot) files if they exist and are not empty.
     """
-    file_path = Path(EnvKeys.BOT_AUDITFILE)
-    if file_path.exists() and file_path.stat().st_size > 0:
-        doc = FSInputFile(file_path, filename=file_path.name)
-        await call.message.bot.send_document(
-            chat_id=call.message.chat.id,
-            document=doc,
-            caption=localize("admin.shop.logs.caption"),
-        )
+    files_to_send = []
+
+    # Check audit log file
+    audit_file_path = Path(EnvKeys.BOT_AUDITFILE)
+    if audit_file_path.exists() and audit_file_path.stat().st_size > 0:
+        files_to_send.append(('audit', audit_file_path))
+
+    # Check bot log file
+    bot_file_path = Path(EnvKeys.BOT_LOGFILE)
+    if bot_file_path.exists() and bot_file_path.stat().st_size > 0:
+        files_to_send.append(('bot', bot_file_path))
+
+    if files_to_send:
+        for log_type, file_path in files_to_send:
+            doc = FSInputFile(file_path, filename=file_path.name)
+            caption = localize("admin.shop.logs.caption") if log_type == 'audit' else f"{log_type.title()} log file"
+            await call.message.bot.send_document(
+                chat_id=call.message.chat.id,
+                document=doc,
+                caption=caption,
+            )
     else:
         await call.answer(localize("admin.shop.logs.empty"))
 
@@ -243,24 +256,24 @@ async def show_user_info(call: CallbackQuery):
     origin, user_id = query.split("-")  # origin: 'user' | 'admin'
     back_target = "users_list" if origin == "user" else "admins_list"
 
-    user = check_user(user_id)
+    user = await check_user_cached(user_id)
     user_info = await call.message.bot.get_chat(user_id)
     operations = select_user_operations(user_id)
     overall_balance = sum(operations) if operations else 0
     items = select_user_items(user_id)
-    role = check_role_name_by_id(user.role_id)
-    referrals = check_user_referrals(user.telegram_id)
+    role = check_role_name_by_id(user.get('role_id'))
+    referrals = check_user_referrals(user.get('telegram_id'))
 
     text = (
         f"{localize('profile.caption', name=user_info.first_name, id=user_id)}\n\n"
         f"{localize('profile.id', id=user_id)}\n"
-        f"{localize('profile.balance', amount=user.balance, currency=EnvKeys.PAY_CURRENCY)}\n"
+        f"{localize('profile.balance', amount=user.get('balance'), currency=EnvKeys.PAY_CURRENCY)}\n"
         f"{localize('profile.total_topup', amount=overall_balance, currency=EnvKeys.PAY_CURRENCY)}\n"
         f"{localize('profile.purchased_count', count=items)}\n\n"
-        f"{localize('profile.referral_id', id=user.referral_id)}\n"
+        f"{localize('profile.referral_id', id=user.get('referral_id'))}\n"
         f"{localize('admin.users.referrals', count=referrals)}\n"
         f"{localize('admin.users.role', role=role)}\n"
-        f"{localize('profile.registration_date', dt=user.registration_date)}\n"
+        f"{localize('profile.registration_date', dt=user.get('registration_date'))}\n"
     )
 
     await call.message.edit_text(text, parse_mode="HTML", reply_markup=back(back_target))

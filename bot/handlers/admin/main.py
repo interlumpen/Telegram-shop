@@ -1,4 +1,5 @@
 from aiogram import Router, F
+from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery
 
 from bot.i18n import localize
@@ -11,7 +12,7 @@ router = Router()
 
 
 @router.callback_query(F.data == 'console', HasPermissionFilter(permission=Permission.SHOP_MANAGE))
-async def console_callback_handler(call: CallbackQuery):
+async def console_callback_handler(call: CallbackQuery, state: FSMContext):
     """
     Admin menu (only for admins and above).
     """
@@ -21,3 +22,5 @@ async def console_callback_handler(call: CallbackQuery):
         await call.message.edit_text(localize("admin.menu.main"), reply_markup=admin_console_keyboard())
     else:
         await call.answer(localize("admin.menu.rights"))
+
+    await state.clear()
