@@ -5,6 +5,7 @@ from decimal import Decimal, ROUND_HALF_UP
 from aiogram import Router, F
 from aiogram.types import CallbackQuery, Message, PreCheckoutQuery, SuccessfulPayment
 from aiogram.fsm.context import FSMContext
+from aiogram.exceptions import TelegramBadRequest, TelegramForbiddenError
 
 from bot.database.methods import get_user_referral, buy_item_transaction, process_payment_with_referral
 from bot.keyboards import back, payment_menu, close, get_payment_choice
@@ -252,8 +253,8 @@ async def checking_payment(call: CallbackQuery, state: FSMContext):
                                      currency=EnvKeys.PAY_CURRENCY),
                             reply_markup=close()
                         )
-                except Exception:
-                    pass
+                except (TelegramBadRequest, TelegramForbiddenError) as e:
+                    logger.error(f"Failed to send balance notification to user {call.from_user.id}: {e}")
 
             await call.message.edit_text(
                 localize("payments.topped_simple",
@@ -270,8 +271,8 @@ async def checking_payment(call: CallbackQuery, state: FSMContext):
                     f"user {user_id} ({user_info.first_name}) "
                     f"replenished the balance by: {balance_amount} {EnvKeys.PAY_CURRENCY} (cryptopay)"
                 )
-            except Exception:
-                pass
+            except (TelegramBadRequest, TelegramForbiddenError) as e:
+                audit_logger.error(f"Failed to log balance replenishment for user {user_id}: {e}")
 
         elif status == "active":
             await call.answer(localize("payments.not_paid_yet"))
@@ -366,8 +367,8 @@ async def successful_payment_handler(message: Message):
                              id=message.from_user.id),
                     reply_markup=close()
                 )
-        except Exception:
-            pass
+        except (TelegramBadRequest, TelegramForbiddenError) as e:
+            logger.error(f"Failed to send referral notification to user {referral_id}: {e}")
 
     suffix = localize("payments.success_suffix.stars") if sp.currency == "XTR" else localize(
         "payments.success_suffix.tg")
@@ -383,8 +384,8 @@ async def successful_payment_handler(message: Message):
             f"user {user_id} ({user_info.first_name}) "
             f"replenished the balance by: {amount} {EnvKeys.PAY_CURRENCY} ({suffix})"
         )
-    except Exception:
-        pass
+    except (TelegramBadRequest, TelegramForbiddenError) as e:
+        audit_logger.error(f"Failed to log successful payment for user {user_id}: {e}")
 
 
 @router.callback_query(F.data.startswith('buy_'))

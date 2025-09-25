@@ -4,6 +4,7 @@ from typing import Any
 
 from bot.misc import EnvKeys
 from .strings import TRANSLATIONS, DEFAULT_LOCALE
+from bot.logger_mesh import logger
 
 
 @lru_cache(maxsize=1)
@@ -28,7 +29,7 @@ def localize(key: str, /, **kwargs: Any) -> str:
     if kwargs:
         try:
             text = text.format(**kwargs)
-        except Exception:
-            pass
+        except (KeyError, ValueError, TypeError) as e:
+            logger.error(f"Failed to format translation key '{key}' with kwargs {kwargs}: {e}")
 
     return str(text)

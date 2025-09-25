@@ -4,6 +4,7 @@ from typing import Optional
 from aiogram import Router, F
 from aiogram.types import CallbackQuery, Message
 from aiogram.fsm.context import FSMContext
+from aiogram.exceptions import TelegramBadRequest, TelegramForbiddenError
 
 from bot.i18n import localize
 from bot.database.models import Permission
@@ -71,8 +72,8 @@ async def broadcast_messages(message: Message, state: FSMContext):
                              time=int((datetime.now() - stats.start_time).total_seconds())),
                     reply_markup=back("send_message")
                 )
-            except Exception:
-                pass
+            except (TelegramBadRequest, TelegramForbiddenError) as e:
+                audit_logger.warning(f"Failed to update broadcast progress message: {e}")
 
         # Start the mailing
         broadcast_manager = BroadcastManager(

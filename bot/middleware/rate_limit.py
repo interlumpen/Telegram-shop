@@ -240,7 +240,8 @@ class RateLimitMiddleware(BaseMiddleware):
             elif isinstance(event, Message):
                 try:
                     await event.answer(localize("middleware.waiting", time=wait_time))
-                except TelegramBadRequest:
+                except TelegramBadRequest as e:
+                    # Ignore message sending errors (deleted chat, etc.)
                     pass
             return None
 

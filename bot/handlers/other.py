@@ -3,8 +3,10 @@ import re
 
 from aiogram import Router, F
 from aiogram.types import CallbackQuery
+from aiogram.exceptions import TelegramBadRequest, TelegramForbiddenError
 
 from bot.misc import EnvKeys
+from bot.logger_mesh import logger
 
 router = Router()
 
@@ -15,8 +17,8 @@ async def close_callback_handler(call: CallbackQuery):
     """processing of message closure (deletion)"""
     try:
         await call.message.delete()
-    except Exception:
-        pass
+    except (TelegramBadRequest, TelegramForbiddenError) as e:
+        logger.warning(f"Failed to delete message: {e}")
 
 
 @router.callback_query(F.data == 'dummy_button')

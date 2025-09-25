@@ -2,6 +2,7 @@ from aiogram import Router, F
 from aiogram.types import Message, CallbackQuery
 from aiogram.enums.chat_type import ChatType
 from aiogram.fsm.context import FSMContext
+from aiogram.exceptions import TelegramBadRequest, TelegramForbiddenError
 
 from urllib.parse import urlparse
 import datetime
@@ -14,6 +15,7 @@ from bot.handlers.other import check_sub_channel
 from bot.keyboards import main_menu, back, profile_keyboard, check_sub
 from bot.misc import EnvKeys
 from bot.i18n import localize
+from bot.logger_mesh import logger
 
 router = Router()
 
@@ -63,9 +65,9 @@ async def start(message: Message, state: FSMContext):
                 await message.answer(localize("subscribe.prompt"), reply_markup=markup)
                 await message.delete()
                 return
-    except Exception:
+    except (TelegramBadRequest, TelegramForbiddenError) as e:
         # Ignore channel errors (private channel, wrong link, etc.)
-        pass
+        logger.warning(f"Channel subscription check failed for user {user_id}: {e}")
 
     markup = main_menu(role=role_data, channel=channel_username, helper=EnvKeys.HELPER_ID)
     await message.answer(localize("menu.title"), reply_markup=markup)

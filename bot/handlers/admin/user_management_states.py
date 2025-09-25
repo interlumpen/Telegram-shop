@@ -4,6 +4,7 @@ from functools import partial
 from aiogram import Router, F
 from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, Message
+from aiogram.exceptions import TelegramBadRequest, TelegramForbiddenError
 
 from bot.i18n import localize
 from bot.database.models import Permission
@@ -138,7 +139,7 @@ async def user_profile_view(call: CallbackQuery):
     user_id_str = call.data[len('check-user_'):]
     try:
         target_id = int(user_id_str)
-    except Exception:
+    except (ValueError, TypeError):
         await call.answer(localize('errors.invalid_data'), show_alert=True)
         return
 
@@ -489,7 +490,7 @@ async def user_items_callback_handler(call: CallbackQuery, state: FSMContext):
     """
     try:
         user_id = int(call.data[len('user-items_'):])
-    except Exception:
+    except (ValueError, TypeError):
         await call.answer(localize('errors.invalid_data'), show_alert=True)
         return
 
@@ -520,7 +521,7 @@ async def process_admin_for_purpose(call: CallbackQuery):
     user_data = call.data[len('set-admin_'):]
     try:
         user_id = int(user_data)
-    except Exception:
+    except (ValueError, TypeError):
         await call.answer(localize('errors.invalid_data'), show_alert=True)
         return
 
@@ -548,8 +549,8 @@ async def process_admin_for_purpose(call: CallbackQuery):
             text=localize('admin.users.set_admin.notify'),
             reply_markup=close()
         )
-    except Exception:
-        pass
+    except (TelegramBadRequest, TelegramForbiddenError) as e:
+        audit_logger.error(f"Failed to notify user {user_id} about admin role assignment: {e}")
 
     admin_info = await call.message.bot.get_chat(call.from_user.id)
     audit_logger.info(
@@ -566,7 +567,7 @@ async def process_admin_for_remove(call: CallbackQuery):
     user_data = call.data[len('remove-admin_'):]
     try:
         user_id = int(user_data)
-    except Exception:
+    except (ValueError, TypeError):
         await call.answer(localize('errors.invalid_data'), show_alert=True)
         return
 
@@ -594,8 +595,8 @@ async def process_admin_for_remove(call: CallbackQuery):
             text=localize('admin.users.remove_admin.notify'),
             reply_markup=close()
         )
-    except Exception:
-        pass
+    except (TelegramBadRequest, TelegramForbiddenError) as e:
+        audit_logger.error(f"Failed to notify user {user_id} about admin role removal: {e}")
 
     admin_info = await call.message.bot.get_chat(call.from_user.id)
     audit_logger.info(
@@ -612,7 +613,7 @@ async def replenish_user_balance_callback_handler(call: CallbackQuery, state: FS
     user_data = call.data[len('fill-user-balance_'):]
     try:
         user_id = int(user_data)
-    except Exception:
+    except (ValueError, TypeError):
         await call.answer(localize('errors.invalid_data'), show_alert=True)
         return
 
@@ -673,8 +674,8 @@ async def process_replenish_user_balance(message: Message, state: FSMContext):
                               currency=EnvKeys.PAY_CURRENCY),
                 reply_markup=close()
             )
-        except Exception:
-            pass
+        except (TelegramBadRequest, TelegramForbiddenError) as e:
+            audit_logger.error(f"Failed to notify user {user_id} about balance top-up: {e}")
 
         await state.clear()
 
