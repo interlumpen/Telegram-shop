@@ -71,11 +71,18 @@ class CacheManager:
 
             # Try serializing to JSON (more efficient)
             try:
-                # Decimal and datetime require a custom encoder.
-                serialized = json.dumps(value, default=str).encode('utf-8')
+                serialized = json.dumps(value).encode('utf-8')
             except (TypeError, ValueError):
-                # If you can't get JSON, use pickle
-                serialized = pickle.dumps(value)
+                # Try JSON with default=str for complex objects
+                try:
+                    serialized = json.dumps(value, default=str).encode('utf-8')
+                except (TypeError, ValueError):
+                    # If JSON still fails, use pickle
+                    try:
+                        serialized = pickle.dumps(value)
+                    except Exception:
+                        # If even pickle fails, convert to string as last resort
+                        serialized = str(value).encode('utf-8')
 
             await self.redis.setex(key, ttl, serialized)
             return True

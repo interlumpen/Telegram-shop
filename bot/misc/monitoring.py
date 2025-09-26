@@ -476,7 +476,7 @@ class MonitoringServer:
         if not metrics:
             return web.Response(text="# Metrics not initialized", status=503)
 
-        prometheus_data = await metrics.export_to_prometheus()
+        prometheus_data = metrics.export_to_prometheus()
 
         html = f"""
         <!DOCTYPE html>

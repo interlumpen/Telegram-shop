@@ -129,12 +129,12 @@ class CryptoPayAPI:
     async def create_invoice(
             self,
             amount: float,
+            expires_in: int,
             currency: str = getattr(EnvKeys, "PAY_CURRENCY", None) or "RUB",
             accepted_assets: str = "TON,USDT",
             payload: Optional[str] = None,
             description: Optional[str] = None,
             hidden_message: Optional[str] = None,
-            expires_in = int,
     ) -> dict:
         """
         Create a Crypto Pay invoice for given fiat amount/currency.

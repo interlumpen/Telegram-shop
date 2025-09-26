@@ -122,10 +122,10 @@ async def process_replenish_balance(call: CallbackQuery, state: FSMContext):
                 crypto = CryptoPayAPI()
                 invoice = await crypto.create_invoice(
                     amount=float(amount_dec),
+                    expires_in=ttl_seconds,
                     currency=payment_request.currency,
                     accepted_assets="TON,USDT,BTC,ETH",
                     payload=str(call.from_user.id),
-                    expires_in=ttl_seconds
                 )
             except Exception as e:
                 audit_logger.error(f"CryptoPay invoice creation failed: {e}")

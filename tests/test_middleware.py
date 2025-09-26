@@ -1,10 +1,23 @@
 import pytest
 import time
+import warnings
 from unittest.mock import MagicMock, AsyncMock, patch
 from aiogram.types import Message, CallbackQuery, User as TelegramUser
 
 from bot.middleware import RateLimiter, RateLimitConfig, RateLimitMiddleware
 from bot.middleware.security import SecurityMiddleware, AuthenticationMiddleware, check_suspicious_patterns
+
+# Filter Pydantic v2 deprecation warnings from unittest.mock
+warnings.filterwarnings("ignore", category=DeprecationWarning,
+                       message="The `__fields__` attribute is deprecated, use `model_fields` instead.")
+warnings.filterwarnings("ignore", category=DeprecationWarning,
+                       module="pydantic._internal._model_construction")
+
+# Add pytest mark to ignore warnings at the module level
+pytestmark = [
+    pytest.mark.filterwarnings("ignore:The `__fields__` attribute is deprecated:DeprecationWarning"),
+    pytest.mark.filterwarnings("ignore::pydantic.warnings.PydanticDeprecatedSince20")
+]
 
 
 class TestRateLimiter:

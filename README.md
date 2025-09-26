@@ -165,11 +165,20 @@ tools, real-time monitoring, and disaster recovery capabilities.
 
 ### System Architecture
 
+<details>
+<summary>System Architecture Schema (click to expand)</summary>
+
 ![System Architecture](assets/system_architecture.png)
+</details>
 
 ### Database Schema
 
+<details>
+<summary>Database Schema (click to expand)</summary>
+
 ![Database Schema](assets/database_schema.png)
+</details>
+
 
 - **Users**: Telegram ID, balance, referral tracking
 - **Roles**: Permission-based access control
@@ -722,13 +731,42 @@ engine = create_engine(
 
 ## 🧪 Testing
 
-Run the comprehensive test suite:
+The project includes a comprehensive test suite with **200 tests** covering all major components and edge cases.
+
+### Running Tests
 
 ```bash
+# Run all tests with verbose output
 pytest tests/ -v --asyncio-mode=auto
+
+# Run specific test modules
+pytest tests/test_cache.py -v
+pytest tests/test_payment.py -v
+pytest tests/test_recovery_monitoring.py -v
+
+# Run with coverage report
+pytest tests/ --cov=bot --cov-report=html
 ```
 
-The project includes comprehensive test coverage for all major components:
+### Test Modules Overview
+
+| Module                        | Tests   | Coverage                       |
+|-------------------------------|---------|--------------------------------|
+| `test_broadcast.py`           | 4       | Broadcast messaging system     |
+| `test_cache.py`               | 30      | Advanced caching mechanisms    |
+| `test_database.py`            | 9       | Database operations & CRUD     |
+| `test_fixes.py`               | 7       | Security & performance fixes   |
+| `test_handlers.py`            | 14      | User interaction workflows     |
+| `test_keyboards.py`           | 12      | UI keyboard generation         |
+| `test_metrics.py`             | 18      | Analytics & monitoring         |
+| `test_middleware.py`          | 14      | Security & rate limiting       |
+| `test_paginator.py`           | 14      | Lazy loading pagination        |
+| `test_payment.py`             | 14      | Multi-provider payments        |
+| `test_recovery_monitoring.py` | 54      | Disaster recovery & monitoring |
+| `test_validators.py`          | 10      | Data validation & security     |
+| **Total**                     | **200** | **Complete system coverage**   |
+
+The test suite validates:
 
 <details>
 <summary>Core Functionality</summary>
@@ -802,14 +840,79 @@ The project includes comprehensive test coverage for all major components:
 </details>
 
 <details>
+<summary>Advanced Caching System</summary>
+
+* ✅ **Cache serialization** - Tests JSON/pickle fallback chains and complex data types
+* ✅ **Cache invalidation** - Validates pattern-based cache clearing and error handling
+* ✅ **Decorator functionality** - Tests cache_result decorator with custom key functions
+* ✅ **Performance optimization** - Validates cache hit/miss tracking and TTL management
+* ✅ **Integration testing** - Tests real-world caching scenarios with complex objects
+
+</details>
+
+<details>
+<summary>Handler & Workflow Testing</summary>
+
+* ✅ **Start handler flows** - Tests new user registration, referral handling, and channel subscription
+* ✅ **Payment workflows** - Validates balance top-up, payment method selection, and amount validation
+* ✅ **Admin navigation** - Tests role-based access to admin panels and features
+* ✅ **State management** - Validates FSM state transitions and data persistence
+* ✅ **Integration flows** - Tests complete user journeys from start to purchase
+
+</details>
+
+<details>
+<summary>Metrics & Analytics System</summary>
+
+* ✅ **Event tracking** - Tests user action tracking, timing measurements, and conversion funnels
+* ✅ **Middleware analytics** - Validates automatic event collection and performance monitoring
+* ✅ **Prometheus export** - Tests metrics formatting for external monitoring systems
+* ✅ **Error categorization** - Validates error tracking and debugging information collection
+* ✅ **Real-time dashboards** - Tests metrics summary generation and visualization data
+
+</details>
+
+<details>
+<summary>Payment Processing System</summary>
+
+* ✅ **Multi-provider support** - Tests Telegram Stars, CryptoPay, and fiat payment methods
+* ✅ **Currency conversion** - Validates exchange rate calculations and rounding behavior
+* ✅ **API integration** - Tests aiohttp async context managers and error handling
+* ✅ **Method routing** - Validates GET/POST request handling for different API endpoints
+* ✅ **Async mocking** - Tests complex async payment workflows with proper mock patterns
+
+</details>
+
+<details>
+<summary>Disaster Recovery & Monitoring</summary>
+
+* ✅ **Recovery manager** - Tests automatic payment recovery, broadcast resumption, and health monitoring
+* ✅ **State persistence** - Validates critical state saving and restoration mechanisms
+* ✅ **Health checks** - Tests periodic system health validation and component monitoring
+* ✅ **Monitoring server** - Validates web dashboard, metrics endpoints, and real-time updates
+* ✅ **Error recovery** - Tests graceful handling of database failures and connection issues
+
+</details>
+
+<details>
 <summary>Edge Cases & Error Handling</summary>
 
 * ✅ **Empty data handling** - Tests behavior with no results
 * ✅ **Boundary conditions** - Tests pagination limits and partial pages
 * ✅ **Error recovery** - Tests graceful handling of database and API errors
 * ✅ **Timeout handling** - Tests behavior under network delays
+* ✅ **Async pattern mocking** - Tests complex async/await patterns with proper coroutine handling
 
 </details>
+
+### Test Quality Features
+
+- **Async Testing**: Full asyncio support with proper event loop handling
+- **Mock Strategies**: Advanced mocking patterns for aiohttp, Redis, and database operations
+- **Edge Case Coverage**: Comprehensive boundary condition and error scenario testing
+- **Integration Testing**: End-to-end workflow validation
+- **Performance Testing**: Concurrent access and load testing scenarios
+- **Security Validation**: SQL injection, XSS, and CSRF protection testing
 
 ## 🤝 Contributing
 

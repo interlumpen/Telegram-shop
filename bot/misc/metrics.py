@@ -99,7 +99,7 @@ class MetricsCollector:
         except Exception as e:
             logger.error(f"Failed to save event to DB: {e}")
 
-    async def export_to_prometheus(self):
+    def export_to_prometheus(self):
         """Exporting metrics in Prometheus format"""
         lines = []
 
@@ -141,15 +141,27 @@ class AnalyticsMiddleware:
         user_id = None
         event_type = None
 
-        if hasattr(event, 'from_user'):
-            user_id = event.from_user.id
+        try:
+            if hasattr(event, 'from_user') and event.from_user:
+                user_id = event.from_user.id
+        except AttributeError:
+            # from_user may not exist or may be deleted
+            pass
 
-        if hasattr(event, 'data'):  # CallbackQuery
-            event_type = event.data.split('_')[0] if event.data else "unknown"
-        elif hasattr(event, 'text'):  # Message
-            event_type = "message"
-            if event.text and event.text.startswith('/'):
-                event_type = f"command_{event.text.split()[0][1:]}"
+        # Determine event type - check attributes but handle test mocks properly
+        try:
+            # Try to access text attribute to see if it exists and has a value
+            text_value = getattr(event, 'text', None)
+            if text_value is not None and text_value != "":
+                event_type = "message"
+                if text_value and text_value.startswith('/'):
+                    event_type = f"command_{text_value.split()[0][1:]}"
+            elif hasattr(event, 'data'):  # CallbackQuery (including data=None)
+                event_type = event.data.split('_')[0] if event.data else "unknown"
+        except AttributeError:
+            # If we can't access text (deleted attribute), check for data
+            if hasattr(event, 'data'):
+                event_type = event.data.split('_')[0] if event.data else "unknown"
 
         # Event Tracking
         if event_type:

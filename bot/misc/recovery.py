@@ -1,12 +1,15 @@
 import asyncio
 import logging
 from datetime import datetime, timedelta
+from pathlib import Path
 
 from bot.database import Database
 from bot.database.models import Payments
 from bot.i18n import localize
 from bot.misc.payment import CryptoPayAPI
 from bot.misc import EnvKeys
+from bot.misc.cache import get_cache_manager
+from bot.database.methods.transactions import process_payment_with_referral
 
 logger = logging.getLogger(__name__)
 
@@ -87,8 +90,6 @@ class RecoveryManager:
 
                 if info.get("status") == "paid":
                     # Process payment
-                    from bot.database.methods import process_payment_with_referral
-
                     success, _ = process_payment_with_referral(
                         user_id=payment.user_id,
                         amount=payment.amount,

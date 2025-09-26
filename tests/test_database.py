@@ -2,6 +2,7 @@ import pytest
 import asyncio
 from datetime import datetime
 from decimal import Decimal
+from unittest.mock import patch, AsyncMock
 
 from bot.database import Database
 from bot.database.models import User, Categories, Goods, ItemValues, BoughtGoods, Operations, Payments, \
@@ -11,6 +12,47 @@ from bot.database.methods import (
     create_item, check_item, delete_item, add_values_to_item, select_item_values_amount, check_value, create_operation,
     select_user_operations, process_payment_with_referral, buy_item_transaction, get_referral_earnings_stats
 )
+
+
+# Global cache mock fixture
+@pytest.fixture(autouse=True)
+def mock_cache_system():
+    """Mock the entire cache system to avoid warnings"""
+    # Create a mock cache manager that doesn't actually do anything
+    mock_cache = AsyncMock()
+    mock_cache.delete = AsyncMock(return_value=True)
+    mock_cache.invalidate_pattern = AsyncMock(return_value=0)
+    mock_cache.scan_iter = AsyncMock(return_value=AsyncMockIterator([]))
+
+    # Mock all cache-related functions completely
+    with patch('bot.misc.cache.get_cache_manager', return_value=mock_cache):
+        with patch('bot.database.methods.read.get_cache_manager', return_value=mock_cache):
+            with patch('bot.database.methods.cache_utils.safe_create_task'):
+                with patch('bot.database.methods.read.invalidate_category_cache', new_callable=AsyncMock):
+                    with patch('bot.database.methods.read.invalidate_item_cache', new_callable=AsyncMock):
+                        with patch('bot.database.methods.read.invalidate_user_cache', new_callable=AsyncMock):
+                            with patch('bot.database.methods.read.invalidate_stats_cache', new_callable=AsyncMock):
+                                # Also patch any CacheManager instances that might exist
+                                with patch('bot.misc.cache.CacheManager'):
+                                    yield
+
+
+class AsyncMockIterator:
+    """Helper class to mock async iterator for Redis scan_iter"""
+
+    def __init__(self, items):
+        self.items = items
+        self.index = 0
+
+    def __aiter__(self):
+        return self
+
+    async def __anext__(self):
+        if self.index >= len(self.items):
+            raise StopAsyncIteration
+        item = self.items[self.index]
+        self.index += 1
+        return item
 
 
 class TestDatabaseMethods:
@@ -55,9 +97,9 @@ class TestDatabaseMethods:
         # Check user exists
         user = check_user(user_id)
         assert user is not None
-        assert user.telegram_id == user_id
-        assert user.balance == Decimal("0")
-        assert user.role_id == 1
+        assert user["telegram_id"] == user_id
+        assert user["balance"] == Decimal("0")
+        assert user["role_id"] == 1
 
         # Test duplicate creation (should not raise error)
         create_user(user_id, reg_date, referral_id=None, role=1)
@@ -78,7 +120,7 @@ class TestDatabaseMethods:
         create_user(referral_id, datetime.now(), referral_id=referrer_id, role=1)
 
         user = check_user(referral_id)
-        assert user.referral_id == referrer_id
+        assert user["referral_id"] == referrer_id
 
     def test_category_operations(self):
         """Test category CRUD operations"""
@@ -188,7 +230,7 @@ class TestDatabaseMethods:
 
         # Check user balance updated only once
         user = check_user(user_id)
-        assert user.balance == amount
+        assert user["balance"] == amount
 
     def test_referral_earnings(self):
         """Test referral earnings system"""
@@ -216,7 +258,7 @@ class TestDatabaseMethods:
         # Check referrer got bonus
         referrer = check_user(referrer_id)
         expected_bonus = (Decimal(referral_percent) / Decimal(100)) * amount
-        assert referrer.balance == expected_bonus
+        assert referrer["balance"] == expected_bonus
 
         # Check earnings stats
         stats = get_referral_earnings_stats(referrer_id)
@@ -267,4 +309,4 @@ class TestDatabaseMethods:
 
         # Check user balance unchanged
         user = check_user(user_id)
-        assert user.balance == Decimal("0")
+        assert user["balance"] == Decimal("0")
