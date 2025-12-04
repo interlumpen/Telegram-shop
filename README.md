@@ -13,9 +13,9 @@ tools, real-time monitoring, and disaster recovery capabilities.
 
 ## 🔀 Looking for Physical Goods Shop?
 
-**📦 This version is for DIGITAL GOODS** (accounts, keys, licenses, etc.)
+**💾 This version is for DIGITAL GOODS** (accounts, keys, licenses, etc.)
 
-**💾 Need to sell PHYSICAL GOODS instead?** (if you need functions such as inventory, shipping, delivery addresses, etc.)
+**📦 Need to sell PHYSICAL GOODS instead?** (if you need functions such as inventory, shipping, delivery addresses, etc.)
 👉 **Try this new version**: [Telegram Physical Goods Shop](https://github.com/interlumpen/Telegram-shop-Physical)
 
 The physical goods version features a well-thought-out delivery processing system, full interaction with the bot's core via the command line (CLI) without the need for a shell and advanced monitoring of all processes.
