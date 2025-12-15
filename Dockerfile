@@ -1,10 +1,11 @@
 FROM python:3.11-slim
 
-# Installing system dependencies
+# Installing system dependencies including gosu for privilege dropping
 RUN apt-get update && apt-get install -y \
     build-essential \
     libpq-dev \
     curl \
+    gosu \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
@@ -16,16 +17,15 @@ RUN pip install --no-cache-dir -r requirements.txt
 # Copying the application
 COPY . /app
 
-# Creating a user and directory
-RUN useradd -m -u 1000 botuser \
-    && mkdir -p /app/logs /app/data \
-    && touch /app/logs/bot.log /app/logs/audit.log \
-    && chown -R botuser:botuser /app
+# Create directories (will be properly owned at runtime by entrypoint)
+RUN mkdir -p /app/logs /app/data
 
-USER botuser
+# Copy entrypoint script and make executable
+COPY docker-entrypoint.sh /docker-entrypoint.sh
+RUN chmod +x /docker-entrypoint.sh
 
 # Expose port monitoring
 EXPOSE 9090
 
-# Run with migrations
-CMD bash -lc "alembic upgrade head && python run.py"
+# Use entrypoint script (runs as root initially, drops to botuser)
+ENTRYPOINT ["/docker-entrypoint.sh"]

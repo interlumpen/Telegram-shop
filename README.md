@@ -389,6 +389,18 @@ nano .env  # or use any text editor
 docker compose up -d --build bot
 ```
 
+**Linux Users**: If you encounter permission errors for `./logs` or `./data` directories, set `PUID` and `PGID` in your `.env` file to match your host user:
+
+```bash
+# Find your UID/GID
+id
+# Output: uid=1000(username) gid=1000(username) ...
+
+# Add to .env file
+echo "PUID=1000" >> .env
+echo "PGID=1000" >> .env
+```
+
 The bot will automatically:
 
 - Create database schema
