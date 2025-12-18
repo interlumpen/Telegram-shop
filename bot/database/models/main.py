@@ -81,6 +81,7 @@ class User(Database.BASE):
     balance = Column(Numeric(12, 2), nullable=False, default=0)
     referral_id = Column(BigInteger, ForeignKey('users.telegram_id', ondelete="SET NULL"), nullable=True, index=True)
     registration_date = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
+    is_blocked = Column(Boolean, default=False, index=True)
     user_operations = relationship("Operations", back_populates="user_telegram_id")
     user_goods = relationship("BoughtGoods", back_populates="user_telegram_id")
 

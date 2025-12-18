@@ -25,7 +25,7 @@ class LazyPaginator:
         self.per_page = per_page
         self.cache_pages = cache_pages
 
-        # Восстанавливаем из словаря или создаем новое
+        # Restore from dictionary or create new
         if state and isinstance(state, dict):
             # Don't restore cache from state - it contains non-serializable objects
             self._cache = {}

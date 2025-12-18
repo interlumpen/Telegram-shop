@@ -80,6 +80,24 @@ def update_item(item_name: str, new_name: str, description: str, price, category
         return False, f"DB Error: {e.__class__.__name__}"
 
 
+def set_user_blocked(telegram_id: int, blocked: bool) -> bool:
+    """Set user blocked status and commit."""
+    with Database().session() as s:
+        user = s.query(User).filter(User.telegram_id == telegram_id).first()
+        if user:
+            user.is_blocked = blocked
+            safe_create_task(invalidate_user_cache(telegram_id))
+            return True
+        return False
+
+
+def is_user_blocked(telegram_id: int) -> bool:
+    """Check if user is blocked."""
+    with Database().session() as s:
+        user = s.query(User).filter(User.telegram_id == telegram_id).first()
+        return user.is_blocked if user else False
+
+
 def update_category(category_name: str, new_name: str) -> None:
     """Rename a category with proper transaction handling."""
     with Database().session() as s:

@@ -28,6 +28,8 @@ TRANSLATIONS: dict[str, dict[str, str]] = {
         "btn.admin.promote": "⬆️ Назначить администратором",
         "btn.admin.demote": "⬇️ Снять администратора",
         "btn.admin.replenish_user": "💸 Пополнить баланс",
+        "btn.admin.block": "🚫 Заблокировать",
+        "btn.admin.unblock": "✅ Разблокировать",
 
         # === Titles / Generic Texts ===
         "menu.title": "⛩️ Основное меню",
@@ -114,6 +116,10 @@ TRANSLATIONS: dict[str, dict[str, str]] = {
         "admin.users.remove_admin.notify": "❌ У вас отозвана роль АДМИНИСТРАТОРА бота",
         "admin.users.balance.topped": "✅ Баланс пользователя {name} пополнен на {amount} {currency}",
         "admin.users.balance.topped.notify": "✅ Ваш баланс пополнен на {amount} {currency}",
+        "admin.users.blocked.success": "🚫 Пользователь {name} заблокирован",
+        "admin.users.unblocked.success": "✅ Пользователь {name} разблокирован",
+        "admin.users.cannot_block_owner": "❌ Невозможно заблокировать владельца",
+        "admin.users.status.blocked": "🚫 <b>Статус</b> — Заблокирован",
 
         # === Admin: Shop Management Menu ===
         "admin.shop.menu.title": "⛩️ Меню управления магазином",
@@ -331,6 +337,7 @@ TRANSLATIONS: dict[str, dict[str, str]] = {
         "middleware.security.invalid_data": "❌ Недопустимые данные",
         "middleware.security.blocked": "❌ Доступ заблокирован",
         "middleware.security.not_admin": "⛔ Недостаточно прав",
+        "middleware.security.invalid_csrf": "⚠️ Сессия устарела. Пожалуйста, попробуйте снова.",
 
         # === Errors ===
         "errors.not_subscribed": "Вы не подписались",
@@ -370,6 +377,8 @@ TRANSLATIONS: dict[str, dict[str, str]] = {
         "btn.admin.promote": "⬆️ Make admin",
         "btn.admin.demote": "⬇️ Remove admin",
         "btn.admin.replenish_user": "💸 Top up balance",
+        "btn.admin.block": "🚫 Block",
+        "btn.admin.unblock": "✅ Unblock",
 
         # === Titles / Generic Texts ===
         "menu.title": "⛩️ Main menu",
@@ -456,6 +465,10 @@ TRANSLATIONS: dict[str, dict[str, str]] = {
         "admin.users.remove_admin.notify": "❌ Your ADMIN role has been revoked",
         "admin.users.balance.topped": "✅ {name}'s balance has been topped up by {amount} {currency}",
         "admin.users.balance.topped.notify": "✅ Your balance has been topped up by {amount} {currency}",
+        "admin.users.blocked.success": "🚫 User {name} has been blocked",
+        "admin.users.unblocked.success": "✅ User {name} has been unblocked",
+        "admin.users.cannot_block_owner": "❌ Cannot block the owner",
+        "admin.users.status.blocked": "🚫 <b>Status</b> — Blocked",
 
         # === Admin: Shop Management Menu ===
         "admin.shop.menu.title": "⛩️ Shop management",
@@ -673,6 +686,7 @@ TRANSLATIONS: dict[str, dict[str, str]] = {
         "middleware.security.invalid_data": "❌ Invalid data",
         "middleware.security.blocked": "❌ Access blocked",
         "middleware.security.not_admin": "⛔ Insufficient permissions",
+        "middleware.security.invalid_csrf": "⚠️ Session expired. Please try again.",
 
         # === Errors ===
         "errors.not_subscribed": "You are not subscribed",

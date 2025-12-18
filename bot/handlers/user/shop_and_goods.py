@@ -3,6 +3,7 @@ from functools import partial
 from aiogram import Router, F
 from aiogram.types import CallbackQuery
 from aiogram.fsm.context import FSMContext
+from aiogram.exceptions import TelegramBadRequest
 
 from bot.database.methods import (
     get_bought_item_info, check_value, query_categories, query_user_bought_items, get_item_info_cached,
@@ -160,7 +161,7 @@ async def navigate_goods(call: CallbackQuery, state: FSMContext):
 
 
 @router.callback_query(F.data.startswith('item_'))
-async def item_info_callback_handler(call: CallbackQuery):
+async def item_info_callback_handler(call: CallbackQuery, state: FSMContext):
     """
     Show detailed information about the item.
     Format: item_{name}_{category}_goods-page_{category}_{page}
@@ -204,15 +205,25 @@ async def item_info_callback_handler(call: CallbackQuery):
 
     markup = item_info(item_name, back_data)
 
-    await call.message.edit_text(
-        "\n".join([
-            localize("shop.item.title", name=item_name),
-            localize("shop.item.description", description=item_info_data["description"]),
-            localize("shop.item.price", amount=item_info_data["price"], currency=EnvKeys.PAY_CURRENCY),
-            quantity_line,
-        ]),
-        reply_markup=markup,
-    )
+    # Generate CSRF token for buy action
+    from bot.main import security_middleware
+    if security_middleware:
+        csrf_token = security_middleware.generate_token(call.from_user.id, f"buy_{item_name}")
+        await state.update_data(csrf_token=csrf_token, csrf_item=item_name)
+
+    try:
+        await call.message.edit_text(
+            "\n".join([
+                localize("shop.item.title", name=item_name),
+                localize("shop.item.description", description=item_info_data["description"]),
+                localize("shop.item.price", amount=item_info_data["price"], currency=EnvKeys.PAY_CURRENCY),
+                quantity_line,
+            ]),
+            reply_markup=markup,
+        )
+    except TelegramBadRequest as e:
+        if "message is not modified" not in str(e):
+            raise
 
 
 @router.callback_query(F.data == "bought_items")

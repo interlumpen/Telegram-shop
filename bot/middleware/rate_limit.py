@@ -19,10 +19,8 @@ class RateLimitConfig:
 
     # Limits for specific actions
     action_limits: dict = field(default_factory=lambda: {
-        'broadcast': (1, 3600),  # 1 time per hour
         'payment': (10, 60),  # 10 times a minute
         'shop_view': (60, 60),  # 60 times per minute
-        'admin_action': (30, 60),  # 30 times a minute
         'buy_item': (5, 60),  # 5 buys a minute
     })
 
@@ -132,17 +130,16 @@ class RateLimitMiddleware(BaseMiddleware):
         self.limiter = RateLimiter(self.config)
         self.action_mapping = {
             # Callback data -> action name
-            'broadcast': 'broadcast',
-            'send_message': 'broadcast',
-            'replenish_balance': 'payment',
+            'replenish_balance': 'top_up',
             'pay_': 'payment',
             'buy_': 'buy_item',
             'shop': 'shop_view',
             'category_': 'shop_view',
             'item_': 'shop_view',
-            'console': 'admin_action',
-            'admin': 'admin_action',
         }
+        # Cache for admin role checks
+        self.admin_cache: dict[int, tuple[int, float]] = {}
+        self.cache_ttl = 300  # 5 minutes
 
     def _get_action_from_event(self, event: TelegramObject) -> str:
         """Determines the action from the event"""
@@ -162,13 +159,21 @@ class RateLimitMiddleware(BaseMiddleware):
         return 'default'
 
     async def _check_admin_bypass(self, user_id: int) -> bool:
-        """Checks if the user is an admin"""
+        """Checks if the user is an admin (with caching)"""
         if not self.config.admin_bypass:
             return False
 
+        # Check cache first
+        if user_id in self.admin_cache:
+            role, timestamp = self.admin_cache[user_id]
+            if time.time() - timestamp < self.cache_ttl:
+                return role > 1
+
         try:
             from bot.database.methods import check_role
-            role = check_role(user_id)
+            role = check_role(user_id) or 0
+            # Update cache
+            self.admin_cache[user_id] = (role, time.time())
             return role > 1  # ADMIN or OWNER
         except Exception:
             return False

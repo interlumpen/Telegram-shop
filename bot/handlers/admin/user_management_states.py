@@ -11,7 +11,8 @@ from bot.database.models import Permission
 from bot.database.methods import (
     select_user_operations, select_user_items, check_role_name_by_id, check_user_referrals, set_role, check_user_cached,
     create_operation, update_balance, get_role_id_by_name, get_referral_earnings_stats, get_one_referral_earning,
-    query_user_bought_items, query_user_referrals, query_referral_earnings_from_user, query_all_referral_earnings
+    query_user_bought_items, query_user_referrals, query_referral_earnings_from_user, query_all_referral_earnings,
+    is_user_blocked
 )
 from bot.keyboards import back, close, simple_buttons, lazy_paginated_keyboard
 from bot.logger_mesh import audit_logger
@@ -79,6 +80,13 @@ async def check_user_data(message: Message, state: FSMContext):
             actions.append((localize('btn.admin.promote'), f"set-admin_{target_id}"))
 
         actions.append((localize('btn.admin.replenish_user'), f"fill-user-balance_{target_id}"))
+
+        # Block/unblock button (not for OWNER)
+        if role_name != 'OWNER':
+            if is_user_blocked(target_id):
+                actions.append((localize('btn.admin.unblock'), f"unblock-user_{target_id}"))
+            else:
+                actions.append((localize('btn.admin.block'), f"block-user_{target_id}"))
 
         if items_count:
             actions.append((localize('btn.purchased'), f"user-items_{target_id}"))
@@ -175,6 +183,13 @@ async def user_profile_view(call: CallbackQuery):
 
     actions.append((localize('btn.admin.replenish_user'), f"fill-user-balance_{target_id}"))
 
+    # Block/unblock button (not for OWNER)
+    if role_name != 'OWNER':
+        if is_user_blocked(target_id):
+            actions.append((localize('btn.admin.unblock'), f"unblock-user_{target_id}"))
+        else:
+            actions.append((localize('btn.admin.block'), f"block-user_{target_id}"))
+
     if items_count:
         actions.append((localize('btn.purchased'), f"user-items_{target_id}"))
 
@@ -189,6 +204,9 @@ async def user_profile_view(call: CallbackQuery):
 
     markup = simple_buttons(actions, per_row=1)
 
+    # Check if user is blocked for status display
+    user_blocked = is_user_blocked(target_id)
+
     lines = [
         localize('profile.caption', name=user_info.first_name, id=target_id),
         '',
@@ -201,6 +219,10 @@ async def user_profile_view(call: CallbackQuery):
         localize('admin.users.role', role=role),
         localize('profile.registration_date', dt=user.get('registration_date')),
     ]
+
+    # Add blocked status if blocked
+    if user_blocked:
+        lines.append(localize('admin.users.status.blocked'))
 
     # Add referral earnings stats if available
     if has_earnings:
@@ -695,3 +717,77 @@ async def check_user_profile_again(call: CallbackQuery):
     Re-uses user_profile_view to show the profile again.
     """
     await user_profile_view(call)
+
+
+@router.callback_query(F.data.startswith('block-user_'), HasPermissionFilter(Permission.USERS_MANAGE))
+async def block_user_handler(call: CallbackQuery):
+    """
+    Block a user from using the bot.
+    """
+    user_id_str = call.data[len('block-user_'):]
+    try:
+        user_id = int(user_id_str)
+    except (ValueError, TypeError):
+        await call.answer(localize('errors.invalid_data'), show_alert=True)
+        return
+
+    db_user = await check_user_cached(user_id)
+    if not db_user:
+        await call.answer(localize('admin.users.not_found'), show_alert=True)
+        return
+
+    role_name = check_role_name_by_id(db_user.get('role_id'))
+    if role_name == 'OWNER':
+        await call.answer(localize('admin.users.cannot_block_owner'), show_alert=True)
+        return
+
+    from bot.main import auth_middleware
+    if auth_middleware:
+        success = auth_middleware.block_user(user_id)
+        if not success:
+            await call.answer(localize('errors.something_wrong'), show_alert=True)
+            return
+
+    user_info = await call.message.bot.get_chat(user_id)
+    await call.message.edit_text(
+        localize('admin.users.blocked.success', name=user_info.first_name),
+        reply_markup=back(f'check-user_{user_id}')
+    )
+
+    admin_info = await call.message.bot.get_chat(call.from_user.id)
+    audit_logger.info(
+        f"Admin {call.from_user.id} ({admin_info.first_name}) blocked user "
+        f"{user_id} ({user_info.first_name})"
+    )
+
+
+@router.callback_query(F.data.startswith('unblock-user_'), HasPermissionFilter(Permission.USERS_MANAGE))
+async def unblock_user_handler(call: CallbackQuery):
+    """
+    Unblock a user.
+    """
+    user_id_str = call.data[len('unblock-user_'):]
+    try:
+        user_id = int(user_id_str)
+    except (ValueError, TypeError):
+        await call.answer(localize('errors.invalid_data'), show_alert=True)
+        return
+
+    from bot.main import auth_middleware
+    if auth_middleware:
+        success = auth_middleware.unblock_user(user_id)
+        if not success:
+            await call.answer(localize('errors.something_wrong'), show_alert=True)
+            return
+
+    user_info = await call.message.bot.get_chat(user_id)
+    await call.message.edit_text(
+        localize('admin.users.unblocked.success', name=user_info.first_name),
+        reply_markup=back(f'check-user_{user_id}')
+    )
+
+    admin_info = await call.message.bot.get_chat(call.from_user.id)
+    audit_logger.info(
+        f"Admin {call.from_user.id} ({admin_info.first_name}) unblocked user "
+        f"{user_id} ({user_info.first_name})"
+    )

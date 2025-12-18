@@ -27,6 +27,10 @@ recovery_manager = None
 monitoring_server = None
 cache_scheduler = None
 
+# Global middleware instances for access from handlers
+security_middleware: SecurityMiddleware = None
+auth_middleware: AuthenticationMiddleware = None
+
 
 async def __on_start_up(dp: Dispatcher, bot: Bot) -> None:
     """Initialize bot on startup"""
@@ -43,10 +47,8 @@ async def __on_start_up(dp: Dispatcher, bot: Bot) -> None:
         ban_duration=300,
         admin_bypass=True,
         action_limits={
-            'broadcast': (1, 3600),  # 1 time per hour
             'payment': (10, 60),  # 10 times per minute
             'shop_view': (60, 60),  # 60 times per minute
-            'admin_action': (30, 60),  # 30 times per minute
             'buy_item': (5, 60),  # 5 purchases per minute
             'top_up': (5, 300),  # 5 top-ups in 5 minutes
         }
@@ -61,11 +63,13 @@ async def __on_start_up(dp: Dispatcher, bot: Bot) -> None:
     dp.message.middleware(analytics_middleware)
     dp.callback_query.middleware(analytics_middleware)
 
-    # Add security middleware
+    # Add security middleware (using global instances for handler access)
+    global security_middleware, auth_middleware
     security_middleware = SecurityMiddleware()
     auth_middleware = AuthenticationMiddleware()
 
-    # First authentication, then security, then rate limiting
+    # Middleware execution order (last registered executes first):
+    # SecurityMiddleware -> AuthenticationMiddleware -> AnalyticsMiddleware -> RateLimitMiddleware -> Handler
     dp.message.middleware(auth_middleware)
     dp.callback_query.middleware(auth_middleware)
 

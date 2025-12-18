@@ -389,16 +389,32 @@ async def successful_payment_handler(message: Message):
 
 
 @router.callback_query(F.data.startswith('buy_'))
-async def buy_item_callback_handler(call: CallbackQuery):
+async def buy_item_callback_handler(call: CallbackQuery, state: FSMContext):
     """Processing the purchase of goods with full transactional security."""
     try:
+        # Extract item name first for CSRF check
+        raw_item_name = call.data[4:]
+
+        # CSRF token verification
+        from bot.main import security_middleware
+        if security_middleware:
+            data = await state.get_data()
+            csrf_token = data.get('csrf_token')
+            csrf_item = data.get('csrf_item')
+
+            # Verify token matches the item being purchased
+            if not csrf_token or csrf_item != raw_item_name:
+                await call.answer(localize("middleware.security.invalid_csrf"), show_alert=True)
+                return
+
+            if not security_middleware.verify_token(csrf_token, call.from_user.id, f"buy_{raw_item_name}"):
+                await call.answer(localize("middleware.security.invalid_csrf"), show_alert=True)
+                return
+
         metrics = get_metrics()
         if metrics:
             # Tracking the purchase funnel
             metrics.track_conversion("purchase_funnel", "view_item", call.from_user.id)
-
-        # Extract and validate the product name
-        raw_item_name = call.data[4:]
 
         # Validation via Pydantic
         purchase_request = ItemPurchaseRequest(

@@ -184,8 +184,10 @@ class AuthenticationMiddleware(BaseMiddleware):
         if not user:
             return await handler(event, data)
 
-        # Checking blocked users
-        if user.id in self.blocked_users:
+        # Checking blocked users (from DB and memory cache)
+        from bot.database.methods import is_user_blocked
+        if user.id in self.blocked_users or is_user_blocked(user.id):
+            self.blocked_users.add(user.id)  # Update memory cache
             if isinstance(event, CallbackQuery):
                 await event.answer(localize("middleware.security.blocked"), show_alert=True)
             return None
@@ -201,7 +203,7 @@ class AuthenticationMiddleware(BaseMiddleware):
 
         # Role validation and caching for admin actions
         if isinstance(event, CallbackQuery):
-            if event.data and any(event.data.startswith(x) for x in ['admin', 'console', 'broadcast']):
+            if event.data and any(event.data.startswith(x) for x in ['admin', 'console', 'send_message']):
                 role = await self.get_user_role_cached(user.id)
                 if role <= 1:  # Not admin
                     await event.answer(localize("middleware.security.not_admin"), show_alert=True)
@@ -228,12 +230,20 @@ class AuthenticationMiddleware(BaseMiddleware):
 
         return role
 
-    def block_user(self, user_id: int):
-        """Block a user"""
-        self.blocked_users.add(user_id)
-        audit_logger.info(f"User {user_id} has been blocked")
+    def block_user(self, user_id: int) -> bool:
+        """Block a user (saves to DB and memory cache)"""
+        from bot.database.methods import set_user_blocked
+        success = set_user_blocked(user_id, True)
+        if success:
+            self.blocked_users.add(user_id)
+            audit_logger.info(f"User {user_id} has been blocked")
+        return success
 
-    def unblock_user(self, user_id: int):
-        """Unblock a user"""
-        self.blocked_users.discard(user_id)
-        audit_logger.info(f"User {user_id} has been unblocked")
+    def unblock_user(self, user_id: int) -> bool:
+        """Unblock a user (saves to DB and removes from memory cache)"""
+        from bot.database.methods import set_user_blocked
+        success = set_user_blocked(user_id, False)
+        if success:
+            self.blocked_users.discard(user_id)
+            audit_logger.info(f"User {user_id} has been unblocked")
+        return success
