@@ -14,7 +14,7 @@ from bot.misc import EnvKeys, ItemPurchaseRequest, validate_telegram_id, validat
     sanitize_html
 from bot.handlers.other import _any_payment_method_enabled, is_safe_item_name
 from bot.misc.metrics import get_metrics
-from bot.misc.payment import CryptoPayAPI, send_stars_invoice, send_fiat_invoice
+from bot.misc.payment import CryptoPayAPI, CryptoPayAPIError, send_stars_invoice, send_fiat_invoice
 from bot.filters import ValidAmountFilter
 from bot.i18n import localize
 from bot.states import BalanceStates
@@ -127,6 +127,10 @@ async def process_replenish_balance(call: CallbackQuery, state: FSMContext):
                     accepted_assets="TON,USDT,BTC,ETH",
                     payload=str(call.from_user.id),
                 )
+            except CryptoPayAPIError as e:
+                audit_logger.error(f"CryptoPay API error: [{e.code}] {e.name}")
+                await call.answer(localize("payments.crypto.api_error", error=e.name), show_alert=True)
+                return
             except Exception as e:
                 audit_logger.error(f"CryptoPay invoice creation failed: {e}")
                 await call.answer(localize("payments.crypto.create_fail", error=str(e)), show_alert=True)
@@ -208,8 +212,13 @@ async def checking_payment(call: CallbackQuery, state: FSMContext):
         try:
             crypto = CryptoPayAPI()
             info = await crypto.get_invoice(invoice_id)
+        except CryptoPayAPIError as e:
+            audit_logger.error(f"CryptoPay API error on check: [{e.code}] {e.name}")
+            await call.answer(localize("payments.crypto.api_error", error=e.name), show_alert=True)
+            return
         except Exception as e:
-            await call.answer(localize("payments.crypto.create_fail", error=str(e)), show_alert=True)
+            audit_logger.error(f"CryptoPay get invoice failed: {e}")
+            await call.answer(localize("payments.crypto.check_fail", error=str(e)), show_alert=True)
             return
 
         status = info.get("status")

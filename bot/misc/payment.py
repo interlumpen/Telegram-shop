@@ -102,6 +102,16 @@ async def send_fiat_invoice(
     )
 
 
+class CryptoPayAPIError(Exception):
+    """Exception raised when CryptoPay API returns an error."""
+
+    def __init__(self, code: int, name: str, message: str = None):
+        self.code = code
+        self.name = name
+        self.message = message or name
+        super().__init__(f"CryptoPay API Error [{code}]: {name}")
+
+
 class CryptoPayAPI:
     """
     Minimal async client for Crypto Bot API used to create and fetch invoices.
@@ -119,12 +129,22 @@ class CryptoPayAPI:
             async with aiohttp.ClientSession() as session:
                 async with session.get(url, params=params, headers=headers) as resp:
                     resp.raise_for_status()
-                    return await resp.json()
+                    data = await resp.json()
         else:
             async with aiohttp.ClientSession() as session:
                 async with session.post(url, json=params, headers=headers) as resp:
                     resp.raise_for_status()
-                    return await resp.json()
+                    data = await resp.json()
+
+        # Check for API-level errors (HTTP 200 but ok=false)
+        if not data.get("ok", False):
+            error = data.get("error", {})
+            raise CryptoPayAPIError(
+                code=error.get("code", 0),
+                name=error.get("name", "UNKNOWN_ERROR")
+            )
+
+        return data
 
     async def create_invoice(
             self,

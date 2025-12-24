@@ -6,7 +6,7 @@ from aiogram.types import LabeledPrice
 
 from bot.misc.payment import (
     currency_to_stars, send_stars_invoice, send_fiat_invoice,
-    _minor_units_for, CryptoPayAPI, ZERO_DEC_CURRENCIES
+    _minor_units_for, CryptoPayAPI, CryptoPayAPIError, ZERO_DEC_CURRENCIES
 )
 from bot.misc import EnvKeys
 
@@ -204,6 +204,7 @@ class TestCryptoPayAPI:
                 api = CryptoPayAPI()
 
                 mock_response = {
+                    "ok": True,
                     "result": {
                         "invoice_id": "INV123",
                         "hash": "abc123",
@@ -276,6 +277,7 @@ class TestCryptoPayAPI:
             api = CryptoPayAPI()
 
             mock_response = {
+                "ok": True,
                 "result": {
                     "items": [{
                         "invoice_id": "INV123",
@@ -329,6 +331,7 @@ class TestCryptoPayAPI:
             api = CryptoPayAPI()
 
             mock_response = {
+                "ok": True,
                 "result": {
                     "items": []
                 }
@@ -396,6 +399,54 @@ class TestCryptoPayAPI:
                 with pytest.raises(Exception, match="HTTP 500 Error"):
                     await api.create_invoice(amount=100, expires_in=3600)
 
+    @pytest.mark.asyncio
+    async def test_crypto_pay_api_error_response(self):
+        """Test CryptoPay API error handling when ok=false"""
+        with patch.object(EnvKeys, 'CRYPTO_PAY_TOKEN', 'test_token'):
+            api = CryptoPayAPI()
+
+            # API returns ok=false with error details
+            mock_error_response = {
+                "ok": False,
+                "error": {
+                    "code": 400,
+                    "name": "INVALID_CURRENCY"
+                }
+            }
+
+            with patch('aiohttp.ClientSession') as mock_session:
+                class MockResponse:
+                    async def json(self):
+                        return mock_error_response
+
+                    def raise_for_status(self):
+                        pass
+
+                class MockPostContext:
+                    async def __aenter__(self):
+                        return MockResponse()
+
+                    async def __aexit__(self, *args):
+                        pass
+
+                class MockSession:
+                    def post(self, url, json=None, headers=None):
+                        return MockPostContext()
+
+                    async def __aenter__(self):
+                        return self
+
+                    async def __aexit__(self, *args):
+                        pass
+
+                mock_session.return_value = MockSession()
+
+                with pytest.raises(CryptoPayAPIError) as exc_info:
+                    await api.create_invoice(amount=100, expires_in=3600)
+
+                assert exc_info.value.code == 400
+                assert exc_info.value.name == "INVALID_CURRENCY"
+
     def test_zero_dec_currencies_constant(self):
         """Test ZERO_DEC_CURRENCIES constant"""
         assert "JPY" in ZERO_DEC_CURRENCIES
@@ -414,7 +465,7 @@ class TestCryptoPayAPI:
                 # Create proper async context manager classes
                 class MockGetResponse:
                     async def json(self):
-                        return {"result": {"items": []}}
+                        return {"ok": True, "result": {"items": []}}
 
                     def raise_for_status(self):
                         pass
@@ -459,7 +510,7 @@ class TestCryptoPayAPI:
                 # Create proper async context manager classes
                 class MockPostResponse:
                     async def json(self):
-                        return {"result": {}}
+                        return {"ok": True, "result": {}}
 
                     def raise_for_status(self):
                         pass

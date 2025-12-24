@@ -299,7 +299,8 @@ class TestAuthenticationMiddleware:
         assert auth.admin_cache == {}
         assert auth.cache_ttl == 300
 
-    def test_user_blocking(self):
+    @patch('bot.database.methods.set_user_blocked', return_value=True)
+    def test_user_blocking(self, mock_set_blocked):
         """Test user blocking functionality"""
         auth = AuthenticationMiddleware()
         user_id = 12345
@@ -330,7 +331,8 @@ class TestAuthenticationMiddleware:
         assert result is None
 
     @pytest.mark.asyncio
-    async def test_blocked_user_handling(self):
+    @patch('bot.database.methods.set_user_blocked', return_value=True)
+    async def test_blocked_user_handling(self, mock_set_blocked):
         """Test blocked user handling"""
         auth = AuthenticationMiddleware()
         auth.block_user(12345)
@@ -340,6 +342,7 @@ class TestAuthenticationMiddleware:
         callback.from_user = MagicMock(spec=TelegramUser)
         callback.from_user.id = 12345
         callback.from_user.is_bot = False
+        callback.from_user.first_name = "TestUser"
         callback.answer = AsyncMock()
         callback.data = "some_action"
 
