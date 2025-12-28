@@ -70,8 +70,8 @@ def is_safe_item_name(name: str) -> bool:
         if re.search(pattern, name, re.IGNORECASE):
             return False
 
-    # Allow only safe characters
-    if not re.match(r'^[\w\s\-.а-яА-Я]+$', name):
+    # Block control characters (0x00-0x1F, 0x7F) but allow all printable Unicode
+    if re.search(r'[\x00-\x1f\x7f]', name):
         return False
 
     return True
