@@ -80,6 +80,7 @@ async def check_user_data(message: Message, state: FSMContext):
             actions.append((localize('btn.admin.promote'), f"set-admin_{target_id}"))
 
         actions.append((localize('btn.admin.replenish_user'), f"fill-user-balance_{target_id}"))
+        actions.append((localize('btn.admin.deduct_user'), f"deduct-user-balance_{target_id}"))
 
         # Block/unblock button (not for OWNER)
         if role_name != 'OWNER':
@@ -182,6 +183,7 @@ async def user_profile_view(call: CallbackQuery):
         actions.append((localize('btn.admin.promote'), f"set-admin_{target_id}"))
 
     actions.append((localize('btn.admin.replenish_user'), f"fill-user-balance_{target_id}"))
+    actions.append((localize('btn.admin.deduct_user'), f"deduct-user-balance_{target_id}"))
 
     # Block/unblock button (not for OWNER)
     if role_name != 'OWNER':
@@ -704,6 +706,101 @@ async def process_replenish_user_balance(message: Message, state: FSMContext):
     except ValueError as e:
         await message.answer(
             localize('payments.replenish_invalid',
+                     min_amount=EnvKeys.MIN_AMOUNT,
+                     max_amount=EnvKeys.MAX_AMOUNT,
+                     currency=EnvKeys.PAY_CURRENCY),
+            reply_markup=back(f'check-user_{user_id}')
+        )
+
+
+@router.callback_query(F.data.startswith('deduct-user-balance_'), HasPermissionFilter(Permission.USERS_MANAGE))
+async def deduct_user_balance_callback_handler(call: CallbackQuery, state: FSMContext):
+    """
+    Asks for amount to deduct from selected user's balance.
+    """
+    user_data = call.data[len('deduct-user-balance_'):]
+    try:
+        user_id = int(user_data)
+    except (ValueError, TypeError):
+        await call.answer(localize('errors.invalid_data'), show_alert=True)
+        return
+
+    await call.message.edit_text(
+        localize('payments.deduct_prompt', currency=EnvKeys.PAY_CURRENCY),
+        reply_markup=back(f'check-user_{user_id}')
+    )
+    await state.set_state(UserMgmtStates.waiting_user_deduct)
+    await state.update_data(target_user=user_id)
+
+
+@router.message(UserMgmtStates.waiting_user_deduct, F.text)
+async def process_deduct_user_balance(message: Message, state: FSMContext):
+    """Processes entered amount and deducts from user's balance."""
+    data = await state.get_data()
+    user_id = data.get('target_user')
+
+    try:
+        # Validate amount
+        amount = validate_money_amount(
+            message.text.strip(),
+            min_amount=Decimal(EnvKeys.MIN_AMOUNT),
+            max_amount=Decimal(EnvKeys.MAX_AMOUNT)
+        )
+
+        # Check current balance
+        db_user = await check_user_cached(user_id)
+        if not db_user:
+            await message.answer(localize('admin.users.not_found'))
+            await state.clear()
+            return
+
+        current_balance = int(float(db_user.get('balance', 0)))
+        if current_balance < int(amount):
+            await message.answer(
+                localize('admin.users.balance.insufficient',
+                         balance=current_balance,
+                         currency=EnvKeys.PAY_CURRENCY),
+                reply_markup=back(f'check-user_{user_id}')
+            )
+            return
+
+        # Apply deduction (negative amount)
+        create_operation(user_id, -int(amount), datetime.datetime.now())
+        update_balance(user_id, -int(amount))
+
+        user_info = await message.bot.get_chat(user_id)
+        await message.answer(
+            localize('admin.users.balance.deducted',
+                     name=user_info.first_name,
+                     amount=int(amount),
+                     currency=EnvKeys.PAY_CURRENCY),
+            reply_markup=back(f'check-user_{user_id}')
+        )
+
+        # Audit logging
+        admin_info = await message.bot.get_chat(message.from_user.id)
+        audit_logger.info(
+            f"User {message.from_user.id} ({admin_info.first_name}) deducted {int(amount)} from user "
+            f"{user_id} ({user_info.first_name})"
+        )
+
+        # Notify user
+        try:
+            await message.bot.send_message(
+                chat_id=user_id,
+                text=localize('admin.users.balance.deducted.notify',
+                              amount=int(amount),
+                              currency=EnvKeys.PAY_CURRENCY),
+                reply_markup=close()
+            )
+        except (TelegramBadRequest, TelegramForbiddenError) as e:
+            audit_logger.error(f"Failed to notify user {user_id} about balance deduction: {e}")
+
+        await state.clear()
+
+    except ValueError as e:
+        await message.answer(
+            localize('payments.deduct_invalid',
                      min_amount=EnvKeys.MIN_AMOUNT,
                      max_amount=EnvKeys.MAX_AMOUNT,
                      currency=EnvKeys.PAY_CURRENCY),

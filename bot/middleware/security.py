@@ -51,7 +51,7 @@ class SecurityMiddleware(BaseMiddleware):
         self.secret_key = secret_key or secrets.token_urlsafe(32)
         self.critical_actions = {
             'buy_', 'pay_', 'delete_', 'admin', 'remove-admin',
-            'fill-user-balance', 'set-admin'
+            'fill-user-balance', 'set-admin', 'deduct-user-balance'
         }
 
     def generate_token(self, user_id: int, action: str) -> str:

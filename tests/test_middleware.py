@@ -230,6 +230,7 @@ class TestSecurityMiddleware:
         assert middleware.is_critical_action("set-admin_123") == True
         assert middleware.is_critical_action("remove-admin_456") == True
         assert middleware.is_critical_action("fill-user-balance_789") == True
+        assert middleware.is_critical_action("deduct-user-balance_789") == True
 
         # Non-critical actions
         assert middleware.is_critical_action("view_profile") == False

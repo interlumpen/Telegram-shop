@@ -28,6 +28,7 @@ TRANSLATIONS: dict[str, dict[str, str]] = {
         "btn.admin.promote": "⬆️ Назначить администратором",
         "btn.admin.demote": "⬇️ Снять администратора",
         "btn.admin.replenish_user": "💸 Пополнить баланс",
+        "btn.admin.deduct_user": "💳 Списать с баланса",
         "btn.admin.block": "🚫 Заблокировать",
         "btn.admin.unblock": "✅ Разблокировать",
 
@@ -116,6 +117,9 @@ TRANSLATIONS: dict[str, dict[str, str]] = {
         "admin.users.remove_admin.notify": "❌ У вас отозвана роль АДМИНИСТРАТОРА бота",
         "admin.users.balance.topped": "✅ Баланс пользователя {name} пополнен на {amount} {currency}",
         "admin.users.balance.topped.notify": "✅ Ваш баланс пополнен на {amount} {currency}",
+        "admin.users.balance.deducted": "✅ С баланса пользователя {name} списано {amount} {currency}",
+        "admin.users.balance.deducted.notify": "ℹ️ С вашего баланса списано {amount} {currency}",
+        "admin.users.balance.insufficient": "❌ Недостаточно средств. Текущий баланс: {balance} {currency}",
         "admin.users.blocked.success": "🚫 Пользователь {name} заблокирован",
         "admin.users.unblocked.success": "✅ Пользователь {name} разблокирован",
         "admin.users.cannot_block_owner": "❌ Невозможно заблокировать владельца",
@@ -273,6 +277,8 @@ TRANSLATIONS: dict[str, dict[str, str]] = {
         # === Payments / Top-up Flow ===
         "payments.replenish_prompt": "Введите сумму пополнения в {currency}:",
         "payments.replenish_invalid": "❌ Неверная сумма. Введите число от {min_amount} до {max_amount} {currency}.",
+        "payments.deduct_prompt": "Введите сумму списания в {currency}:",
+        "payments.deduct_invalid": "❌ Неверная сумма. Введите число от {min_amount} до {max_amount} {currency}.",
         "payments.method_choose": "Выберите способ оплаты:",
         "payments.not_configured": "❌ Пополнение не настроено",
         "payments.session_expired": "Сессия оплаты устарела. Начните заново.",
@@ -379,6 +385,7 @@ TRANSLATIONS: dict[str, dict[str, str]] = {
         "btn.admin.promote": "⬆️ Make admin",
         "btn.admin.demote": "⬇️ Remove admin",
         "btn.admin.replenish_user": "💸 Top up balance",
+        "btn.admin.deduct_user": "💳 Deduct from balance",
         "btn.admin.block": "🚫 Block",
         "btn.admin.unblock": "✅ Unblock",
 
@@ -467,6 +474,9 @@ TRANSLATIONS: dict[str, dict[str, str]] = {
         "admin.users.remove_admin.notify": "❌ Your ADMIN role has been revoked",
         "admin.users.balance.topped": "✅ {name}'s balance has been topped up by {amount} {currency}",
         "admin.users.balance.topped.notify": "✅ Your balance has been topped up by {amount} {currency}",
+        "admin.users.balance.deducted": "✅ Deducted {amount} {currency} from {name}'s balance",
+        "admin.users.balance.deducted.notify": "ℹ️ {amount} {currency} has been deducted from your balance",
+        "admin.users.balance.insufficient": "❌ Insufficient funds. Current balance: {balance} {currency}",
         "admin.users.blocked.success": "🚫 User {name} has been blocked",
         "admin.users.unblocked.success": "✅ User {name} has been unblocked",
         "admin.users.cannot_block_owner": "❌ Cannot block the owner",
@@ -624,6 +634,8 @@ TRANSLATIONS: dict[str, dict[str, str]] = {
         # === Payments / Top-up Flow ===
         "payments.replenish_prompt": "Enter top-up amount in {currency}:",
         "payments.replenish_invalid": "❌ Invalid amount. Enter a number from {min_amount} to {max_amount} {currency}.",
+        "payments.deduct_prompt": "Enter deduction amount in {currency}:",
+        "payments.deduct_invalid": "❌ Invalid amount. Enter a number from {min_amount} to {max_amount} {currency}.",
         "payments.method_choose": "Choose a payment method:",
         "payments.not_configured": "❌ Top-ups are not configured",
         "payments.session_expired": "Payment session has expired. Please start again.",
