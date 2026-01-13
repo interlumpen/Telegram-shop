@@ -1,5 +1,9 @@
 import asyncio
 import logging
+from dotenv import load_dotenv
+
+load_dotenv()
+
 from bot import start_bot
 
 if __name__ == "__main__":

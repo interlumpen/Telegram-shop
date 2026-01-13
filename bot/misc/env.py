@@ -6,49 +6,60 @@ from typing import Final
 class EnvKeys(ABC):
     """Secure environment configuration with validation"""
 
+    @staticmethod
+    def _get_required(key: str) -> str:
+        val = os.getenv(key)
+        if not val:
+            raise ValueError(f"Missing required environment variable: {key}")
+        return val
+
+    @staticmethod
+    def _get_optional(key: str, default: str = "") -> str:
+        return os.getenv(key, default)
+
     # Telegram
-    TOKEN: Final = os.environ.get('TOKEN')
-    OWNER_ID: Final = os.environ.get('OWNER_ID')
+    TOKEN: Final = _get_required('TOKEN')
+    OWNER_ID: Final = int(_get_required('OWNER_ID'))
 
-    # Payments
-    TELEGRAM_PROVIDER_TOKEN: Final = os.getenv("TELEGRAM_PROVIDER_TOKEN")
-    CRYPTO_PAY_TOKEN: Final = os.getenv("CRYPTO_PAY_TOKEN")
-    STARS_PER_VALUE: Final = float(os.getenv("STARS_PER_VALUE", "0.91"))
-    REFERRAL_PERCENT: Final = int(os.getenv("REFERRAL_PERCENT", 0))
-    PAY_CURRENCY: Final = os.getenv("PAY_CURRENCY", "RUB")
-    PAYMENT_TIME: Final = int(os.getenv("PAYMENT_TIME", 1800))
-    MIN_AMOUNT: Final = int(os.getenv("MIN_AMOUNT", 20))
-    MAX_AMOUNT: Final = int(os.getenv("MAX_AMOUNT", 10_000))
-
-    # Links / UI
-    CHANNEL_URL: Final = os.getenv("CHANNEL_URL")
-    HELPER_ID: Final = os.getenv("HELPER_ID")
-    RULES: Final = os.getenv("RULES")
-
-    # Locale & logs
-    BOT_LOCALE: Final = os.getenv("BOT_LOCALE", "ru")
-    BOT_LOGFILE: Final = os.getenv("BOT_LOGFILE", "bot.log")
-    BOT_AUDITFILE: Final = os.getenv("BOT_AUDITFILE", "audit.log")
-    LOG_TO_STDOUT: Final = os.getenv("LOG_TO_STDOUT", "1")
-    LOG_TO_FILE: Final = os.getenv("LOG_TO_FILE", "1")
-    DEBUG: Final = os.getenv("DEBUG", "0")
+    # Database
+    POSTGRES_DB: Final = _get_required("POSTGRES_DB")
+    POSTGRES_USER: Final = _get_required("POSTGRES_USER")
+    POSTGRES_PASSWORD: Final = _get_required("POSTGRES_PASSWORD")
+    DB_PORT: Final = int(_get_optional("DB_PORT", "5432"))
+    DB_DRIVER: Final = _get_optional("DB_DRIVER", "postgresql+psycopg2")
+    POSTGRES_HOST: Final = _get_optional("POSTGRES_HOST", "localhost")
 
     # Redis
-    REDIS_HOST: Final = os.getenv("REDIS_HOST")
-    REDIS_PORT: Final = int(os.getenv("REDIS_PORT", 6379))
-    REDIS_DB: Final = int(os.getenv("REDIS_DB", 0))
-    REDIS_PASSWORD: Final = os.getenv("REDIS_PASSWORD")
+    REDIS_HOST: Final = _get_optional("REDIS_HOST", "localhost")
+    REDIS_PORT: Final = int(_get_optional("REDIS_PORT", "6379"))
+    REDIS_DB: Final = int(_get_optional("REDIS_DB", "0"))
+    REDIS_PASSWORD: Final = _get_optional("REDIS_PASSWORD", "")
 
-    # Database (for Docker)
-    POSTGRES_DB: Final = os.getenv("POSTGRES_DB")
-    POSTGRES_USER: Final = os.getenv("POSTGRES_USER", "postgres")
-    POSTGRES_PASSWORD: Final = os.getenv("POSTGRES_PASSWORD")
-    DB_PORT: Final = int(os.getenv("DB_PORT", 5432))
-    DB_DRIVER: Final = os.getenv("DB_DRIVER", "postgresql+psycopg2")
+    # Payments
+    TELEGRAM_PROVIDER_TOKEN: Final = _get_optional("TELEGRAM_PROVIDER_TOKEN", "")
+    CRYPTO_PAY_TOKEN: Final = _get_optional("CRYPTO_PAY_TOKEN", "")
+    STARS_PER_VALUE: Final = float(_get_optional("STARS_PER_VALUE", "0.91"))
+    REFERRAL_PERCENT: Final = int(_get_optional("REFERRAL_PERCENT", "0"))
+    PAY_CURRENCY: Final = _get_optional("PAY_CURRENCY", "RUB")
+    PAYMENT_TIME: Final = int(_get_optional("PAYMENT_TIME", "1800"))
+    MIN_AMOUNT: Final = int(_get_optional("MIN_AMOUNT", "20"))
+    MAX_AMOUNT: Final = int(_get_optional("MAX_AMOUNT", "10000"))
+
+    # Links / UI
+    CHANNEL_URL: Final = _get_optional("CHANNEL_URL", "")
+    HELPER_ID: Final = _get_optional("HELPER_ID", "")
+    RULES: Final = _get_optional("RULES", "")
+
+    # Locale & logs
+    BOT_LOCALE: Final = _get_optional("BOT_LOCALE", "ru")
+    BOT_LOGFILE: Final = _get_optional("BOT_LOGFILE", "logs/bot.log")
+    BOT_AUDITFILE: Final = _get_optional("BOT_AUDITFILE", "logs/audit.log")
+    LOG_TO_STDOUT: Final = _get_optional("LOG_TO_STDOUT", "true")
+    LOG_TO_FILE: Final = _get_optional("LOG_TO_FILE", "false")
+    DEBUG: Final = _get_optional("DEBUG", "false")
 
     # Monitoring
-    MONITORING_HOST: Final = os.getenv("MONITORING_HOST", "localhost")
-    MONITORING_PORT: Final = int(os.getenv("MONITORING_PORT", 9090))
+    MONITORING_HOST: Final = _get_optional("MONITORING_HOST", "localhost")
+    MONITORING_PORT: Final = int(_get_optional("MONITORING_PORT", "9090"))
 
-    # Database (for manual deploy)
-    DATABASE_URL: Final = "postgresql+psycopg2://user:password@localhost:5432/db_name"  # (setup if you deploy manually)
+    DATABASE_URL: Final = f"{DB_DRIVER}://{POSTGRES_USER}:{POSTGRES_PASSWORD}@{POSTGRES_HOST}:{DB_PORT}/{POSTGRES_DB}"

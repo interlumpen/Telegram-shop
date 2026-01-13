@@ -18,7 +18,8 @@ tools, real-time monitoring, and disaster recovery capabilities.
 **📦 Need to sell PHYSICAL GOODS instead?** (if you need functions such as inventory, shipping, delivery addresses, etc.)
 👉 **Try this new version**: [Telegram Physical Goods Shop](https://github.com/interlumpen/Telegram-shop-Physical)
 
-The physical goods version features a well-thought-out delivery processing system, full interaction with the bot's core via the command line (CLI) without the need for a shell and advanced monitoring of all processes.
+The physical goods version features a well-thought-out delivery processing system, full interaction with the bot's core
+via the command line (CLI) without the need for a shell and advanced monitoring of all processes.
 
 ---
 
@@ -143,7 +144,6 @@ The physical goods version features a well-thought-out delivery processing syste
 - Action-specific limits:
     - Purchases: 5 per minute
     - Payments: 10 per minute
-    - Broadcasts: 1 per hour
 - Automatic ban system with configurable duration
 - Admin bypass option
 
@@ -191,7 +191,6 @@ The physical goods version features a well-thought-out delivery processing syste
 
 ![Database Schema](assets/database_schema.png)
 </details>
-
 
 - **Users**: Telegram ID, balance, referral tracking
 - **Roles**: Permission-based access control
@@ -334,28 +333,16 @@ The application requires the following environment variables:
 </details>
 
 <details>
-<summary><b>🗄️ Database (Docker)</b></summary>
+<summary><b>🗄️ Database</b></summary>
 
-| Variable            | Description              | Default               |
-|---------------------|--------------------------|-----------------------|
-| `POSTGRES_DB`       | PostgreSQL database name | **Required**          |
-| `POSTGRES_USER`     | PostgreSQL username      | `postgres`            |
-| `POSTGRES_PASSWORD` | PostgreSQL password      | **Required**          |
-| `DB_PORT`           | PostgreSQL port          | `5432`                |
-| `DB_DRIVER`         | Database driver          | `postgresql+psycopg2` |
-
-</details>
-
-<details>
-<summary><b>🗄️ Database (Manual Deploy)</b></summary>
-
-For manual deployment, configure `DATABASE_URL` in `bot/misc/env.py`:
-
-```python
-DATABASE_URL = "postgresql+psycopg2://user:password@localhost:5432/db_name"
-```
-
-[SQLAlchemy Documentation](https://docs.sqlalchemy.org/en/20/core/engines.html#postgresql)
+| Variable            | Description                                             | Default                                  |
+|---------------------|---------------------------------------------------------|------------------------------------------|
+| `POSTGRES_DB`       | PostgreSQL database name                                | **Required**                             |
+| `POSTGRES_USER`     | PostgreSQL username                                     | `postgres`                               |
+| `POSTGRES_PASSWORD` | PostgreSQL password                                     | **Required**                             |
+| `POSTGRES_HOST`     | PostgreSQL host (configure this only for manual deploy) | localhost (for manual) / db (for docker) |
+| `DB_PORT`           | PostgreSQL port                                         | `5432`                                   |
+| `DB_DRIVER`         | Database driver                                         | `postgresql+psycopg2`                    |
 
 </details>
 
@@ -389,7 +376,8 @@ nano .env  # or use any text editor
 docker compose up -d --build bot
 ```
 
-**Linux Users**: If you encounter permission errors for `./logs` or `./data` directories, set `PUID` and `PGID` in your `.env` file to match your host user:
+**Linux Users**: If you encounter permission errors for `./logs` or `./data` directories, set `PUID` and `PGID` in your
+`.env` file to match your host user:
 
 ```bash
 # Find your UID/GID
