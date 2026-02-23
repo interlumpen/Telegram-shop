@@ -8,6 +8,7 @@ from bot.database.models import Database, Goods, ItemValues, Categories
 def delete_item(item_name: str) -> None:
     """Delete a product and all of its stock entries."""
     with Database().session() as s:
+        s.query(ItemValues).filter(ItemValues.item_name == item_name).delete(synchronize_session=False)
         s.query(Goods).filter(Goods.name == item_name).delete(synchronize_session=False)
 
     # Invalidate the cache

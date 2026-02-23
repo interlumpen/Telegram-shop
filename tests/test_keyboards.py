@@ -133,7 +133,7 @@ class TestKeyboards:
         # Check buy button
         buy_button = buttons[0][0]
         assert "buy" in buy_button.text.lower() or "купить" in buy_button.text.lower()
-        assert buy_button.callback_data == "buy_TestItem"
+        assert buy_button.callback_data == "buy"
 
         # Check back button
         back_button = buttons[0][1]

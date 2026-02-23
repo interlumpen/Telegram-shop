@@ -22,14 +22,16 @@ async def shop_callback_handler(call: CallbackQuery, state: FSMContext):
     """
     Show list of shop categories with lazy loading.
     """
-    # Create paginator
     paginator = LazyPaginator(query_categories, per_page=10)
 
-    # Create keyboard
+    # Pre-fetch page items to build index map and store in state
+    page_items = await paginator.get_page(0)
+    items_index = {cat: idx for idx, cat in enumerate(page_items)}
+
     markup = await lazy_paginated_keyboard(
         paginator=paginator,
         item_text=lambda cat: cat,
-        item_callback=lambda cat: f"category_{cat}_categories-page_0",  # Include page info
+        item_callback=lambda cat: f"cat:{items_index[cat]}:{0}",
         page=0,
         back_cb="back_to_menu",
         nav_cb_prefix="categories-page_",
@@ -37,8 +39,10 @@ async def shop_callback_handler(call: CallbackQuery, state: FSMContext):
 
     await call.message.edit_text(localize("shop.categories.title"), reply_markup=markup)
 
-    # Save paginator state
-    await state.update_data(categories_paginator=paginator.get_state())
+    await state.update_data(
+        categories_paginator=paginator.get_state(),
+        category_page_items=list(page_items),
+    )
     await state.set_state(ShopStates.viewing_categories)
 
 
@@ -50,21 +54,23 @@ async def navigate_categories(call: CallbackQuery, state: FSMContext):
     parts = call.data.split('_', 1)
     page = int(parts[1]) if len(parts) > 1 and parts[1].isdigit() else 0
 
-    # Get saved state
     data = await state.get_data()
     paginator_state = data.get('categories_paginator')
 
-    # Create paginator with cached state
     paginator = LazyPaginator(
         query_categories,
         per_page=10,
         state=paginator_state
     )
 
+    # Pre-fetch page items to build index map and store in state
+    page_items = await paginator.get_page(page)
+    items_index = {cat: idx for idx, cat in enumerate(page_items)}
+
     markup = await lazy_paginated_keyboard(
         paginator=paginator,
         item_text=lambda cat: cat,
-        item_callback=lambda cat: f"category_{cat}_categories-page_{page}",  # Pass current page
+        item_callback=lambda cat: f"cat:{items_index[cat]}:{page}",
         page=page,
         back_cb="back_to_menu",
         nav_cb_prefix="categories-page_"
@@ -72,126 +78,127 @@ async def navigate_categories(call: CallbackQuery, state: FSMContext):
 
     await call.message.edit_text(localize('shop.categories.title'), reply_markup=markup)
 
-    # Update state
-    await state.update_data(categories_paginator=paginator.get_state())
+    await state.update_data(
+        categories_paginator=paginator.get_state(),
+        category_page_items=list(page_items),
+    )
 
 
-@router.callback_query(F.data.startswith('category_'))
+@router.callback_query(F.data.startswith('cat:'))
 async def items_list_callback_handler(call: CallbackQuery, state: FSMContext):
     """
     Show items of selected category.
-    Extract category name and return page from callback_data.
+    Parse index and page from cat:{index}:{page}, look up category name from state.
     """
-    # Parse callback data: category_{name}_categories-page_{page}
-    callback_data = call.data[9:]  # Remove 'category_'
+    parts = call.data.split(':')
+    idx = int(parts[1])
+    cat_page = int(parts[2]) if len(parts) > 2 else 0
 
-    if '_categories-page_' in callback_data:
-        category_name, back_data = callback_data.rsplit('_categories-page_', 1)
-        back_data = f"categories-page_{back_data}"
-    else:
-        category_name = callback_data
-        back_data = "shop"
+    data = await state.get_data()
+    category_page_items = data.get('category_page_items', [])
 
-    # Create paginator for items in category
+    if idx < 0 or idx >= len(category_page_items):
+        await call.answer(localize("shop.item.not_found"), show_alert=True)
+        return
+
+    category_name = category_page_items[idx]
+    back_data = f"categories-page_{cat_page}"
+
     from bot.database.methods.lazy_queries import query_items_in_category
-    from functools import partial
 
     query_func = partial(query_items_in_category, category_name)
     paginator = LazyPaginator(query_func, per_page=10)
 
+    # Pre-fetch page items to build index map and store in state
+    page_items = await paginator.get_page(0)
+    items_index = {item: i for i, item in enumerate(page_items)}
+
     markup = await lazy_paginated_keyboard(
         paginator=paginator,
         item_text=lambda item: item,
-        item_callback=lambda item: f"item_{item}_{category_name}_goods-page_{category_name}_0",
+        item_callback=lambda item: f"itm:{items_index[item]}:0",
         page=0,
-        back_cb=back_data,  # Use the saved page
-        nav_cb_prefix=f"goods-page_{category_name}_",
+        back_cb=back_data,
+        nav_cb_prefix="gp_",
     )
 
     await call.message.edit_text(localize("shop.goods.choose"), reply_markup=markup)
 
-    # Save state
     await state.update_data(
         goods_paginator=paginator.get_state(),
-        current_category=category_name
+        current_category=category_name,
+        goods_page_items=list(page_items),
     )
     await state.set_state(ShopStates.viewing_goods)
 
 
-@router.callback_query(F.data.startswith('goods-page_'), ShopStates.viewing_goods)
+@router.callback_query(F.data.startswith('gp_'), ShopStates.viewing_goods)
 async def navigate_goods(call: CallbackQuery, state: FSMContext):
     """
     Pagination for items inside selected category.
-    Format: goods-page_{category}_{page}
+    Format: gp_{page}
     """
-    prefix = "goods-page_"
-    tail = call.data[len(prefix):]
-    category_name, current_index = tail.rsplit("_", 1)
-    current_index = int(current_index)
+    current_index = int(call.data[3:])
 
-    # Get saved state
     data = await state.get_data()
     paginator_state = data.get('goods_paginator')
+    category_name = data.get('current_category', '')
 
-    # Determine back button target
-    # Try to get from state if we came from categories
     categories_page = data.get('categories_last_viewed_page', 0)
     back_data = f"categories-page_{categories_page}"
 
-    # Create paginator
     from bot.database.methods.lazy_queries import query_items_in_category
-    from functools import partial
 
     query_func = partial(query_items_in_category, category_name)
     paginator = LazyPaginator(query_func, per_page=10, state=paginator_state)
 
+    # Pre-fetch page items to build index map and store in state
+    page_items = await paginator.get_page(current_index)
+    items_index = {item: i for i, item in enumerate(page_items)}
+
     markup = await lazy_paginated_keyboard(
         paginator=paginator,
         item_text=lambda item: item,
-        item_callback=lambda item: f"item_{item}_{category_name}_goods-page_{category_name}_{current_index}",
+        item_callback=lambda item: f"itm:{items_index[item]}:{current_index}",
         page=current_index,
         back_cb=back_data,
-        nav_cb_prefix=f"goods-page_{category_name}_",
+        nav_cb_prefix="gp_",
     )
 
     await call.message.edit_text(localize("shop.goods.choose"), reply_markup=markup)
 
-    # Update state
-    await state.update_data(goods_paginator=paginator.get_state())
+    await state.update_data(
+        goods_paginator=paginator.get_state(),
+        goods_page_items=list(page_items),
+    )
 
 
-@router.callback_query(F.data.startswith('item_'))
+@router.callback_query(F.data.startswith('itm:'))
 async def item_info_callback_handler(call: CallbackQuery, state: FSMContext):
     """
     Show detailed information about the item.
-    Format: item_{name}_{category}_goods-page_{category}_{page}
+    Format: itm:{index}:{page}
     """
-    # Parse callback data
-    callback_data = call.data[5:]  # Remove 'item_'
+    parts = call.data.split(':')
+    idx = int(parts[1])
+    goods_page = int(parts[2]) if len(parts) > 2 else 0
 
-    # Extract item name, category and back data
-    if '_goods-page_' in callback_data:
-        # Split by the last occurrence of _goods-page_
-        item_and_cat, back_page_data = callback_data.rsplit('_goods-page_', 1)
-        # Now split item_and_cat to get item name and category
-        parts = item_and_cat.rsplit('_', 1)
-        if len(parts) == 2:
-            item_name, category = parts
-        else:
-            item_name = item_and_cat
-            category = ""
-        back_data = f"goods-page_{back_page_data}"
-    else:
-        item_name = callback_data
-        back_data = "shop"
-        category = ""
+    data = await state.get_data()
+    goods_page_items = data.get('goods_page_items', [])
+    category = data.get('current_category', '')
+
+    if idx < 0 or idx >= len(goods_page_items):
+        await call.answer(localize("shop.item.not_found"), show_alert=True)
+        return
+
+    item_name = goods_page_items[idx]
+    back_data = f"gp_{goods_page}"
 
     item_info_data = await get_item_info_cached(item_name)
     if not item_info_data:
         await call.answer(localize("shop.item.not_found"), show_alert=True)
         return
 
-    # If couldn't extract category from callback, get it from item info
     if not category:
         category = item_info_data.get('category_name', '')
 

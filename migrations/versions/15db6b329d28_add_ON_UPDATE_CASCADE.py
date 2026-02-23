@@ -26,7 +26,7 @@ def find_fk_name_sa(conn, table, local_col, ref_table=None):
 
 def upgrade():
     bind = op.get_bind()
-    if bind.dialect.name != "postgresql" or bind.dialect.name != "mysql":
+    if bind.dialect.name not in ("postgresql", "mysql"):
         return
 
     # goods.category_name → categories.name
@@ -62,7 +62,7 @@ def upgrade():
 
 def downgrade():
     bind = op.get_bind()
-    if bind.dialect.name != "postgresql" or bind.dialect.name != "mysql":
+    if bind.dialect.name not in ("postgresql", "mysql"):
         return
 
     # Откатываем до варианта БЕЗ ON UPDATE CASCADE

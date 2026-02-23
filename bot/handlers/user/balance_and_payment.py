@@ -397,22 +397,24 @@ async def successful_payment_handler(message: Message):
         audit_logger.error(f"Failed to log successful payment for user {user_id}: {e}")
 
 
-@router.callback_query(F.data.startswith('buy_'))
+@router.callback_query(F.data == "buy")
 async def buy_item_callback_handler(call: CallbackQuery, state: FSMContext):
     """Processing the purchase of goods with full transactional security."""
     try:
-        # Extract item name first for CSRF check
-        raw_item_name = call.data[4:]
+        # Get item name from state (stored when viewing item info)
+        data = await state.get_data()
+        raw_item_name = data.get('csrf_item')
+
+        if not raw_item_name:
+            await call.answer(localize("middleware.security.invalid_csrf"), show_alert=True)
+            return
 
         # CSRF token verification
         from bot.main import security_middleware
         if security_middleware:
-            data = await state.get_data()
             csrf_token = data.get('csrf_token')
-            csrf_item = data.get('csrf_item')
 
-            # Verify token matches the item being purchased
-            if not csrf_token or csrf_item != raw_item_name:
+            if not csrf_token:
                 await call.answer(localize("middleware.security.invalid_csrf"), show_alert=True)
                 return
 

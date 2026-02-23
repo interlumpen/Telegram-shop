@@ -121,7 +121,7 @@ def item_info(item_name: str, back_data: str) -> InlineKeyboardMarkup:
     Product card.
     """
     kb = InlineKeyboardBuilder()
-    kb.button(text=localize("btn.buy"), callback_data=f"buy_{item_name}")
+    kb.button(text=localize("btn.buy"), callback_data="buy")
     kb.button(text=localize("btn.back"), callback_data=back_data)
     kb.adjust(2)
     return kb.as_markup()
