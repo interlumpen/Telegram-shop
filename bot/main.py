@@ -15,12 +15,12 @@ from bot.database.models import register_models
 from bot.logger_mesh import configure_logging
 from bot.middleware import setup_rate_limiting, RateLimitConfig
 from bot.middleware.security import SecurityMiddleware, AuthenticationMiddleware
-from bot.misc.cache import init_cache_manager, get_cache_manager
-from bot.misc.cache_scheduler import CacheScheduler
-from bot.misc.storage import get_redis_storage
-from bot.misc.recovery import RecoveryManager, StateManager
-from bot.misc.metrics import init_metrics, get_metrics, AnalyticsMiddleware
-from bot.misc.monitoring import MonitoringServer
+from bot.misc.caching import init_cache_manager, get_cache_manager
+from bot.misc.caching import CacheScheduler
+from bot.misc.caching import get_redis_storage
+from bot.misc.services import RecoveryManager, StateManager
+from bot.misc.obvervability import init_metrics, get_metrics, AnalyticsMiddleware
+from bot.misc.obvervability import MonitoringServer
 
 # Global variables for components
 recovery_manager = None

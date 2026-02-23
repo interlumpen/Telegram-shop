@@ -2,14 +2,12 @@ import pytest
 import asyncio
 import json
 from unittest.mock import MagicMock, AsyncMock, patch, mock_open
-from datetime import datetime, timedelta
+from datetime import datetime
 from decimal import Decimal
-from aiohttp.test_utils import AioHTTPTestCase
-from aiohttp import web
 
-from bot.misc.recovery import RecoveryManager, StateManager
-from bot.misc.monitoring import MonitoringServer
-from bot.database.models import Payments
+from bot.misc.services import RecoveryManager, StateManager
+from bot.misc.obvervability import MonitoringServer
+from bot.misc import EnvKeys
 
 
 class TestRecoveryManager:
@@ -111,7 +109,7 @@ class TestRecoveryManager:
         async def failing_coro():
             raise ValueError("Test error")
 
-        with patch('bot.misc.recovery.logger') as mock_logger:
+        with patch('bot.misc.services.recovery.logger') as mock_logger:
             # Should not raise, but log the error
             await recovery_manager._safe_run(failing_coro())
             mock_logger.error.assert_called()
@@ -151,10 +149,10 @@ class TestRecoveryManager:
         payment.external_id = "crypto_123"
         payment.currency = "USD"
 
-        with patch('bot.misc.recovery.EnvKeys.CRYPTO_PAY_TOKEN', 'test_token'):
-            with patch('bot.misc.recovery.CryptoPayAPI') as mock_crypto_api:
-                with patch('bot.misc.recovery.process_payment_with_referral') as mock_process:
-                    with patch('bot.misc.recovery.EnvKeys.REFERRAL_PERCENT', 10):
+        with patch.object(EnvKeys, 'CRYPTO_PAY_TOKEN', 'test_token'):
+            with patch('bot.misc.services.payment.CryptoPayAPI') as mock_crypto_api:
+                with patch('bot.database.methods.transactions.process_payment_with_referral') as mock_process:
+                    with patch.object(EnvKeys, 'REFERRAL_PERCENT', 10):
                         # Mock crypto API response
                         crypto_instance = mock_crypto_api.return_value
                         crypto_instance.get_invoice = AsyncMock(return_value={"status": "paid"})
@@ -163,7 +161,7 @@ class TestRecoveryManager:
                         mock_process.return_value = (True, "success")
 
                         # Mock localization
-                        with patch('bot.misc.recovery.localize', return_value="Payment confirmed"):
+                        with patch('bot.i18n.localize', return_value="Payment confirmed"):
                             await recovery_manager._check_and_process_payment(payment)
 
                             # Verify crypto API was called
@@ -192,9 +190,9 @@ class TestRecoveryManager:
         payment.provider = "cryptopay"
         payment.external_id = "crypto_123"
 
-        with patch('bot.misc.recovery.EnvKeys.CRYPTO_PAY_TOKEN', 'test_token'):
-            with patch('bot.misc.recovery.CryptoPayAPI') as mock_crypto_api:
-                with patch('bot.misc.recovery.Database') as mock_db:
+        with patch.object(EnvKeys, 'CRYPTO_PAY_TOKEN', 'test_token'):
+            with patch('bot.misc.services.payment.CryptoPayAPI') as mock_crypto_api:
+                with patch('bot.database.Database') as mock_db:
                     # Mock crypto API response
                     crypto_instance = mock_crypto_api.return_value
                     crypto_instance.get_invoice = AsyncMock(return_value={"status": "expired"})
@@ -227,9 +225,9 @@ class TestRecoveryManager:
         payment.provider = "cryptopay"
         payment.external_id = "crypto_123"
 
-        with patch('bot.misc.recovery.EnvKeys.CRYPTO_PAY_TOKEN', 'test_token'):
-            with patch('bot.misc.recovery.CryptoPayAPI') as mock_crypto_api:
-                with patch('bot.misc.recovery.logger') as mock_logger:
+        with patch.object(EnvKeys, 'CRYPTO_PAY_TOKEN', 'test_token'):
+            with patch('bot.misc.services.payment.CryptoPayAPI') as mock_crypto_api:
+                with patch('bot.misc.services.recovery.logger') as mock_logger:
                     # Mock crypto API to raise an exception
                     crypto_instance = mock_crypto_api.return_value
                     crypto_instance.get_invoice = AsyncMock(side_effect=Exception("API Error"))
@@ -252,8 +250,8 @@ class TestRecoveryManager:
         mock_cache_manager.get = AsyncMock(return_value=broadcast_state)
 
         # Need to patch both the module-level import and the local import
-        with patch('bot.misc.recovery.get_cache_manager', return_value=mock_cache_manager):
-            with patch('bot.misc.cache.get_cache_manager', return_value=mock_cache_manager):
+        with patch('bot.misc.caching.cache.get_cache_manager', return_value=mock_cache_manager):
+            with patch('bot.misc.caching.cache.get_cache_manager', return_value=mock_cache_manager):
                 with patch.object(recovery_manager, '_resume_broadcast', new_callable=AsyncMock) as mock_resume:
                     # Set _resume_broadcast to return immediately to avoid warnings
                     mock_resume.return_value = None
@@ -266,7 +264,7 @@ class TestRecoveryManager:
     @pytest.mark.asyncio
     async def test_recover_interrupted_broadcasts_no_cache(self, recovery_manager):
         """Test recovering broadcasts when no cache available"""
-        with patch('bot.misc.recovery.get_cache_manager', return_value=None):
+        with patch('bot.misc.caching.cache.get_cache_manager', return_value=None):
             # Should not raise an exception
             await recovery_manager.recover_interrupted_broadcasts()
 
@@ -274,7 +272,7 @@ class TestRecoveryManager:
     async def test_periodic_health_check_success(self, recovery_manager):
         """Test successful health check"""
         # Mock database check
-        with patch('bot.misc.recovery.Database') as mock_db:
+        with patch('bot.database.Database') as mock_db:
             mock_session = MagicMock()
             mock_session.execute.return_value = None
 
@@ -288,9 +286,9 @@ class TestRecoveryManager:
             mock_cache_manager = AsyncMock()
             mock_cache_manager.set = AsyncMock(return_value=True)
             mock_cache_manager.get = AsyncMock(return_value=None)
-            with patch('bot.misc.recovery.get_cache_manager', return_value=mock_cache_manager):
-                with patch('bot.misc.cache.get_cache_manager', return_value=mock_cache_manager):
-                    with patch('bot.misc.recovery.logger') as mock_logger:
+            with patch('bot.misc.caching.cache.get_cache_manager', return_value=mock_cache_manager):
+                with patch('bot.misc.caching.cache.get_cache_manager', return_value=mock_cache_manager):
+                    with patch('bot.misc.services.recovery.logger') as mock_logger:
                         with patch('asyncio.sleep') as mock_sleep:  # Prevent actual sleep
                             # Set up counter to exit after first iteration
                             call_count = 0
@@ -323,12 +321,12 @@ class TestRecoveryManager:
     async def test_periodic_health_check_failure(self, recovery_manager):
         """Test health check with failures"""
         # Mock database to fail
-        with patch('bot.misc.recovery.Database') as mock_db:
+        with patch('bot.database.Database') as mock_db:
             mock_db_instance = MagicMock()
             mock_db_instance.session.side_effect = Exception("DB Connection failed")
             mock_db.return_value = mock_db_instance
 
-            with patch('bot.misc.recovery.logger') as mock_logger:
+            with patch('bot.misc.services.recovery.logger') as mock_logger:
                 with patch('asyncio.sleep') as mock_sleep:  # Prevent actual sleep
                     # Set up counter to exit after first iteration
                     call_count = 0
@@ -374,8 +372,8 @@ class TestStateManager:
 
         with patch('pathlib.Path') as mock_path:
             with patch('builtins.open', mock_open()) as mock_file:
-                with patch('bot.misc.recovery.get_cache_manager', return_value=mock_cache_manager):
-                    with patch('bot.misc.cache.get_cache_manager', return_value=mock_cache_manager):
+                with patch('bot.misc.caching.cache.get_cache_manager', return_value=mock_cache_manager):
+                    with patch('bot.misc.caching.cache.get_cache_manager', return_value=mock_cache_manager):
                         await state_manager.save_broadcast_state(
                             user_ids, sent_count, message_text, start_time
                         )
@@ -397,7 +395,7 @@ class TestStateManager:
     async def test_save_broadcast_state_error_handling(self, state_manager):
         """Test error handling in save_broadcast_state"""
         with patch('builtins.open', side_effect=IOError("File write error")):
-            with patch('bot.misc.recovery.logger') as mock_logger:
+            with patch('bot.misc.services.recovery.logger') as mock_logger:
                 await state_manager.save_broadcast_state(
                     [1, 2, 3], 1, "test", datetime.now()
                 )
@@ -412,14 +410,14 @@ class TestMonitoringServer:
     @pytest.fixture
     def monitoring_server(self):
         """Create a MonitoringServer instance"""
-        with patch('bot.misc.monitoring.EnvKeys.MONITORING_HOST', '127.0.0.1'):
-            with patch('bot.misc.monitoring.EnvKeys.MONITORING_PORT', 8080):
+        with patch('bot.misc.obvervability.monitoring.EnvKeys.MONITORING_HOST', '127.0.0.1'):
+            with patch('bot.misc.obvervability.monitoring.EnvKeys.MONITORING_PORT', 8080):
                 return MonitoringServer()
 
     def test_monitoring_server_initialization(self):
         """Test monitoring server initialization"""
-        with patch('bot.misc.monitoring.EnvKeys.MONITORING_HOST', '192.168.1.1'):
-            with patch('bot.misc.monitoring.EnvKeys.MONITORING_PORT', 9090):
+        with patch('bot.misc.obvervability.monitoring.EnvKeys.MONITORING_HOST', '192.168.1.1'):
+            with patch('bot.misc.obvervability.monitoring.EnvKeys.MONITORING_PORT', 9090):
                 server = MonitoringServer()
                 assert server.host == '192.168.1.1'
                 assert server.port == 9090
@@ -438,9 +436,9 @@ class TestMonitoringServer:
         mock_metrics.get_metrics_summary.return_value = {"uptime_seconds": 3600}
         mock_cache_manager = MagicMock()
 
-        with patch('bot.misc.monitoring.Database') as mock_db:
-            with patch('bot.misc.monitoring.get_metrics', return_value=mock_metrics):
-                with patch('bot.misc.monitoring.get_cache_manager', return_value=mock_cache_manager):
+        with patch('bot.misc.obvervability.monitoring.Database') as mock_db:
+            with patch('bot.misc.obvervability.monitoring.get_metrics', return_value=mock_metrics):
+                with patch('bot.misc.obvervability.monitoring.get_cache_manager', return_value=mock_cache_manager):
                     # Mock successful database check
                     mock_session = MagicMock()
                     mock_session.execute.return_value = None
@@ -468,9 +466,9 @@ class TestMonitoringServer:
     @pytest.mark.asyncio
     async def test_health_check_database_failure(self, monitoring_server):
         """Test health check with database failure"""
-        with patch('bot.misc.monitoring.Database') as mock_db:
-            with patch('bot.misc.monitoring.get_metrics', return_value=None):
-                with patch('bot.misc.monitoring.get_cache_manager', return_value=None):
+        with patch('bot.misc.obvervability.monitoring.Database') as mock_db:
+            with patch('bot.misc.obvervability.monitoring.get_metrics', return_value=None):
+                with patch('bot.misc.obvervability.monitoring.get_cache_manager', return_value=None):
                     # Mock database failure
                     mock_db_instance = MagicMock()
                     mock_db_instance.session.side_effect = Exception("DB Error")
@@ -496,7 +494,7 @@ class TestMonitoringServer:
             "timestamp": "2024-01-01T12:00:00"
         }
 
-        with patch('bot.misc.monitoring.get_metrics', return_value=mock_metrics):
+        with patch('bot.misc.obvervability.monitoring.get_metrics', return_value=mock_metrics):
             request = MagicMock()
             response = await monitoring_server.metrics_json(request)
 
@@ -508,7 +506,7 @@ class TestMonitoringServer:
     @pytest.mark.asyncio
     async def test_metrics_json_no_metrics(self, monitoring_server):
         """Test metrics JSON endpoint when metrics not initialized"""
-        with patch('bot.misc.monitoring.get_metrics', return_value=None):
+        with patch('bot.misc.obvervability.monitoring.get_metrics', return_value=None):
             request = MagicMock()
             response = await monitoring_server.metrics_json(request)
 
@@ -526,7 +524,7 @@ bot_uptime_seconds 1800
         """.strip()
         mock_metrics.export_to_prometheus.return_value = prometheus_data
 
-        with patch('bot.misc.monitoring.get_metrics', return_value=mock_metrics):
+        with patch('bot.misc.obvervability.monitoring.get_metrics', return_value=mock_metrics):
             request = MagicMock()
             response = await monitoring_server.prometheus_handler(request)
 
@@ -545,7 +543,7 @@ bot_uptime_seconds 1800
             "timestamp": "2024-01-01T12:00:00"
         }
 
-        with patch('bot.misc.monitoring.get_metrics', return_value=mock_metrics):
+        with patch('bot.misc.obvervability.monitoring.get_metrics', return_value=mock_metrics):
             request = MagicMock()
             response = await monitoring_server.index_handler(request)
 
@@ -567,7 +565,7 @@ bot_uptime_seconds 1800
             }
         }
 
-        with patch('bot.misc.monitoring.get_metrics', return_value=mock_metrics):
+        with patch('bot.misc.obvervability.monitoring.get_metrics', return_value=mock_metrics):
             request = MagicMock()
             response = await monitoring_server.events_handler(request)
 
@@ -598,7 +596,7 @@ bot_uptime_seconds 1800
             }
         }
 
-        with patch('bot.misc.monitoring.get_metrics', return_value=mock_metrics):
+        with patch('bot.misc.obvervability.monitoring.get_metrics', return_value=mock_metrics):
             request = MagicMock()
             response = await monitoring_server.performance_handler(request)
 
@@ -619,7 +617,7 @@ bot_uptime_seconds 1800
             }
         }
 
-        with patch('bot.misc.monitoring.get_metrics', return_value=mock_metrics):
+        with patch('bot.misc.obvervability.monitoring.get_metrics', return_value=mock_metrics):
             request = MagicMock()
             response = await monitoring_server.errors_handler(request)
 
@@ -634,7 +632,7 @@ bot_uptime_seconds 1800
         mock_metrics = MagicMock()
         mock_metrics.get_metrics_summary.return_value = {"errors": {}}
 
-        with patch('bot.misc.monitoring.get_metrics', return_value=mock_metrics):
+        with patch('bot.misc.obvervability.monitoring.get_metrics', return_value=mock_metrics):
             request = MagicMock()
             response = await monitoring_server.errors_handler(request)
 
@@ -658,7 +656,7 @@ bot_uptime_seconds 1800
             }
         }
 
-        with patch('bot.misc.monitoring.get_metrics', return_value=mock_metrics):
+        with patch('bot.misc.obvervability.monitoring.get_metrics', return_value=mock_metrics):
             request = MagicMock()
             response = await monitoring_server.dashboard_handler(request)
 
@@ -671,9 +669,9 @@ bot_uptime_seconds 1800
     @pytest.mark.asyncio
     async def test_start_server_success(self, monitoring_server):
         """Test successful server startup"""
-        with patch('bot.misc.monitoring.web.AppRunner') as mock_runner:
-            with patch('bot.misc.monitoring.web.TCPSite') as mock_site:
-                with patch('bot.misc.monitoring.logger') as mock_logger:
+        with patch('bot.misc.obvervability.monitoring.web.AppRunner') as mock_runner:
+            with patch('bot.misc.obvervability.monitoring.web.TCPSite') as mock_site:
+                with patch('bot.misc.obvervability.monitoring.logger') as mock_logger:
                     mock_runner_instance = AsyncMock()
                     mock_runner.return_value = mock_runner_instance
                     mock_site_instance = AsyncMock()
@@ -690,8 +688,8 @@ bot_uptime_seconds 1800
     @pytest.mark.asyncio
     async def test_start_server_failure(self, monitoring_server):
         """Test server startup failure"""
-        with patch('bot.misc.monitoring.web.AppRunner', side_effect=Exception("Port in use")):
-            with patch('bot.misc.monitoring.logger') as mock_logger:
+        with patch('bot.misc.obvervability.monitoring.web.AppRunner', side_effect=Exception("Port in use")):
+            with patch('bot.misc.obvervability.monitoring.logger') as mock_logger:
                 await monitoring_server.start()
 
                 mock_logger.error.assert_called()
@@ -702,7 +700,7 @@ bot_uptime_seconds 1800
         mock_runner = AsyncMock()
         monitoring_server.runner = mock_runner
 
-        with patch('bot.misc.monitoring.logger') as mock_logger:
+        with patch('bot.misc.obvervability.monitoring.logger') as mock_logger:
             await monitoring_server.stop()
 
             mock_runner.cleanup.assert_called_once()
@@ -767,11 +765,11 @@ class TestIntegration:
 
         manager = RecoveryManager(mock_bot)
 
-        with patch('bot.misc.recovery.Database') as mock_db:
-            with patch('bot.misc.recovery.EnvKeys.CRYPTO_PAY_TOKEN', 'token'):
-                with patch('bot.misc.recovery.CryptoPayAPI') as mock_api:
-                    with patch('bot.misc.recovery.process_payment_with_referral') as mock_process:
-                        with patch('bot.misc.recovery.localize', return_value="Paid"):
+        with patch('bot.database.Database') as mock_db:
+            with patch.object(EnvKeys, 'CRYPTO_PAY_TOKEN', 'token'):
+                with patch('bot.misc.services.payment.CryptoPayAPI') as mock_api:
+                    with patch('bot.database.methods.transactions.process_payment_with_referral') as mock_process:
+                        with patch('bot.i18n.localize', return_value="Paid"):
                             # Setup mocks
                             mock_session = MagicMock()
                             mock_query = MagicMock()
@@ -815,7 +813,7 @@ class TestIntegration:
     @pytest.mark.asyncio
     async def test_monitoring_server_with_real_metrics(self):
         """Test monitoring server with actual metrics data"""
-        from bot.misc.metrics import MetricsCollector
+        from bot.misc.obvervability.metrics import MetricsCollector
 
         # Create real metrics
         metrics = MetricsCollector()
@@ -826,7 +824,7 @@ class TestIntegration:
 
         server = MonitoringServer('127.0.0.1', 8080)
 
-        with patch('bot.misc.monitoring.get_metrics', return_value=metrics):
+        with patch('bot.misc.obvervability.monitoring.get_metrics', return_value=metrics):
             request = MagicMock()
 
             # Test multiple endpoints

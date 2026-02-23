@@ -25,7 +25,7 @@ def mock_cache_system():
     mock_cache.scan_iter = AsyncMock(return_value=AsyncMockIterator([]))
 
     # Mock all cache-related functions completely
-    with patch('bot.misc.cache.get_cache_manager', return_value=mock_cache):
+    with patch('bot.misc.caching.cache.get_cache_manager', return_value=mock_cache):
         with patch('bot.database.methods.read.get_cache_manager', return_value=mock_cache):
             with patch('bot.database.methods.cache_utils.safe_create_task'):
                 with patch('bot.database.methods.read.invalidate_category_cache', new_callable=AsyncMock):
@@ -33,7 +33,7 @@ def mock_cache_system():
                         with patch('bot.database.methods.read.invalidate_user_cache', new_callable=AsyncMock):
                             with patch('bot.database.methods.read.invalidate_stats_cache', new_callable=AsyncMock):
                                 # Also patch any CacheManager instances that might exist
-                                with patch('bot.misc.cache.CacheManager'):
+                                with patch('bot.misc.caching.cache.CacheManager'):
                                     yield
 
 

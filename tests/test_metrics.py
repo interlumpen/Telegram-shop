@@ -4,9 +4,8 @@ import pytest
 import time
 from datetime import datetime
 from unittest.mock import MagicMock, AsyncMock, patch
-from collections import defaultdict
 
-from bot.misc.metrics import MetricsCollector, AnalyticsMiddleware, get_metrics, init_metrics
+from bot.misc.obvervability import MetricsCollector, AnalyticsMiddleware, get_metrics, init_metrics
 
 
 class TestMetricsCollector:
@@ -94,7 +93,7 @@ class TestMetricsCollector:
         """Test error tracking"""
         collector = MetricsCollector()
 
-        with patch('bot.misc.metrics.logger') as mock_logger:
+        with patch('bot.misc.obvervability.metrics.logger') as mock_logger:
             collector.track_error("ValueError")
             collector.track_error("ValueError")
             collector.track_error("ConnectionError", "Database connection failed")
@@ -246,7 +245,7 @@ class TestMetricsCollector:
         """Test event saving with logging"""
         collector = MetricsCollector()
 
-        with patch('bot.misc.metrics.logger') as mock_logger:
+        with patch('bot.misc.obvervability.metrics.logger') as mock_logger:
             event_data = {"user_id": 123, "amount": 100}
             collector._save_event("test_event", event_data)
 
@@ -258,7 +257,7 @@ class TestMetricsCollector:
         """Test error handling in event saving"""
         collector = MetricsCollector()
 
-        with patch('bot.misc.metrics.logger') as mock_logger:
+        with patch('bot.misc.obvervability.metrics.logger') as mock_logger:
             # Mock logger.debug to raise an exception
             mock_logger.debug.side_effect = Exception("Logging error")
 
@@ -438,13 +437,13 @@ class TestMetricsGlobal:
 
     def test_get_metrics_initially_none(self):
         """Test that global metrics is initially None"""
-        with patch('bot.misc.metrics._metrics_collector', None):
+        with patch('bot.misc.obvervability.metrics._metrics_collector', None):
             metrics = get_metrics()
             assert metrics is None
 
     def test_init_metrics(self):
         """Test metrics initialization"""
-        with patch('bot.misc.metrics.logger') as mock_logger:
+        with patch('bot.misc.obvervability.metrics.logger') as mock_logger:
             metrics = init_metrics()
 
             assert isinstance(metrics, MetricsCollector)

@@ -1,5 +1,5 @@
 from bot.logger_mesh import logger
-from bot.misc.cache import CacheManager, cache_result
+from bot.misc.caching import CacheManager, cache_result
 from typing import Dict, Any
 import asyncio
 

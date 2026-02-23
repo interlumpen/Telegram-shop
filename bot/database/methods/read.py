@@ -8,7 +8,7 @@ from sqlalchemy import func, exists
 
 from bot.database.models import Database, User, ItemValues, Goods, Categories, Role, BoughtGoods, \
     Operations, ReferralEarnings
-from bot.misc.cache import get_cache_manager
+from bot.misc.caching import get_cache_manager
 
 
 # Wrapper for synchronous functions to asynchronous functions with caching

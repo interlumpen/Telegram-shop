@@ -4,7 +4,7 @@ from unittest.mock import MagicMock, AsyncMock
 from aiogram.exceptions import TelegramBadRequest, TelegramForbiddenError
 from aiogram.methods import SendMessage  # For creating proper exception objects
 
-from bot.misc.broadcast_system import BroadcastManager, BroadcastStats
+from bot.misc.services import BroadcastManager, BroadcastStats
 
 
 class TestBroadcastSystem:

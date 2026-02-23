@@ -1,15 +1,6 @@
 import asyncio
 import logging
 from datetime import datetime, timedelta
-from pathlib import Path
-
-from bot.database import Database
-from bot.database.models import Payments
-from bot.i18n import localize
-from bot.misc.payment import CryptoPayAPI
-from bot.misc import EnvKeys
-from bot.misc.cache import get_cache_manager
-from bot.database.methods.transactions import process_payment_with_referral
 
 logger = logging.getLogger(__name__)
 
@@ -61,6 +52,9 @@ class RecoveryManager:
 
     async def recover_pending_payments(self):
         """Recovery of suspended payments"""
+        from bot.database import Database
+        from bot.database.models import Payments
+
         while self.running:
             try:
                 with Database().session() as s:
@@ -81,8 +75,15 @@ class RecoveryManager:
             # Wait 5 minutes before the next check
             await asyncio.sleep(300)
 
-    async def _check_and_process_payment(self, payment: Payments):
+    async def _check_and_process_payment(self, payment):
         """Verification and processing of a specific payment"""
+        from bot.database import Database
+        from bot.database.models import Payments
+        from bot.database.methods.transactions import process_payment_with_referral
+        from bot.misc import EnvKeys
+        from bot.misc.services.payment import CryptoPayAPI
+        from bot.i18n import localize
+
         try:
             if payment.provider == "cryptopay" and EnvKeys.CRYPTO_PAY_TOKEN:
                 crypto = CryptoPayAPI()
@@ -123,7 +124,7 @@ class RecoveryManager:
         """Restore interrupted mailings"""
         # Loading state from Redis at startup
         try:
-            from bot.misc.cache import get_cache_manager
+            from bot.misc.caching.cache import get_cache_manager
 
             cache = get_cache_manager()
             if cache:
@@ -141,6 +142,8 @@ class RecoveryManager:
 
     async def periodic_health_check(self):
         """Periodic system health checks"""
+        from bot.database import Database
+
         while self.running:
             try:
                 # Check connections to database
@@ -149,7 +152,7 @@ class RecoveryManager:
                     s.execute(text("SELECT 1"))
 
                 # Checking Redis
-                from bot.misc.cache import get_cache_manager
+                from bot.misc.caching.cache import get_cache_manager
                 cache = get_cache_manager()
                 if cache:
                     await cache.set("health:check", "ok", ttl=60)
@@ -193,7 +196,7 @@ class StateManager:
                 json.dump(state, f)
 
             # Also save in Redis for quick access
-            from bot.misc.cache import get_cache_manager
+            from bot.misc.caching.cache import get_cache_manager
             cache = get_cache_manager()
             if cache:
                 await cache.set("broadcast:state", state, ttl=3600)

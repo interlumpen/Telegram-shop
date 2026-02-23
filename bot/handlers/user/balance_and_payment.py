@@ -13,8 +13,8 @@ from bot.logger_mesh import audit_logger, logger
 from bot.misc import EnvKeys, ItemPurchaseRequest, validate_telegram_id, validate_money_amount, PaymentRequest, \
     sanitize_html
 from bot.handlers.other import _any_payment_method_enabled, is_safe_item_name
-from bot.misc.metrics import get_metrics
-from bot.misc.payment import CryptoPayAPI, CryptoPayAPIError, send_stars_invoice, send_fiat_invoice
+from bot.misc.obvervability import get_metrics
+from bot.misc.services import CryptoPayAPI, CryptoPayAPIError, send_stars_invoice, send_fiat_invoice
 from bot.filters import ValidAmountFilter
 from bot.i18n import localize
 from bot.states import BalanceStates

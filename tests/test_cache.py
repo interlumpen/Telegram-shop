@@ -5,7 +5,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 from datetime import datetime
 from decimal import Decimal
 
-from bot.misc.cache import CacheManager, cache_result, get_cache_manager, init_cache_manager
+from bot.misc.caching import CacheManager, cache_result, get_cache_manager, init_cache_manager
 
 
 class TestCacheManager:
@@ -86,7 +86,7 @@ class TestCacheManager:
         invalid_data = b"not_valid_json_or_pickle"
         mock_redis.get.return_value = invalid_data
 
-        with patch('bot.misc.cache.logger') as mock_logger:
+        with patch('bot.misc.caching.cache.logger') as mock_logger:
             result = await cache_manager.get("test_key")
 
             assert result is None
@@ -171,7 +171,7 @@ class TestCacheManager:
         """Test error handling during cache set"""
         mock_redis.setex.side_effect = Exception("Redis connection error")
 
-        with patch('bot.misc.cache.logger') as mock_logger:
+        with patch('bot.misc.caching.cache.logger') as mock_logger:
             result = await cache_manager.set("test_key", "value")
 
             assert result is False
@@ -190,7 +190,7 @@ class TestCacheManager:
         """Test error handling during cache deletion"""
         mock_redis.delete.side_effect = Exception("Delete failed")
 
-        with patch('bot.misc.cache.logger') as mock_logger:
+        with patch('bot.misc.caching.cache.logger') as mock_logger:
             result = await cache_manager.delete("test_key")
 
             assert result is False
@@ -230,7 +230,7 @@ class TestCacheManager:
         """Test error handling during pattern invalidation"""
         mock_redis.scan_iter = MagicMock(side_effect=Exception("Scan failed"))
 
-        with patch('bot.misc.cache.logger') as mock_logger:
+        with patch('bot.misc.caching.cache.logger') as mock_logger:
             result = await cache_manager.invalidate_pattern("test:*")
 
             assert result == 0
@@ -252,7 +252,7 @@ class TestCacheDecorator:
         cached_value = {"result": "cached_data"}
         mock_cache_manager.get.return_value = cached_value
 
-        with patch('bot.misc.cache.get_cache_manager', return_value=mock_cache_manager):
+        with patch('bot.misc.caching.cache.get_cache_manager', return_value=mock_cache_manager):
             @cache_result(ttl=600, key_prefix="test")
             async def test_function(param1, param2="default"):
                 return {"result": "fresh_data"}
@@ -275,7 +275,7 @@ class TestCacheDecorator:
         mock_cache_manager.get.return_value = None
         expected_result = {"result": "fresh_data"}
 
-        with patch('bot.misc.cache.get_cache_manager', return_value=mock_cache_manager):
+        with patch('bot.misc.caching.cache.get_cache_manager', return_value=mock_cache_manager):
             @cache_result(ttl=600)
             async def test_function(param):
                 return expected_result
@@ -299,7 +299,7 @@ class TestCacheDecorator:
         def custom_key_func(user_id, action):
             return f"user_action:{user_id}:{action}"
 
-        with patch('bot.misc.cache.get_cache_manager', return_value=mock_cache_manager):
+        with patch('bot.misc.caching.cache.get_cache_manager', return_value=mock_cache_manager):
             @cache_result(key_func=custom_key_func)
             async def user_action(user_id, action):
                 return f"result_for_{user_id}_{action}"
@@ -313,7 +313,7 @@ class TestCacheDecorator:
     @pytest.mark.asyncio
     async def test_cache_result_no_cache_manager(self):
         """Test cache decorator when cache manager is not available"""
-        with patch('bot.misc.cache.get_cache_manager', return_value=None):
+        with patch('bot.misc.caching.cache.get_cache_manager', return_value=None):
             @cache_result()
             async def test_function():
                 return "result"
@@ -328,7 +328,7 @@ class TestCacheDecorator:
         """Test that None results are not cached"""
         mock_cache_manager.get.return_value = None
 
-        with patch('bot.misc.cache.get_cache_manager', return_value=mock_cache_manager):
+        with patch('bot.misc.caching.cache.get_cache_manager', return_value=mock_cache_manager):
             @cache_result()
             async def test_function():
                 return None
@@ -346,7 +346,7 @@ class TestCacheManagerGlobal:
     def test_get_cache_manager_initially_none(self):
         """Test that cache manager is initially None"""
         # Reset the global variable
-        with patch('bot.misc.cache._cache_manager', None):
+        with patch('bot.misc.caching.cache._cache_manager', None):
             manager = get_cache_manager()
             assert manager is None
 
@@ -355,7 +355,7 @@ class TestCacheManagerGlobal:
         """Test cache manager initialization"""
         mock_redis = AsyncMock()
 
-        with patch('bot.misc.cache.logger') as mock_logger:
+        with patch('bot.misc.caching.cache.logger') as mock_logger:
             await init_cache_manager(mock_redis)
 
             manager = get_cache_manager()
@@ -447,7 +447,7 @@ class TestCacheIntegration:
             def __init__(self, id):
                 self.id = id
 
-        with patch('bot.misc.cache.get_cache_manager', return_value=mock_cache_manager):
+        with patch('bot.misc.caching.cache.get_cache_manager', return_value=mock_cache_manager):
             @cache_result()
             async def get_user_data(user):
                 return f"data_for_user_{user.id}"

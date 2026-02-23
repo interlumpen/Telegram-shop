@@ -1,6 +1,6 @@
 import asyncio
 from datetime import datetime
-from bot.misc.cache import get_cache_manager
+from bot.misc.caching import get_cache_manager
 from bot.logger_mesh import logger
 
 

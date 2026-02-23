@@ -1,10 +1,8 @@
 import pytest
 import json
 from unittest.mock import MagicMock, AsyncMock, patch
-from decimal import Decimal
-from aiogram.types import LabeledPrice
 
-from bot.misc.payment import (
+from bot.misc.services.payment import (
     currency_to_stars, send_stars_invoice, send_fiat_invoice,
     _minor_units_for, CryptoPayAPI, CryptoPayAPIError, ZERO_DEC_CURRENCIES
 )
@@ -51,7 +49,7 @@ class TestPaymentModule:
 
         with patch.object(EnvKeys, 'STARS_PER_VALUE', 0.1):
             with patch.object(EnvKeys, 'PAY_CURRENCY', 'RUB'):
-                with patch('bot.misc.payment.localize') as mock_localize:
+                with patch('bot.misc.services.payment.localize') as mock_localize:
                     # Mock localization strings
                     mock_localize.side_effect = lambda key, **kwargs: f"mocked_{key}"
 
@@ -91,7 +89,7 @@ class TestPaymentModule:
         payload_extra = {"user_id": 999, "referrer": "friend"}
 
         with patch.object(EnvKeys, 'STARS_PER_VALUE', 0.2):
-            with patch('bot.misc.payment.localize') as mock_localize:
+            with patch('bot.misc.services.payment.localize') as mock_localize:
                 mock_localize.return_value = "mocked"
 
                 await send_stars_invoice(
@@ -118,7 +116,7 @@ class TestPaymentModule:
 
         with patch.object(EnvKeys, 'TELEGRAM_PROVIDER_TOKEN', 'test_token'):
             with patch.object(EnvKeys, 'PAY_CURRENCY', 'USD'):
-                with patch('bot.misc.payment.localize') as mock_localize:
+                with patch('bot.misc.services.payment.localize') as mock_localize:
                     mock_localize.side_effect = lambda key, **kwargs: f"mocked_{key}"
 
                     await send_fiat_invoice(
@@ -169,7 +167,7 @@ class TestPaymentModule:
 
         with patch.object(EnvKeys, 'TELEGRAM_PROVIDER_TOKEN', 'test_token'):
             with patch.object(EnvKeys, 'PAY_CURRENCY', 'JPY'):
-                with patch('bot.misc.payment.localize') as mock_localize:
+                with patch('bot.misc.services.payment.localize') as mock_localize:
                     mock_localize.return_value = "mocked"
 
                     await send_fiat_invoice(
@@ -213,7 +211,7 @@ class TestCryptoPayAPI:
                     }
                 }
 
-                with patch('bot.misc.payment.aiohttp.ClientSession') as mock_session_class:
+                with patch('bot.misc.services.payment.aiohttp.ClientSession') as mock_session_class:
                     # Create a mock response
                     class MockResponse:
                         async def json(self):
@@ -288,7 +286,7 @@ class TestCryptoPayAPI:
                 }
             }
 
-            with patch('bot.misc.payment.aiohttp.ClientSession') as mock_session_class:
+            with patch('bot.misc.services.payment.aiohttp.ClientSession') as mock_session_class:
                 # Create a mock response
                 class MockResponse:
                     async def json(self):
@@ -337,7 +335,7 @@ class TestCryptoPayAPI:
                 }
             }
 
-            with patch('bot.misc.payment.aiohttp.ClientSession') as mock_session_class:
+            with patch('bot.misc.services.payment.aiohttp.ClientSession') as mock_session_class:
                 # Create a mock response
                 class MockResponse:
                     async def json(self):

@@ -2,9 +2,9 @@ from aiohttp import web
 import json
 
 from bot.misc import EnvKeys
-from bot.misc.metrics import get_metrics
+from bot.misc.obvervability import get_metrics
 from bot.database import Database
-from bot.misc.cache import get_cache_manager
+from bot.misc.caching import get_cache_manager
 from bot.logger_mesh import logger
 
 

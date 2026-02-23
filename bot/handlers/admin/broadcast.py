@@ -13,7 +13,7 @@ from bot.keyboards import back, close
 from bot.logger_mesh import audit_logger
 from bot.filters import HasPermissionFilter
 from bot.misc import BroadcastMessage, sanitize_html
-from bot.misc.broadcast_system import BroadcastManager, BroadcastStats
+from bot.misc.services import BroadcastManager, BroadcastStats
 from bot.states import BroadcastFSM
 
 router = Router()
