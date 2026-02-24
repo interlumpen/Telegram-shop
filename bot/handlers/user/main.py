@@ -36,7 +36,7 @@ async def start(message: Message, state: FSMContext):
 
     owner_max_role = select_max_role_id()
     referral_id = message.text[7:] if message.text[7:] != str(user_id) else None
-    user_role = owner_max_role if str(user_id) == EnvKeys.OWNER_ID else 1
+    user_role = owner_max_role if user_id == EnvKeys.OWNER_ID else 1
 
     # registration_date is DateTime
     create_user(

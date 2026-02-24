@@ -476,7 +476,7 @@ async def buy_item_callback_handler(call: CallbackQuery, state: FSMContext):
 
             await call.message.edit_text(
                 error_text,
-                reply_markup=back(f'item_{purchase_request.item_name}')
+                reply_markup=back('gp_0')
             )
 
             if message not in error_messages:
@@ -505,7 +505,7 @@ async def buy_item_callback_handler(call: CallbackQuery, state: FSMContext):
                 currency=EnvKeys.PAY_CURRENCY
             ),
             parse_mode='HTML',
-            reply_markup=back(f'item_{purchase_request.item_name}')
+            reply_markup=back('gp_0')
         )
 
         # Secure logging

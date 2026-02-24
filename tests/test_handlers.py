@@ -105,7 +105,7 @@ class TestUserMainHandlers:
                 with patch('bot.handlers.user.main.check_role', return_value=3):
                     with patch('bot.handlers.user.main.main_menu') as mock_main_menu:
                         with patch('bot.handlers.user.main.localize', return_value="Welcome Admin!"):
-                            with patch('bot.handlers.user.main.EnvKeys.OWNER_ID', '12345'):  # Same as user ID
+                            with patch('bot.handlers.user.main.EnvKeys.OWNER_ID', 12345):  # Same as user ID
                                 with patch('bot.handlers.user.main.EnvKeys.CHANNEL_URL', None):
                                     with patch('bot.handlers.user.main.EnvKeys.HELPER_ID', None):
                                         mock_main_menu.return_value = MagicMock()
