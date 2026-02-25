@@ -5,6 +5,8 @@ from random import randint
 from bot.database.models import User, ItemValues, Goods, BoughtGoods, Payments, Operations
 from bot.database import Database
 from bot.misc import EnvKeys
+from bot.database.methods.read import invalidate_user_cache, invalidate_stats_cache
+from bot.database.methods.cache_utils import safe_create_task
 
 
 def buy_item_transaction(telegram_id: int, item_name: str) -> tuple[bool, str, dict | None]:
@@ -71,6 +73,9 @@ def buy_item_transaction(telegram_id: int, item_name: str) -> tuple[bool, str, d
 
             # 8. Commit the transaction
             s.commit()
+
+            safe_create_task(invalidate_user_cache(telegram_id))
+            safe_create_task(invalidate_stats_cache())
 
             return True, "success", {
                 "item_name": item_name,
@@ -162,7 +167,15 @@ def process_payment_with_referral(
                         )
                         s.add(earning)
 
+            referrer_id = user.referral_id if referral_percent > 0 else None
+
             s.commit()
+
+            safe_create_task(invalidate_user_cache(user_id))
+            safe_create_task(invalidate_stats_cache())
+            if referrer_id:
+                safe_create_task(invalidate_user_cache(referrer_id))
+
             return True, "success"
 
         except Exception as e:
