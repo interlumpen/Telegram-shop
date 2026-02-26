@@ -140,17 +140,15 @@ class TestItemPurchaseRequest:
         req = ItemPurchaseRequest(item_name="Widget", user_id=12345)
         assert req.item_name == "Widget"
 
-    def test_sql_injection_union_select(self):
-        with pytest.raises(ValidationError):
-            ItemPurchaseRequest(item_name="item' UNION SELECT * FROM users--", user_id=1)
+    def test_sql_patterns_allowed(self):
+        req = ItemPurchaseRequest(item_name="Select Edition", user_id=1)
+        assert req.item_name == "Select Edition"
 
-    def test_sql_injection_drop(self):
+    def test_control_characters_rejected(self):
         with pytest.raises(ValidationError):
-            ItemPurchaseRequest(item_name="item; DROP TABLE users;", user_id=1)
-
-    def test_xss_script_tag(self):
+            ItemPurchaseRequest(item_name="item\x00name", user_id=1)
         with pytest.raises(ValidationError):
-            ItemPurchaseRequest(item_name="<script>alert(1)</script>", user_id=1)
+            ItemPurchaseRequest(item_name="item\x1fname", user_id=1)
 
     def test_empty_name_rejected(self):
         with pytest.raises(ValidationError):

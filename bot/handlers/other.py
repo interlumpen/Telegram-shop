@@ -53,22 +53,10 @@ def generate_short_hash(text: str, length: int = 8) -> str:
 
 
 def is_safe_item_name(name: str) -> bool:
-    """Additional security check of the product name"""
+    """Check that the product name is safe for display"""
     # Length check
     if len(name) > 100 or len(name) < 1:
         return False
-
-    # Checking for dangerous patterns
-    dangerous_patterns = [
-        r"(--|#|\/\*|\*\/)",  # SQL comments
-        r"\b(union|select|insert|update|delete|drop|exec)\b",  # SQL keywords
-        r"[<>\"']",  # Potential XSS characters
-        r"\.\.\/",  # Bypassing the path
-    ]
-
-    for pattern in dangerous_patterns:
-        if re.search(pattern, name, re.IGNORECASE):
-            return False
 
     # Block control characters (0x00-0x1F, 0x7F) but allow all printable Unicode
     if re.search(r'[\x00-\x1f\x7f]', name):

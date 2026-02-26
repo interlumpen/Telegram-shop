@@ -15,11 +15,9 @@ class TestSuspiciousPatterns:
     def test_none(self):
         assert check_suspicious_patterns(None) is False
 
-    def test_sql_injection_union_select(self):
-        assert check_suspicious_patterns("1 UNION SELECT * FROM users") is True
-
-    def test_sql_injection_delete(self):
-        assert check_suspicious_patterns("1; DELETE FROM users") is True
+    def test_sql_patterns_not_blocked(self):
+        assert check_suspicious_patterns("1 UNION SELECT * FROM users") is False
+        assert check_suspicious_patterns("1; DELETE FROM users") is False
 
     def test_xss_script_tag(self):
         assert check_suspicious_patterns("<script>alert(1)</script>") is True
@@ -27,14 +25,12 @@ class TestSuspiciousPatterns:
     def test_xss_javascript_protocol(self):
         assert check_suspicious_patterns("javascript:alert(1)") is True
 
-    def test_command_injection_pipe(self):
-        assert check_suspicious_patterns("test | cat /etc/passwd") is True
+    def test_shell_patterns_not_blocked(self):
+        assert check_suspicious_patterns("test | cat /etc/passwd") is False
+        assert check_suspicious_patterns("test `whoami`") is False
 
-    def test_command_injection_backtick(self):
-        assert check_suspicious_patterns("test `whoami`") is True
-
-    def test_path_traversal(self):
-        assert check_suspicious_patterns("../../etc/passwd") is True
+    def test_path_traversal_not_blocked(self):
+        assert check_suspicious_patterns("../../etc/passwd") is False
 
     def test_long_string(self):
         assert check_suspicious_patterns("x" * 5000) is True
@@ -43,37 +39,6 @@ class TestSuspiciousPatterns:
         assert check_suspicious_patterns("shop") is False
         assert check_suspicious_patterns("buy_item_123") is False
         assert check_suspicious_patterns("profile") is False
-
-
-class TestSecurityMiddlewareCSRF:
-
-    def setup_method(self):
-        self.middleware = SecurityMiddleware(secret_key="test_secret_key")
-
-    def test_generate_and_verify_token(self):
-        token = self.middleware.generate_token(12345, "buy_widget")
-        assert self.middleware.verify_token(token, 12345, "buy_widget") is True
-
-    def test_token_wrong_user(self):
-        token = self.middleware.generate_token(12345, "buy_widget")
-        assert self.middleware.verify_token(token, 99999, "buy_widget") is False
-
-    def test_token_wrong_action(self):
-        token = self.middleware.generate_token(12345, "buy_widget")
-        assert self.middleware.verify_token(token, 12345, "buy_other") is False
-
-    def test_token_expired(self):
-        token = self.middleware.generate_token(12345, "buy_widget")
-        # Verify with max_age=-1 so it's immediately expired (> check, not >=)
-        assert self.middleware.verify_token(token, 12345, "buy_widget", max_age=-1) is False
-
-    def test_invalid_token_format(self):
-        assert self.middleware.verify_token("invalid", 12345, "buy") is False
-
-    def test_tampered_signature(self):
-        token = self.middleware.generate_token(12345, "buy_widget")
-        tampered = token[:-5] + "xxxxx"
-        assert self.middleware.verify_token(tampered, 12345, "buy_widget") is False
 
 
 class TestSecurityMiddlewareCriticalActions:

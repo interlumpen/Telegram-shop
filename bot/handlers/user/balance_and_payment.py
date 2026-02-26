@@ -409,19 +409,6 @@ async def buy_item_callback_handler(call: CallbackQuery, state: FSMContext):
             await call.answer(localize("middleware.security.invalid_csrf"), show_alert=True)
             return
 
-        # CSRF token verification
-        from bot.main import security_middleware
-        if security_middleware:
-            csrf_token = data.get('csrf_token')
-
-            if not csrf_token:
-                await call.answer(localize("middleware.security.invalid_csrf"), show_alert=True)
-                return
-
-            if not security_middleware.verify_token(csrf_token, call.from_user.id, f"buy_{raw_item_name}"):
-                await call.answer(localize("middleware.security.invalid_csrf"), show_alert=True)
-                return
-
         metrics = get_metrics()
         if metrics:
             # Tracking the purchase funnel

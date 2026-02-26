@@ -212,11 +212,8 @@ async def item_info_callback_handler(call: CallbackQuery, state: FSMContext):
 
     markup = item_info(item_name, back_data)
 
-    # Generate CSRF token for buy action
-    from bot.main import security_middleware
-    if security_middleware:
-        csrf_token = security_middleware.generate_token(call.from_user.id, f"buy_{item_name}")
-        await state.update_data(csrf_token=csrf_token, csrf_item=item_name)
+    # Save item name in state to verify intent on purchase
+    await state.update_data(csrf_item=item_name)
 
     try:
         await call.message.edit_text(

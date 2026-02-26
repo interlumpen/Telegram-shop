@@ -70,9 +70,9 @@ def update_item(item_name: str, new_name: str, description: str, price, category
             # Remove the old merchandise
             session.query(Goods).filter(Goods.name == item_name).delete(synchronize_session=False)
 
-            safe_create_task(invalidate_item_cache(item_name))
+            safe_create_task(invalidate_item_cache(item_name, category))
             if new_name != item_name:
-                safe_create_task(invalidate_item_cache(new_name))
+                safe_create_task(invalidate_item_cache(new_name, category))
 
             return True, None
 

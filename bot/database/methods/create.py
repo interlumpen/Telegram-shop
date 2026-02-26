@@ -6,6 +6,8 @@ from sqlalchemy.exc import IntegrityError
 
 from bot.database.models import User, ItemValues, Goods, Categories, Operations, Payments, ReferralEarnings
 from bot.database import Database
+from bot.database.methods.cache_utils import safe_create_task
+from bot.database.methods.read import invalidate_stats_cache
 
 
 def create_user(telegram_id: int, registration_date: datetime, referral_id: int | None, role: int = 1) -> None:
@@ -37,6 +39,8 @@ def create_item(item_name: str, item_description: str, item_price: int, category
             )
         )
 
+    safe_create_task(invalidate_stats_cache())
+
 
 def add_values_to_item(item_name: str, value: str, is_infinity: bool) -> bool:
     """Add item value if not duplicate; True if inserted."""
@@ -66,6 +70,8 @@ def create_category(category_name: str) -> None:
         if s.query(exists().where(Categories.name == category_name)).scalar():
             return
         s.add(Categories(name=category_name))
+
+    safe_create_task(invalidate_stats_cache())
 
 
 def create_operation(user_id: int, value: int, operation_time: datetime) -> None:

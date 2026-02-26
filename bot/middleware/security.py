@@ -1,7 +1,4 @@
-import hmac
-import hashlib
 import time
-import secrets
 from typing import Dict, Any, Callable, Awaitable
 from aiogram import BaseMiddleware
 from aiogram.types import TelegramObject, CallbackQuery, Message
@@ -11,30 +8,18 @@ from bot.logger_mesh import audit_logger
 
 
 def check_suspicious_patterns(text: str) -> bool:
-    """Checking for suspicious patterns"""
+    """Checking for suspicious patterns in callback data"""
     if not text:
         return False
 
-    suspicious = [
-        # SQL injection
-        r"(union.*select|select.*from|insert.*into|delete.*from)",
-        # Script injection
-        r"<script|javascript:|onerror=|onclick=",
-        # Command injection
-        r"(;|\||&&|`|\$\()",
-        # Path traversal
-        r"\.\.\/|\.\.\\",
-        # Excessively long strings (possible DoS attack)
-    ]
-
-    # Length check
+    # Length check (DoS protection)
     if len(text) > 4096:
         return True
 
     import re
-    for pattern in suspicious:
-        if re.search(pattern, text, re.IGNORECASE):
-            return True
+    # Check for script injection
+    if re.search(r"<script|javascript:|onerror=|onclick=", text, re.IGNORECASE):
+        return True
 
     return False
 
@@ -42,60 +27,16 @@ def check_suspicious_patterns(text: str) -> bool:
 class SecurityMiddleware(BaseMiddleware):
     """
     Middleware for additional security:
-    - CSRF protection for critical operations
-    - Callback data signature verification
+    - Audit logging for critical operations
+    - Replay attack prevention
     - Suspicious activity logging
     """
 
-    def __init__(self, secret_key: str = None):
-        self.secret_key = secret_key or secrets.token_urlsafe(32)
+    def __init__(self):
         self.critical_actions = {
             'buy_', 'pay_', 'delete_', 'admin', 'remove-admin',
             'fill-user-balance', 'set-admin', 'deduct-user-balance'
         }
-
-    def generate_token(self, user_id: int, action: str) -> str:
-        """CSRF token generation"""
-        timestamp = str(int(time.time()))
-        data = f"{user_id}:{action}:{timestamp}"
-
-        signature = hmac.new(
-            self.secret_key.encode(),
-            data.encode(),
-            hashlib.sha256
-        ).hexdigest()
-
-        return f"{data}:{signature}"
-
-    def verify_token(self, token: str, user_id: int, action: str, max_age: int = 3600) -> bool:
-        """CSRF token validation"""
-        try:
-            parts = token.split(':')
-            if len(parts) != 4:
-                return False
-
-            token_user_id, token_action, timestamp, signature = parts
-
-            # Check user_id and action
-            if str(user_id) != token_user_id or action != token_action:
-                return False
-
-            # Checking token lifetime
-            if int(time.time()) - int(timestamp) > max_age:
-                return False
-
-            # Signature verification
-            data = f"{token_user_id}:{token_action}:{timestamp}"
-            expected_signature = hmac.new(
-                self.secret_key.encode(),
-                data.encode(),
-                hashlib.sha256
-            ).hexdigest()
-
-            return hmac.compare_digest(signature, expected_signature)
-
-        except Exception:
-            return False
 
     def is_critical_action(self, callback_data: str) -> bool:
         """Checking whether an action is critical"""

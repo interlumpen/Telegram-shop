@@ -357,15 +357,18 @@ async def invalidate_user_cache(user_id: int):
         await cache.invalidate_pattern(f"user_items:{user_id}:*")
 
 
-async def invalidate_item_cache(item_name: str):
+async def invalidate_item_cache(item_name: str, category_name: str = None):
     """Invalidate product cache"""
     cache = get_cache_manager()
     if cache:
         await cache.delete(f"item:{item_name}")
         await cache.delete(f"item_info:{item_name}")
         await cache.delete(f"item_values:{item_name}")
-        # Also invalidate categories, as the number of items may have changed
-        await cache.invalidate_pattern("category:*")
+        # Invalidate affected category (or all if unknown)
+        if category_name:
+            await cache.delete(f"category:{category_name}")
+        else:
+            await cache.invalidate_pattern("category:*")
 
 
 async def invalidate_category_cache(category_name: str):

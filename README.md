@@ -89,6 +89,8 @@ via the command line (CLI) without the need for a shell and advanced monitoring 
     - Product catalog caching (5-minute TTL)
     - Statistics caching (1-minute TTL)
     - Smart cache invalidation on data updates
+    - Cache warm-up on startup (categories, user/admin counts)
+    - Cache scheduler: hourly stats refresh, daily cleanup at 3:00 AM
 - **Performance Optimizations**: Up to 60% reduction in database queries for read operations
 
 ### Monitoring & Analytics
@@ -121,14 +123,14 @@ via the command line (CLI) without the need for a shell and advanced monitoring 
     - Failed transaction rollback
     - Connection pool recovery
 - **State Persistence**:
-    - Critical state saving to disk
-    - Recovery checkpoint creation
+    - Critical state saving to `data/bot_state.json`
+    - Broadcast progress saved to disk and Redis
     - Graceful shutdown handling
 - **Health Monitoring**:
-    - Periodic system health checks
+    - Periodic system health checks (database, Redis, Telegram API)
     - Automatic component restart
     - Dead connection detection
-    - Resource leak prevention
+    - Resource cleanup for long-running sessions
 - **Payment Recovery**:
     - Automatic check for stuck payments
     - Idempotent payment processing
@@ -149,17 +151,17 @@ via the command line (CLI) without the need for a shell and advanced monitoring 
 
 #### 2. **Security Middleware**
 
-- **SQL Injection Protection**: Input validation and parameterized queries
-- **XSS Prevention**: HTML sanitization for all user inputs
-- **CSRF Protection**: Token validation for critical operations
+- **SQL Injection Protection**: Parameterized queries via SQLAlchemy ORM (no raw SQL)
+- **XSS Prevention**: HTML sanitization for broadcast messages and category names
+- **Purchase Intent Verification**: Item name stored in server-side FSM state, verified on buy
 - **Replay Attack Prevention**: Timestamp validation on callbacks
 
 #### 3. **Authentication & Authorization**
 
 - Bot detection and blocking
-- Session-based authentication with TTL
-- Permission-based access control
-- Role caching for performance
+- Telegram ID-based authentication
+- Permission bitmask access control (USE, BROADCAST, SETTINGS_MANAGE, etc.)
+- Role caching with TTL for performance
 
 #### 4. **Payment Security**
 
@@ -171,8 +173,8 @@ via the command line (CLI) without the need for a shell and advanced monitoring 
 
 - Pydantic models for request validation
 - Decimal precision for monetary calculations
-- Input sanitization for all text fields
-- File size and type restrictions
+- HTML sanitization for user-facing text (broadcast, categories)
+- Control character filtering for item names
 
 ## 🏗️ Architecture
 
@@ -205,7 +207,7 @@ via the command line (CLI) without the need for a shell and advanced monitoring 
 - **Middleware Pipeline**: Request processing chain
 - **State Pattern**: FSM for multi-step processes
 - **Transaction Script**: Business logic encapsulation
-- **Observer Pattern**: Metrics collection and event tracking
+- **Middleware Pattern**: Metrics collection and event tracking via AnalyticsMiddleware
 
 ### Performance Architecture
 
@@ -222,15 +224,14 @@ via the command line (CLI) without the need for a shell and advanced monitoring 
 - **Language**: Python 3.11+
 - **Framework**: Aiogram 3.22+ (async Telegram Bot API)
 - **Database**: PostgreSQL 16+ with SQLAlchemy 2.0
-- **Cache/Storage**: Redis 7+ (FSM states, rate limiting, intelligent data caching)
+- **Cache/Storage**: Redis 7+ (FSM states, intelligent data caching)
 - **Migrations**: Alembic
 
 ### Security & Validation
 
 - **Input Validation**: Pydantic
-- **Rate Limiting**: Custom middleware with Redis
-- **Authentication**: HMAC-based token system
-- **Password Hashing**: hashlib with salting
+- **Rate Limiting**: Custom in-memory middleware (per-process)
+- **Authentication**: Role-based with permission bitmask
 
 ### Payment Integrations
 
@@ -323,12 +324,12 @@ The application requires the following environment variables:
 <details>
 <summary><b>📦 Redis Storage</b></summary>
 
-| Variable         | Description                 | Default |
-|------------------|-----------------------------|---------|
-| `REDIS_HOST`     | Redis server address        | `redis` |
-| `REDIS_PORT`     | Redis server port           | `6379`  |
-| `REDIS_DB`       | Redis database number       | `0`     |
-| `REDIS_PASSWORD` | Redis password (if enabled) | -       |
+| Variable         | Description                 | Default     |
+|------------------|-----------------------------|-------------|
+| `REDIS_HOST`     | Redis server address        | `localhost` |
+| `REDIS_PORT`     | Redis server port           | `6379`      |
+| `REDIS_DB`       | Redis database number       | `0`         |
+| `REDIS_PASSWORD` | Redis password (if enabled) | -           |
 
 </details>
 
@@ -338,7 +339,7 @@ The application requires the following environment variables:
 | Variable            | Description                                             | Default                                  |
 |---------------------|---------------------------------------------------------|------------------------------------------|
 | `POSTGRES_DB`       | PostgreSQL database name                                | **Required**                             |
-| `POSTGRES_USER`     | PostgreSQL username                                     | `postgres`                               |
+| `POSTGRES_USER`     | PostgreSQL username                                     | **Required**                             |
 | `POSTGRES_PASSWORD` | PostgreSQL password                                     | **Required**                             |
 | `POSTGRES_HOST`     | PostgreSQL host (configure this only for manual deploy) | localhost (for manual) / db (for docker) |
 | `DB_PORT`           | PostgreSQL port                                         | `5432`                                   |
@@ -397,6 +398,7 @@ The bot will automatically:
 - Start accepting messages
 - Launch monitoring dashboard on port 9090
 - Initialize recovery systems
+- Enable Docker health check via `/health` endpoint
 
 4. **View logs** (optional)
 
@@ -661,7 +663,8 @@ update_balance(telegram_id: int, amount: int) -> None
 
 ```python
 buy_item_transaction(telegram_id: int, item_name: str) -> tuple[bool, str, dict]
-process_payment_with_referral(user_id: int, amount: Decimal, provider: str, external_id: str) -> tuple[bool, str]
+process_payment_with_referral(
+    user_id: int, amount: Decimal, provider: str, external_id: str, referral_percent: int = 0) -> tuple[bool, str]
 ```
 
 #### Product Management
@@ -684,7 +687,7 @@ RateLimitConfig(
 )
 
 # Security layers
-SecurityMiddleware(secret_key="...")
+SecurityMiddleware()
 AuthenticationMiddleware()
 ```
 
@@ -727,7 +730,7 @@ async def get_products_by_category(category_id: int) -> List[Product]
 
 # Cache invalidation
 await invalidate_user_cache(telegram_id)
-await invalidate_item_cache(item_name)
+await invalidate_item_cache(item_name, category_name)  # category_name is optional
 ```
 
 ### Connection Pool Configuration
@@ -744,7 +747,7 @@ engine = create_engine(
 
 ## 🧪 Testing
 
-The project includes a comprehensive test suite with **302 tests** covering all major components, business logic, and
+The project includes a comprehensive test suite with **293 tests** covering all major components, business logic, and
 edge cases. Tests use SQLite in-memory with real SQL queries, and a dict-based FakeCacheManager for realistic cache
 behavior.
 
@@ -765,24 +768,24 @@ pytest tests/ --cov=bot --cov-report=html
 
 ### Test Modules Overview
 
-| Module                       | Tests   | Coverage                                              |
-|------------------------------|---------|-------------------------------------------------------|
-| `test_database_crud.py`      | 67      | CRUD: users, roles, categories, items, balance, stats |
-| `test_validators.py`         | 45      | Input validation, SQL injection, XSS, Pydantic models |
-| `test_middleware.py`         | 40      | CSRF, rate limiting, suspicious patterns, auth        |
-| `test_keyboards.py`          | 28      | All inline keyboard generators                        |
-| `test_admin_handlers.py`     | 20      | User management, categories, goods (admin)            |
-| `test_transactions.py`       | 15      | Purchase & payment transactions, idempotency          |
-| `test_metrics.py`            | 14      | MetricsCollector, AnalyticsMiddleware                 |
-| `test_cache_invalidation.py` | 13      | Cache invalidation after DB mutations                 |
-| `test_broadcast.py`          | 11      | BroadcastManager, BroadcastStats                      |
-| `test_paginator.py`          | 10      | LazyPaginator with caching                            |
-| `test_payment_handlers.py`   | 10      | Balance top-up, payment check, item purchase          |
-| `test_shop_handlers.py`      | 10      | Shop browsing, item info, bought items                |
-| `test_user_handlers.py`      | 8       | /start, profile, rules, referral registration         |
-| `test_referral_system.py`    | 7       | Referral stats, earnings, view referrals              |
-| `test_recovery.py`           | 4       | RecoveryManager lifecycle, payment recovery           |
-| **Total**                    | **302** | **Complete system coverage**                          |
+| Module                       | Tests   | Coverage                                                   |
+|------------------------------|---------|------------------------------------------------------------|
+| `test_database_crud.py`      | 67      | CRUD: users, roles, categories, items, balance, stats      |
+| `test_validators.py`         | 44      | Input validation, control chars, XSS, Pydantic models      |
+| `test_middleware.py`         | 32      | Rate limiting, suspicious patterns, critical actions, auth |
+| `test_keyboards.py`          | 28      | All inline keyboard generators                             |
+| `test_admin_handlers.py`     | 20      | User management, categories, goods (admin)                 |
+| `test_transactions.py`       | 15      | Purchase & payment transactions, idempotency               |
+| `test_metrics.py`            | 14      | MetricsCollector, AnalyticsMiddleware                      |
+| `test_cache_invalidation.py` | 13      | Cache invalidation after DB mutations                      |
+| `test_broadcast.py`          | 11      | BroadcastManager, BroadcastStats                           |
+| `test_paginator.py`          | 10      | LazyPaginator with caching                                 |
+| `test_payment_handlers.py`   | 10      | Balance top-up, payment check, item purchase               |
+| `test_shop_handlers.py`      | 10      | Shop browsing, item info, bought items                     |
+| `test_user_handlers.py`      | 8       | /start, profile, rules, referral registration              |
+| `test_referral_system.py`    | 7       | Referral stats, earnings, view referrals                   |
+| `test_recovery.py`           | 4       | RecoveryManager lifecycle, payment recovery                |
+| **Total**                    | **293** | **Complete system coverage**                               |
 
 ### Test Architecture
 
@@ -806,9 +809,9 @@ The test suite validates:
 <details>
 <summary>Security & Middleware</summary>
 
-* ✅ **CSRF tokens** — generation, verification, expiration, tampered signature detection
 * ✅ **Rate limiting** — global limits, action-specific limits, ban after exceed, ban expiry
-* ✅ **Suspicious pattern detection** — SQL injection, XSS, command injection, path traversal
+* ✅ **Suspicious pattern detection** — XSS/script injection, length-based DoS protection
+* ✅ **Critical action detection** — audit logging for buy/pay/delete/admin operations
 * ✅ **Authentication middleware** — blocked user rejection, bot rejection
 
 </details>
@@ -864,7 +867,7 @@ The test suite validates:
 - **Async testing**: Full asyncio support with `pytest-asyncio`
 - **Per-test isolation**: Automatic data cleanup between tests (FK-ordered delete)
 - **Factory pattern**: Reusable `user_factory`, `category_factory`, `item_factory` fixtures
-- **Security Validation**: SQL injection, XSS, and CSRF protection testing
+- **Security Validation**: XSS detection, critical action audit, and input sanitization testing
 
 ## 🤝 Contributing
 

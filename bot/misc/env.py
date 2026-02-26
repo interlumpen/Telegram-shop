@@ -54,9 +54,9 @@ class EnvKeys(ABC):
     BOT_LOCALE: Final = _get_optional("BOT_LOCALE", "ru")
     BOT_LOGFILE: Final = _get_optional("BOT_LOGFILE", "logs/bot.log")
     BOT_AUDITFILE: Final = _get_optional("BOT_AUDITFILE", "logs/audit.log")
-    LOG_TO_STDOUT: Final = _get_optional("LOG_TO_STDOUT", "true")
-    LOG_TO_FILE: Final = _get_optional("LOG_TO_FILE", "false")
-    DEBUG: Final = _get_optional("DEBUG", "false")
+    LOG_TO_STDOUT: Final = _get_optional("LOG_TO_STDOUT", "1")
+    LOG_TO_FILE: Final = _get_optional("LOG_TO_FILE", "1")
+    DEBUG: Final = _get_optional("DEBUG", "0")
 
     # Monitoring
     MONITORING_HOST: Final = _get_optional("MONITORING_HOST", "localhost")

@@ -71,8 +71,12 @@ class RateLimiter:
             self.config.global_window
         )
 
+        # Remove empty key to prevent memory leak
+        if not self.user_requests[user_id]:
+            del self.user_requests[user_id]
+
         # Checking the limit
-        if len(self.user_requests[user_id]) >= self.config.global_limit:
+        if len(self.user_requests.get(user_id, [])) >= self.config.global_limit:
             return False
 
         # Add the current query
@@ -93,8 +97,15 @@ class RateLimiter:
             window
         )
 
+        # Remove empty keys to prevent memory leak
+        if not self.user_actions[action][user_id]:
+            del self.user_actions[action][user_id]
+            if not self.user_actions[action]:
+                del self.user_actions[action]
+
         # Checking the limit
-        if len(self.user_actions[action][user_id]) >= limit:
+        action_requests = self.user_actions.get(action, {}).get(user_id, [])
+        if len(action_requests) >= limit:
             return False
 
         # Add the current query

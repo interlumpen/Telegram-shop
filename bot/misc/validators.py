@@ -29,16 +29,9 @@ class ItemPurchaseRequest(BaseModel):
     @field_validator('item_name')
     @classmethod
     def validate_item_name(cls, v: str) -> str:
-        # Prevent SQL injection patterns
-        dangerous_patterns = [
-            r"(--|#|\/\*|\*\/|;)",  # SQL comments and terminators
-            r"(union|select|insert|update|delete|drop|create|alter|exec|execute)",  # SQL keywords
-            r"(script|javascript|onclick|onerror|onload)",  # XSS patterns
-        ]
-
-        for pattern in dangerous_patterns:
-            if re.search(pattern, v, re.IGNORECASE):
-                raise ValueError(f'Invalid characters in item name')
+        # Block control characters (0x00-0x1F, 0x7F)
+        if re.search(r'[\x00-\x1f\x7f]', v):
+            raise ValueError('Invalid characters in item name')
         return v
 
 
