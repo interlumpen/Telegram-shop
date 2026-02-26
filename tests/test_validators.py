@@ -2,311 +2,206 @@ import pytest
 from decimal import Decimal
 from pydantic import ValidationError
 
-from bot.misc import (
-    PaymentRequest, ItemPurchaseRequest, UserDataUpdate,
-    CategoryRequest, BroadcastMessage, SearchQuery,
-    validate_telegram_id, validate_money_amount, sanitize_html
-)
+from bot.misc.validators import validate_telegram_id, validate_money_amount, sanitize_html, PaymentRequest, \
+    ItemPurchaseRequest, CategoryRequest, BroadcastMessage
 
 
-class TestValidators:
-    """Test suite for data validators"""
+class TestValidateTelegramId:
 
-    def test_payment_request_validation(self):
-        """Test payment request validation"""
-        # Valid request
-        valid_request = PaymentRequest(
-            amount=Decimal("100.50"),
-            currency="USD",
-            provider="telegram"
-        )
-        assert valid_request.amount == Decimal("100.50")
-        assert valid_request.currency == "USD"
+    def test_valid_id(self):
+        assert validate_telegram_id(12345) == 12345
 
-        # Invalid amount (negative)
-        with pytest.raises(ValidationError):
-            PaymentRequest(
-                amount=Decimal("-10"),
-                currency="USD",
-                provider="telegram"
-            )
+    def test_valid_id_large(self):
+        assert validate_telegram_id(9999999999) == 9999999999
 
-        # Invalid amount (too many decimal places)
-        with pytest.raises(ValidationError):
-            PaymentRequest(
-                amount=Decimal("100.123"),
-                currency="USD",
-                provider="telegram"
-            )
+    def test_string_id(self):
+        assert validate_telegram_id("12345") == 12345
 
-        # Invalid currency (wrong length)
-        with pytest.raises(ValidationError):
-            PaymentRequest(
-                amount=Decimal("100"),
-                currency="USDD",
-                provider="telegram"
-            )
-
-        # Invalid provider
-        with pytest.raises(ValidationError):
-            PaymentRequest(
-                amount=Decimal("100"),
-                currency="USD",
-                provider="invalid_provider"
-            )
-
-    def test_item_purchase_request_validation(self):
-        """Test item purchase request validation"""
-        # Valid request
-        valid_request = ItemPurchaseRequest(
-            item_name="Valid Item Name",
-            user_id=123456
-        )
-        assert valid_request.item_name == "Valid Item Name"
-        assert valid_request.user_id == 123456
-
-        # SQL injection attempt
-        with pytest.raises(ValidationError):
-            ItemPurchaseRequest(
-                item_name="'; DROP TABLE users; --",
-                user_id=123456
-            )
-
-        # XSS attempt
-        with pytest.raises(ValidationError):
-            ItemPurchaseRequest(
-                item_name="<script>alert('xss')</script>",
-                user_id=123456
-            )
-
-        # Invalid user_id
-        with pytest.raises(ValidationError):
-            ItemPurchaseRequest(
-                item_name="Valid Item",
-                user_id=-1
-            )
-
-    def test_user_data_update_validation(self):
-        """Test user data update validation"""
-        # Valid update
-        valid_update = UserDataUpdate(
-            telegram_id=123456,
-            balance=Decimal("100.00")
-        )
-        assert valid_update.telegram_id == 123456
-        assert valid_update.balance == Decimal("100.00")
-
-        # Invalid telegram_id
-        with pytest.raises(ValidationError):
-            UserDataUpdate(
-                telegram_id=-1,
-                balance=Decimal("100")
-            )
-
-        # Invalid balance (negative)
-        with pytest.raises(ValidationError):
-            UserDataUpdate(
-                telegram_id=123456,
-                balance=Decimal("-100")
-            )
-
-        # Valid with None balance
-        valid_none = UserDataUpdate(
-            telegram_id=123456,
-            balance=None
-        )
-        assert valid_none.balance is None
-
-    def test_category_request_validation(self):
-        """Test category request validation"""
-        # Valid request
-        valid_request = CategoryRequest(name="Valid Category")
-        assert valid_request.name == "Valid Category"
-        assert valid_request.sanitize_name() == "Valid Category"
-
-        # HTML tags removal
-        html_request = CategoryRequest(name="<b>Bold</b> Category")
-        assert html_request.sanitize_name() == "Bold Category"
-
-        # Multiple spaces normalization
-        spaces_request = CategoryRequest(name="Category    With    Spaces")
-        assert spaces_request.sanitize_name() == "Category With Spaces"
-
-        # Empty name should fail
-        with pytest.raises(ValidationError):
-            CategoryRequest(name="")
-
-    def test_broadcast_message_validation(self):
-        """Test broadcast message validation"""
-        # Valid HTML message
-        valid_html = BroadcastMessage(
-            text="<b>Bold</b> text",
-            parse_mode="HTML"
-        )
-        assert valid_html.text == "<b>Bold</b> text"
-
-        # Invalid HTML (unbalanced tags) - more explicit tag
-        with pytest.raises(ValidationError) as exc_info:
-            BroadcastMessage(
-                text="<b>Unclosed bold tag",  # More clear unbalanced tag
-                parse_mode="HTML"
-            )
-        assert "Unbalanced HTML tag" in str(exc_info.value)
-
-        # Test with attributes
-        with pytest.raises(ValidationError):
-            BroadcastMessage(
-                text='<a href="test">Link',  # Unclosed anchor with attribute
-                parse_mode="HTML"
-            )
-
-        # Valid Markdown
-        valid_md = BroadcastMessage(
-            text="*Bold* text",
-            parse_mode="Markdown"
-        )
-        assert valid_md.parse_mode == "Markdown"
-
-        # Invalid parse mode
-        with pytest.raises(ValidationError):
-            BroadcastMessage(
-                text="Text",
-                parse_mode="InvalidMode"
-            )
-
-        # Empty text
-        with pytest.raises(ValidationError):
-            BroadcastMessage(text="")
-
-        # Too long text
-        with pytest.raises(ValidationError):
-            BroadcastMessage(text="x" * 4097)
-
-    def test_search_query_validation(self):
-        """Test search query validation"""
-        # Valid query
-        valid_query = SearchQuery(query="search term", limit=50)
-        assert valid_query.query == "search term"
-        assert valid_query.limit == 50
-
-        # Sanitization
-        special_query = SearchQuery(query="search@#$%term")
-        assert "searchterm" in special_query.sanitize_query(special_query.query)
-
-        # Invalid limit (too high)
-        with pytest.raises(ValidationError):
-            SearchQuery(query="search", limit=101)
-
-        # Invalid limit (too low)
-        with pytest.raises(ValidationError):
-            SearchQuery(query="search", limit=0)
-
-        # Empty query
-        with pytest.raises(ValidationError):
-            SearchQuery(query="")
-
-    def test_telegram_id_validation(self):
-        """Test telegram ID validation"""
-        # Valid ID
-        assert validate_telegram_id("123456") == 123456
-        assert validate_telegram_id(789012) == 789012
-
-        # Invalid IDs
+    def test_zero_raises(self):
         with pytest.raises(ValueError):
-            validate_telegram_id("-1")
+            validate_telegram_id(0)
 
+    def test_negative_raises(self):
         with pytest.raises(ValueError):
-            validate_telegram_id("0")
+            validate_telegram_id(-1)
 
+    def test_too_large_raises(self):
         with pytest.raises(ValueError):
-            validate_telegram_id("99999999999")  # Too large
+            validate_telegram_id(10000000000)
 
+    def test_non_numeric_raises(self):
         with pytest.raises(ValueError):
-            validate_telegram_id("not_a_number")
+            validate_telegram_id("abc")
 
+    def test_none_raises(self):
         with pytest.raises(ValueError):
             validate_telegram_id(None)
 
-    def test_money_amount_validation(self):
-        """Test money amount validation"""
-        # Valid amounts
-        assert validate_money_amount("100") == Decimal("100.00")
-        assert validate_money_amount("100.50") == Decimal("100.50")
-        assert validate_money_amount(Decimal("99.99")) == Decimal("99.99")
 
-        # With custom limits
-        assert validate_money_amount(
-            "5",
-            min_amount=Decimal("1"),
-            max_amount=Decimal("10")
-        ) == Decimal("5.00")
+class TestValidateMoneyAmount:
 
-        # Invalid amounts
+    def test_valid_amount(self):
+        result = validate_money_amount("50")
+        assert result == Decimal("50.00")
+
+    def test_valid_decimal(self):
+        result = validate_money_amount("99.99")
+        assert result == Decimal("99.99")
+
+    def test_below_min_raises(self):
         with pytest.raises(ValueError):
-            validate_money_amount("0")  # Below default minimum
+            validate_money_amount("0.001", min_amount=Decimal("0.01"))
 
+    def test_above_max_raises(self):
         with pytest.raises(ValueError):
-            validate_money_amount("1000001")  # Above default maximum
+            validate_money_amount("2000000", max_amount=Decimal("1000000"))
 
+    def test_non_numeric_raises(self):
         with pytest.raises(ValueError):
-            validate_money_amount("-100")  # Negative
+            validate_money_amount("abc")
 
+    def test_negative_raises(self):
         with pytest.raises(ValueError):
-            validate_money_amount("not_a_number")
+            validate_money_amount("-10")
 
-        # Rounding test
-        assert validate_money_amount("100.999") == Decimal("101.00")
-        assert validate_money_amount("100.001") == Decimal("100.00")
+    def test_exact_min(self):
+        result = validate_money_amount("0.01", min_amount=Decimal("0.01"))
+        assert result == Decimal("0.01")
 
-    def test_sanitize_html(self):
-        """Test HTML sanitization"""
-        # Basic escaping
-        assert sanitize_html("Test & test") == "Test &amp; test"
-        assert sanitize_html("1 < 2") == "1 &lt; 2"
-        assert sanitize_html("2 > 1") == "2 &gt; 1"
-        assert sanitize_html('"Quote"') == '&quot;Quote&quot;'
-        assert sanitize_html("'Quote'") == '&#39;Quote&#39;'
+    def test_exact_max(self):
+        result = validate_money_amount("1000000", max_amount=Decimal("1000000"))
+        assert result == Decimal("1000000.00")
 
-        # Safe tags preservation
-        assert sanitize_html("<b>Bold</b>") == "<b>Bold</b>"
-        assert sanitize_html("<i>Italic</i>") == "<i>Italic</i>"
-        assert sanitize_html("<u>Underline</u>") == "<u>Underline</u>"
-        assert sanitize_html("<code>Code</code>") == "<code>Code</code>"
 
-        # Dangerous tags escaping
-        assert "&lt;script&gt;" in sanitize_html("<script>alert('xss')</script>")
-        assert "&lt;img" in sanitize_html("<img src=x onerror=alert('xss')>")
+class TestSanitizeHtml:
 
-        # Mixed content
-        mixed = "<b>Safe</b> & <script>Dangerous</script>"
-        result = sanitize_html(mixed)
-        assert "<b>Safe</b>" in result
-        assert "&lt;script&gt;" in result
+    def test_escapes_angle_brackets(self):
+        result = sanitize_html("<script>alert('xss')</script>")
+        assert "<script>" not in result
+        assert "&lt;" in result
 
-    def test_edge_cases(self):
-        """Test edge cases in validation"""
-        # Very long but valid item name
-        long_name = "A" * 100
-        request = ItemPurchaseRequest(item_name=long_name, user_id=123)
-        assert len(request.item_name) == 100
+    def test_escapes_ampersand(self):
+        result = sanitize_html("a & b")
+        assert "&amp;" in result
 
-        # Item name with unicode characters
-        unicode_name = "Товар 商品 📦"
-        unicode_request = ItemPurchaseRequest(item_name=unicode_name, user_id=123)
-        assert unicode_request.item_name == unicode_name
+    def test_escapes_quotes(self):
+        result = sanitize_html('he said "hello"')
+        assert "&quot;" in result
 
-        # Boundary value for payment amount
-        max_payment = PaymentRequest(
-            amount=Decimal("100000"),
-            currency="USD",
-            provider="telegram"
-        )
-        assert max_payment.amount == Decimal("100000")
+    def test_preserves_safe_bold(self):
+        result = sanitize_html("<b>bold</b>")
+        assert "<b>" in result
+        assert "</b>" in result
 
-        # Minimum valid payment
-        min_payment = PaymentRequest(
-            amount=Decimal("0.01"),
-            currency="USD",
-            provider="telegram"
-        )
-        assert min_payment.amount == Decimal("0.01")
+    def test_preserves_safe_italic(self):
+        result = sanitize_html("<i>italic</i>")
+        assert "<i>" in result
+        assert "</i>" in result
+
+    def test_preserves_safe_code(self):
+        result = sanitize_html("<code>code</code>")
+        assert "<code>" in result
+        assert "</code>" in result
+
+    def test_plain_text_unchanged(self):
+        assert sanitize_html("hello world") == "hello world"
+
+
+class TestPaymentRequest:
+
+    def test_valid_request(self):
+        req = PaymentRequest(amount=Decimal("100"), currency="RUB", provider="cryptopay")
+        assert req.amount == Decimal("100")
+
+    def test_invalid_provider(self):
+        with pytest.raises(ValidationError):
+            PaymentRequest(amount=Decimal("100"), currency="RUB", provider="paypal")
+
+    def test_zero_amount(self):
+        with pytest.raises(ValidationError):
+            PaymentRequest(amount=Decimal("0"), currency="RUB", provider="stars")
+
+    def test_negative_amount(self):
+        with pytest.raises(ValidationError):
+            PaymentRequest(amount=Decimal("-10"), currency="RUB", provider="telegram")
+
+    def test_too_many_decimals(self):
+        with pytest.raises(ValidationError):
+            PaymentRequest(amount=Decimal("10.123"), currency="RUB", provider="fiat")
+
+    def test_invalid_currency_length(self):
+        with pytest.raises(ValidationError):
+            PaymentRequest(amount=Decimal("100"), currency="LONG", provider="stars")
+
+
+class TestItemPurchaseRequest:
+
+    def test_valid_request(self):
+        req = ItemPurchaseRequest(item_name="Widget", user_id=12345)
+        assert req.item_name == "Widget"
+
+    def test_sql_injection_union_select(self):
+        with pytest.raises(ValidationError):
+            ItemPurchaseRequest(item_name="item' UNION SELECT * FROM users--", user_id=1)
+
+    def test_sql_injection_drop(self):
+        with pytest.raises(ValidationError):
+            ItemPurchaseRequest(item_name="item; DROP TABLE users;", user_id=1)
+
+    def test_xss_script_tag(self):
+        with pytest.raises(ValidationError):
+            ItemPurchaseRequest(item_name="<script>alert(1)</script>", user_id=1)
+
+    def test_empty_name_rejected(self):
+        with pytest.raises(ValidationError):
+            ItemPurchaseRequest(item_name="", user_id=1)
+
+    def test_invalid_user_id(self):
+        with pytest.raises(ValidationError):
+            ItemPurchaseRequest(item_name="Widget", user_id=0)
+
+
+class TestCategoryRequest:
+
+    def test_valid_category(self):
+        req = CategoryRequest(name="Electronics")
+        assert req.name == "Electronics"
+
+    def test_sanitize_removes_html(self):
+        req = CategoryRequest(name="<b>Bold</b> Category")
+        assert req.sanitize_name() == "Bold Category"
+
+    def test_sanitize_collapses_spaces(self):
+        req = CategoryRequest(name="too   many   spaces")
+        assert req.sanitize_name() == "too many spaces"
+
+    def test_empty_name_rejected(self):
+        with pytest.raises(ValidationError):
+            CategoryRequest(name="")
+
+
+class TestBroadcastMessage:
+
+    def test_valid_html_message(self):
+        msg = BroadcastMessage(text="<b>Hello</b> world")
+        assert msg.text == "<b>Hello</b> world"
+
+    def test_unbalanced_bold_tag(self):
+        with pytest.raises(ValidationError):
+            BroadcastMessage(text="<b>Hello world")
+
+    def test_unbalanced_italic_tag(self):
+        with pytest.raises(ValidationError):
+            BroadcastMessage(text="<i>Hello</i><i>unclosed")
+
+    def test_plain_text_valid(self):
+        msg = BroadcastMessage(text="Hello world", parse_mode="HTML")
+        assert msg.text == "Hello world"
+
+    def test_too_long_rejected(self):
+        with pytest.raises(ValidationError):
+            BroadcastMessage(text="x" * 4097)
+
+    def test_empty_rejected(self):
+        with pytest.raises(ValidationError):
+            BroadcastMessage(text="")

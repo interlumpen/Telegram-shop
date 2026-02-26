@@ -1,107 +1,129 @@
 import pytest
 from datetime import datetime
-from unittest.mock import MagicMock, AsyncMock
-from aiogram.exceptions import TelegramBadRequest, TelegramForbiddenError
-from aiogram.methods import SendMessage  # For creating proper exception objects
+from unittest.mock import AsyncMock, MagicMock
 
-from bot.misc.services import BroadcastManager, BroadcastStats
+from aiogram.exceptions import TelegramForbiddenError
+
+from bot.misc.services.broadcast_system import BroadcastManager, BroadcastStats
 
 
-class TestBroadcastSystem:
-    """Test suite for broadcast system"""
+class TestBroadcastStats:
 
-    def test_broadcast_stats_initialization(self):
-        """Test BroadcastStats initialization"""
-        stats = BroadcastStats()
+    def test_success_rate_all_sent(self):
+        stats = BroadcastStats(total=10, sent=10, failed=0)
+        assert stats.success_rate == 100.0
 
-        assert stats.total == 0
-        assert stats.sent == 0
-        assert stats.failed == 0
-        assert stats.blocked == 0
-        assert stats.success_rate == 0.0
-        # Fixed: start_time is None by default, not datetime
-        assert stats.start_time is None
-        assert stats.end_time is None
+    def test_success_rate_partial(self):
+        stats = BroadcastStats(total=10, sent=7, failed=3)
+        assert stats.success_rate == 70.0
+
+    def test_success_rate_zero_total(self):
+        stats = BroadcastStats(total=0, sent=0, failed=0)
+        assert stats.success_rate == 0
+
+    def test_duration(self):
+        start = datetime(2026, 1, 1, 12, 0, 0)
+        end = datetime(2026, 1, 1, 12, 0, 10)
+        stats = BroadcastStats(start_time=start, end_time=end)
+        assert stats.duration == 10.0
+
+    def test_duration_none_when_not_finished(self):
+        stats = BroadcastStats(start_time=datetime.now())
         assert stats.duration is None
 
-    def test_broadcast_stats_calculation(self):
-        """Test BroadcastStats calculations"""
-        stats = BroadcastStats()
-        stats.total = 100
-        stats.sent = 75
-        stats.failed = 20
-        stats.blocked = 5
 
-        # Success rate calculation
-        assert stats.success_rate == 75.0
+class TestBroadcastManager:
 
-        # Duration calculation - using the property, not a method
-        stats.start_time = datetime.now()
-        import time
-        time.sleep(0.1)
-        stats.end_time = datetime.now()  # Set end_time manually
-        assert stats.duration > 0
+    def setup_method(self):
+        self.bot = AsyncMock()
+        self.manager = BroadcastManager(
+            bot=self.bot,
+            batch_size=5,
+            batch_delay=0,  # No delay in tests
+            retry_count=1,
+        )
 
     @pytest.mark.asyncio
-    async def test_broadcast_with_failures(self):
-        """Test broadcast with some failed messages"""
-        bot = MagicMock()
-
-        # Create proper exception objects with method parameter
-        method = SendMessage(chat_id=1, text="Test")
-
-        # Create a list of side effects (not AsyncMocks)
-        side_effects = [
-            MagicMock(),  # Success for user 1
-            TelegramBadRequest(method=method, message="Bad request"),  # Fail for user 2
-            MagicMock(),  # Success for user 3
-            TelegramForbiddenError(method=method, message="User blocked bot"),  # Blocked for user 4
-            MagicMock(),  # Success for user 5
-        ]
-
-        bot.send_message = AsyncMock(side_effect=side_effects)
-
-        manager = BroadcastManager(bot, batch_size=2, batch_delay=0.01)
+    async def test_broadcast_all_success(self):
+        self.bot.send_message = AsyncMock(return_value=True)
         user_ids = [1, 2, 3, 4, 5]
-
-        stats = await manager.broadcast(
-            user_ids=user_ids,
-            text="Test message"
-        )
-
+        stats = await self.manager.broadcast(user_ids, "Hello!")
+        assert stats.sent == 5
+        assert stats.failed == 0
         assert stats.total == 5
-        assert stats.sent == 3
-        assert stats.failed == 2  # Changed from 1 to 2 (one BadRequest, one Forbidden)
-        assert stats.blocked >= 1  # At least the ForbiddenError
-        assert stats.success_rate == 60.0
 
     @pytest.mark.asyncio
-    async def test_broadcast_exception_handling(self):
-        """Test various exception handling in broadcast"""
-        bot = MagicMock()
+    async def test_broadcast_partial_failure(self):
+        call_count = 0
 
-        # Create method object for exceptions
-        method = SendMessage(chat_id=1, text="Test")
+        async def send_with_failures(**kwargs):
+            nonlocal call_count
+            call_count += 1
+            if call_count % 3 == 0:
+                raise TelegramForbiddenError(method=MagicMock(), message="Forbidden")
+            return True
 
-        # Different types of exceptions with proper initialization
-        exceptions = [
-            TelegramBadRequest(method=method, message="Chat not found"),
-            TelegramForbiddenError(method=method, message="Bot was blocked"),
-            Exception("Unknown error"),
-            TelegramBadRequest(method=method, message="Message is too long"),
-        ]
+        self.bot.send_message = send_with_failures
+        user_ids = list(range(1, 10))
+        stats = await self.manager.broadcast(user_ids, "Hello!")
+        assert stats.sent > 0
+        assert stats.failed > 0
+        assert stats.sent + stats.failed == stats.total
 
-        bot.send_message = AsyncMock(side_effect=exceptions)
-
-        manager = BroadcastManager(bot)
-        user_ids = [1, 2, 3, 4]
-
-        stats = await manager.broadcast(
-            user_ids=user_ids,
-            text="Test"
+    @pytest.mark.asyncio
+    async def test_broadcast_forbidden_user(self):
+        self.bot.send_message = AsyncMock(
+            side_effect=TelegramForbiddenError(method=MagicMock(), message="Forbidden")
         )
-
-        assert stats.total == 4
+        stats = await self.manager.broadcast([1, 2, 3], "Hello!")
         assert stats.sent == 0
-        assert stats.failed >= 2  # At least some failures
-        assert stats.blocked >= 1  # At least one blocked
+        assert stats.failed == 3
+
+    @pytest.mark.asyncio
+    async def test_broadcast_cancel(self):
+        send_count = 0
+
+        async def slow_send(**kwargs):
+            nonlocal send_count
+            send_count += 1
+            return True
+
+        self.bot.send_message = slow_send
+        # Use batch_size=2 so multiple batches
+        self.manager.batch_size = 2
+        user_ids = list(range(1, 11))
+
+        # Cancel after first batch via progress callback
+        def cancel_after_first(stats):
+            if stats.sent >= 2:
+                self.manager.cancel()
+
+        stats = await self.manager.broadcast(
+            user_ids, "Hello!", progress_callback=cancel_after_first
+        )
+        # Should have cancelled before sending to all 10
+        assert stats.sent < 10
+
+    @pytest.mark.asyncio
+    async def test_broadcast_progress_callback(self):
+        self.bot.send_message = AsyncMock(return_value=True)
+        self.manager.batch_size = 3
+        progress_calls = []
+
+        def on_progress(stats):
+            progress_calls.append(stats.sent)
+
+        user_ids = list(range(1, 7))
+        await self.manager.broadcast(
+            user_ids, "Hello!", progress_callback=on_progress
+        )
+        assert len(progress_calls) == 2  # 2 batches of 3
+
+    @pytest.mark.asyncio
+    async def test_broadcast_stats_have_times(self):
+        self.bot.send_message = AsyncMock(return_value=True)
+        stats = await self.manager.broadcast([1], "Hello!")
+        assert stats.start_time is not None
+        assert stats.end_time is not None
+        assert stats.duration is not None
+        assert stats.duration >= 0

@@ -744,18 +744,20 @@ engine = create_engine(
 
 ## 🧪 Testing
 
-The project includes a comprehensive test suite with **200 tests** covering all major components and edge cases.
+The project includes a comprehensive test suite with **302 tests** covering all major components, business logic, and
+edge cases. Tests use SQLite in-memory with real SQL queries, and a dict-based FakeCacheManager for realistic cache
+behavior.
 
 ### Running Tests
 
 ```bash
 # Run all tests with verbose output
-pytest tests/ -v --asyncio-mode=auto
+pytest tests/ -v
 
 # Run specific test modules
-pytest tests/test_cache.py -v
-pytest tests/test_payment.py -v
-pytest tests/test_recovery_monitoring.py -v
+pytest tests/test_transactions.py -v
+pytest tests/test_cache_invalidation.py -v
+pytest tests/test_admin_handlers.py -v
 
 # Run with coverage report
 pytest tests/ --cov=bot --cov-report=html
@@ -763,168 +765,105 @@ pytest tests/ --cov=bot --cov-report=html
 
 ### Test Modules Overview
 
-| Module                        | Tests   | Coverage                       |
-|-------------------------------|---------|--------------------------------|
-| `test_broadcast.py`           | 4       | Broadcast messaging system     |
-| `test_cache.py`               | 30      | Advanced caching mechanisms    |
-| `test_database.py`            | 9       | Database operations & CRUD     |
-| `test_fixes.py`               | 7       | Security & performance fixes   |
-| `test_handlers.py`            | 14      | User interaction workflows     |
-| `test_keyboards.py`           | 12      | UI keyboard generation         |
-| `test_metrics.py`             | 18      | Analytics & monitoring         |
-| `test_middleware.py`          | 14      | Security & rate limiting       |
-| `test_paginator.py`           | 14      | Lazy loading pagination        |
-| `test_payment.py`             | 14      | Multi-provider payments        |
-| `test_recovery_monitoring.py` | 54      | Disaster recovery & monitoring |
-| `test_validators.py`          | 10      | Data validation & security     |
-| **Total**                     | **200** | **Complete system coverage**   |
+| Module                       | Tests   | Coverage                                              |
+|------------------------------|---------|-------------------------------------------------------|
+| `test_database_crud.py`      | 67      | CRUD: users, roles, categories, items, balance, stats |
+| `test_validators.py`         | 45      | Input validation, SQL injection, XSS, Pydantic models |
+| `test_middleware.py`         | 40      | CSRF, rate limiting, suspicious patterns, auth        |
+| `test_keyboards.py`          | 28      | All inline keyboard generators                        |
+| `test_admin_handlers.py`     | 20      | User management, categories, goods (admin)            |
+| `test_transactions.py`       | 15      | Purchase & payment transactions, idempotency          |
+| `test_metrics.py`            | 14      | MetricsCollector, AnalyticsMiddleware                 |
+| `test_cache_invalidation.py` | 13      | Cache invalidation after DB mutations                 |
+| `test_broadcast.py`          | 11      | BroadcastManager, BroadcastStats                      |
+| `test_paginator.py`          | 10      | LazyPaginator with caching                            |
+| `test_payment_handlers.py`   | 10      | Balance top-up, payment check, item purchase          |
+| `test_shop_handlers.py`      | 10      | Shop browsing, item info, bought items                |
+| `test_user_handlers.py`      | 8       | /start, profile, rules, referral registration         |
+| `test_referral_system.py`    | 7       | Referral stats, earnings, view referrals              |
+| `test_recovery.py`           | 4       | RecoveryManager lifecycle, payment recovery           |
+| **Total**                    | **302** | **Complete system coverage**                          |
+
+### Test Architecture
+
+- **`conftest.py`** — shared fixtures: SQLite in-memory DB (StaticPool), FakeCacheManager (dict + fnmatch),
+  FakeFSMContext, factory fixtures (user, category, item), mock builders (CallbackQuery, Message)
+- **Mocks only for external services**: Telegram Bot API, CryptoPay API
+- **Real SQL queries** via SQLAlchemy against SQLite — no mocked DB sessions
 
 The test suite validates:
 
 <details>
 <summary>Core Functionality</summary>
 
-* ✅ **Transactional purchase safety** - Ensures only one user can buy the last item in stock
-* ✅ **Payment idempotency** - Prevents duplicate payment processing
-* ✅ **Referral system** - Tests referral earnings calculation and distribution
+* ✅ **Transactional purchase safety** — balance deduction, stock removal, rollback on error
+* ✅ **Payment idempotency** — duplicate payment processing prevented via unique constraint
+* ✅ **Referral bonus calculation** — percentage-based bonus, referrer cache invalidation
+* ✅ **Cache invalidation after mutations** — stale balance/stats prevention
 
 </details>
 
 <details>
 <summary>Security & Middleware</summary>
 
-### Security & Middleware
-
-* ✅ **Rate limiting** - Tests global and action-specific request limits
-* ✅ **Security middleware** - Validates CSRF protection, SQL injection prevention, and XSS filtering
-* ✅ **Authentication middleware** - Tests user authentication, role-based access control, and admin caching
+* ✅ **CSRF tokens** — generation, verification, expiration, tampered signature detection
+* ✅ **Rate limiting** — global limits, action-specific limits, ban after exceed, ban expiry
+* ✅ **Suspicious pattern detection** — SQL injection, XSS, command injection, path traversal
+* ✅ **Authentication middleware** — blocked user rejection, bot rejection
 
 </details>
 
 <details>
 <summary>Database Operations</summary>
 
-* ✅ **CRUD operations** - Complete testing of Create, Read, Update, Delete for all models
-* ✅ **Transaction rollback** - Ensures data integrity on errors
-* ✅ **Concurrent access** - Tests database handling under concurrent load
-* ✅ **Referral earnings tracking** - Validates proper referral bonus calculations
+* ✅ **Full CRUD** — users, roles, categories, items, item values, payments, operations, referral earnings
+* ✅ **Balance operations** — positive/negative updates, insufficient funds check
+* ✅ **Duplicate handling** — duplicate users ignored, duplicate categories/items rejected
+* ✅ **Blocking** — set_user_blocked, is_user_blocked
+* ✅ **Stats queries** — today/all orders, operations, user balance aggregation
 
 </details>
 
 <details>
-<summary>Communication Systems</summary>
+<summary>Handler Testing</summary>
 
-* ✅ **Broadcast system** - Tests batch messaging with failure handling
-* ✅ **Progress tracking** - Validates real-time broadcast progress updates
-* ✅ **Cancellation support** - Tests ability to stop ongoing broadcasts
-
-</details>
-
-<details>
-<summary>User Interface</summary>
-
-* ✅ **Keyboard generation** - Tests all inline keyboard types and configurations
-* ✅ **Lazy pagination** - Tests on-demand data loading with caching
-* ✅ **Navigation controls** - Validates page navigation and back buttons
-* ✅ **Payment keyboards** - Tests payment method selection and confirmation
+* ✅ **User handlers** — /start (new user, referral, self-referral, owner role, non-private chat), profile, rules
+* ✅ **Payment handlers** — replenish balance flow, CryptoPay paid/active/expired, duplicate prevention, item purchase
+* ✅ **Shop handlers** — category browsing, item list, item info (limited/unlimited), bought items
+* ✅ **Admin handlers** — check user, set/remove admin, replenish/deduct balance, block/unblock, category CRUD, item
+  delete
+* ✅ **Referral handlers** — referral page, view referrals list, earnings, earning detail
 
 </details>
-
 
 <details>
 <summary>Data Validation</summary>
 
-* ✅ **Input sanitization** - Tests HTML escaping and dangerous pattern detection
-* ✅ **Payment validation** - Validates amount ranges and currency formats
-* ✅ **Item purchase validation** - Tests SQL injection and XSS prevention
-* ✅ **Broadcast message validation** - Ensures HTML tag balancing and length limits
-* ✅ **Search query sanitization** - Tests special character filtering
+* ✅ **Telegram ID validation** — valid, zero, negative, too large, string conversion, None
+* ✅ **Money amount validation** — min/max bounds, decimal, non-numeric, negative
+* ✅ **HTML sanitization** — escapes dangerous tags, preserves safe formatting (bold, italic, code)
+* ✅ **Pydantic models** — PaymentRequest, ItemPurchaseRequest, CategoryRequest, BroadcastMessage
 
 </details>
 
 <details>
-<summary>Performance Features</summary>
+<summary>Infrastructure</summary>
 
-* ✅ **Caching mechanisms** - Tests page and admin role caching
-* ✅ **Cache eviction** - Validates intelligent cache management
-* ✅ **Batch processing** - Tests efficient message batching in broadcasts
-* ✅ **State serialization** - Validates FSM state persistence and restoration
-
-</details>
-
-<details>
-<summary>Advanced Caching System</summary>
-
-* ✅ **Cache serialization** - Tests JSON/pickle fallback chains and complex data types
-* ✅ **Cache invalidation** - Validates pattern-based cache clearing and error handling
-* ✅ **Decorator functionality** - Tests cache_result decorator with custom key functions
-* ✅ **Performance optimization** - Validates cache hit/miss tracking and TTL management
-* ✅ **Integration testing** - Tests real-world caching scenarios with complex objects
-
-</details>
-
-<details>
-<summary>Handler & Workflow Testing</summary>
-
-* ✅ **Start handler flows** - Tests new user registration, referral handling, and channel subscription
-* ✅ **Payment workflows** - Validates balance top-up, payment method selection, and amount validation
-* ✅ **Admin navigation** - Tests role-based access to admin panels and features
-* ✅ **State management** - Validates FSM state transitions and data persistence
-* ✅ **Integration flows** - Tests complete user journeys from start to purchase
-
-</details>
-
-<details>
-<summary>Metrics & Analytics System</summary>
-
-* ✅ **Event tracking** - Tests user action tracking, timing measurements, and conversion funnels
-* ✅ **Middleware analytics** - Validates automatic event collection and performance monitoring
-* ✅ **Prometheus export** - Tests metrics formatting for external monitoring systems
-* ✅ **Error categorization** - Validates error tracking and debugging information collection
-* ✅ **Real-time dashboards** - Tests metrics summary generation and visualization data
-
-</details>
-
-<details>
-<summary>Payment Processing System</summary>
-
-* ✅ **Multi-provider support** - Tests Telegram Stars, CryptoPay, and fiat payment methods
-* ✅ **Currency conversion** - Validates exchange rate calculations and rounding behavior
-* ✅ **API integration** - Tests aiohttp async context managers and error handling
-* ✅ **Method routing** - Validates GET/POST request handling for different API endpoints
-* ✅ **Async mocking** - Tests complex async payment workflows with proper mock patterns
-
-</details>
-
-<details>
-<summary>Disaster Recovery & Monitoring</summary>
-
-* ✅ **Recovery manager** - Tests automatic payment recovery, broadcast resumption, and health monitoring
-* ✅ **State persistence** - Validates critical state saving and restoration mechanisms
-* ✅ **Health checks** - Tests periodic system health validation and component monitoring
-* ✅ **Monitoring server** - Validates web dashboard, metrics endpoints, and real-time updates
-* ✅ **Error recovery** - Tests graceful handling of database failures and connection issues
-
-</details>
-
-<details>
-<summary>Edge Cases & Error Handling</summary>
-
-* ✅ **Empty data handling** - Tests behavior with no results
-* ✅ **Boundary conditions** - Tests pagination limits and partial pages
-* ✅ **Error recovery** - Tests graceful handling of database and API errors
-* ✅ **Timeout handling** - Tests behavior under network delays
-* ✅ **Async pattern mocking** - Tests complex async/await patterns with proper coroutine handling
+* ✅ **Broadcast system** — all success, partial failure, forbidden user, cancel mid-batch, progress callback
+* ✅ **Recovery manager** — paid/expired payment recovery, start/stop lifecycle, safe error handling
+* ✅ **Metrics** — event/timing/error tracking, conversion funnels, Prometheus export
+* ✅ **Pagination** — page loading, caching, cache eviction, state serialization, empty results
+* ✅ **Keyboards** — main menu, profile, payment, item info, referral, admin buttons
 
 </details>
 
 ### Test Quality Features
 
-- **Async Testing**: Full asyncio support with proper event loop handling
-- **Mock Strategies**: Advanced mocking patterns for aiohttp, Redis, and database operations
-- **Edge Case Coverage**: Comprehensive boundary condition and error scenario testing
-- **Integration Testing**: End-to-end workflow validation
-- **Performance Testing**: Concurrent access and load testing scenarios
+- **Real DB queries**: SQLite in-memory with StaticPool — tests catch real SQL issues
+- **Realistic cache**: FakeCacheManager with pattern-based invalidation (fnmatch)
+- **Async testing**: Full asyncio support with `pytest-asyncio`
+- **Per-test isolation**: Automatic data cleanup between tests (FK-ordered delete)
+- **Factory pattern**: Reusable `user_factory`, `category_factory`, `item_factory` fixtures
 - **Security Validation**: SQL injection, XSS, and CSRF protection testing
 
 ## 🤝 Contributing

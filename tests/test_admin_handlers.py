@@ -1,0 +1,320 @@
+import pytest
+from decimal import Decimal
+from unittest.mock import patch, MagicMock
+
+from bot.database.methods.read import check_user, get_role_id_by_name
+
+class TestCheckUserData:
+
+    @pytest.mark.asyncio
+    async def test_check_valid_user(self, make_message, fsm_context, user_factory):
+        from bot.handlers.admin.user_management_states import check_user_data
+
+        user_factory(telegram_id=800001, balance=500)
+
+        msg = make_message(text="800001", user_id=900001)
+        await fsm_context.set_state("waiting_user_id_for_check")
+
+        await check_user_data(msg, fsm_context)
+
+        msg.answer.assert_called_once()
+        text = msg.answer.call_args[0][0]
+        assert "800001" in text
+
+    @pytest.mark.asyncio
+    async def test_check_invalid_user_id(self, make_message, fsm_context):
+        from bot.handlers.admin.user_management_states import check_user_data
+
+        msg = make_message(text="not_a_number", user_id=900002)
+
+        await check_user_data(msg, fsm_context)
+
+        msg.answer.assert_called_once()
+        text = msg.answer.call_args[0][0]
+        assert "invalid_id" in text
+
+    @pytest.mark.asyncio
+    async def test_check_nonexistent_user(self, make_message, fsm_context):
+        from bot.handlers.admin.user_management_states import check_user_data
+
+        msg = make_message(text="999888777", user_id=900003)
+
+        await check_user_data(msg, fsm_context)
+
+        msg.answer.assert_called_once()
+        text = msg.answer.call_args[0][0]
+        assert "unavailable" in text
+
+
+class TestSetAdmin:
+
+    @pytest.mark.asyncio
+    async def test_set_admin_role(self, make_callback_query, user_factory):
+        from bot.handlers.admin.user_management_states import process_admin_for_purpose
+
+        user_factory(telegram_id=800010, role_id=1)
+
+        call = make_callback_query(data="set-admin_800010", user_id=900010)
+
+        await process_admin_for_purpose(call)
+
+        call.message.edit_text.assert_called_once()
+        # Verify role changed
+        user = check_user(800010)
+        admin_role = get_role_id_by_name('ADMIN')
+        assert user['role_id'] == admin_role
+
+    @pytest.mark.asyncio
+    async def test_remove_admin_role(self, make_callback_query, user_factory):
+        from bot.handlers.admin.user_management_states import process_admin_for_remove
+
+        admin_role = get_role_id_by_name('ADMIN')
+        user_factory(telegram_id=800011, role_id=admin_role)
+
+        call = make_callback_query(data="remove-admin_800011", user_id=900011)
+
+        await process_admin_for_remove(call)
+
+        call.message.edit_text.assert_called_once()
+        user = check_user(800011)
+        user_role = get_role_id_by_name('USER')
+        assert user['role_id'] == user_role
+
+    @pytest.mark.asyncio
+    async def test_cannot_change_owner_role(self, make_callback_query, user_factory):
+        from bot.handlers.admin.user_management_states import process_admin_for_purpose
+        from bot.database.methods.read import select_max_role_id
+
+        max_role = select_max_role_id()
+        user_factory(telegram_id=800012, role_id=max_role)
+
+        call = make_callback_query(data="set-admin_800012", user_id=900012)
+
+        await process_admin_for_purpose(call)
+
+        call.answer.assert_called_once()
+        # Role should not change
+        user = check_user(800012)
+        assert user['role_id'] == max_role
+
+
+class TestReplenishBalance:
+
+    @pytest.mark.asyncio
+    async def test_replenish_user_balance(self, make_message, fsm_context, user_factory):
+        from bot.handlers.admin.user_management_states import process_replenish_user_balance
+
+        user_factory(telegram_id=800020, balance=100)
+        await fsm_context.update_data(target_user=800020)
+
+        msg = make_message(text="500", user_id=900020)
+
+        await process_replenish_user_balance(msg, fsm_context)
+
+        msg.answer.assert_called_once()
+        user = check_user(800020)
+        assert user['balance'] == Decimal("600")
+
+    @pytest.mark.asyncio
+    async def test_deduct_user_balance(self, make_message, fsm_context, user_factory):
+        from bot.handlers.admin.user_management_states import process_deduct_user_balance
+
+        user_factory(telegram_id=800021, balance=500)
+        await fsm_context.update_data(target_user=800021)
+
+        msg = make_message(text="200", user_id=900021)
+
+        await process_deduct_user_balance(msg, fsm_context)
+
+        msg.answer.assert_called_once()
+        user = check_user(800021)
+        assert user['balance'] == Decimal("300")
+
+    @pytest.mark.asyncio
+    async def test_deduct_insufficient_balance(self, make_message, fsm_context, user_factory):
+        from bot.handlers.admin.user_management_states import process_deduct_user_balance
+
+        user_factory(telegram_id=800022, balance=50)
+        await fsm_context.update_data(target_user=800022)
+
+        msg = make_message(text="200", user_id=900022)
+
+        await process_deduct_user_balance(msg, fsm_context)
+
+        msg.answer.assert_called_once()
+        # Balance should not change
+        user = check_user(800022)
+        assert user['balance'] == Decimal("50")
+
+
+class TestBlockUser:
+
+    @pytest.mark.asyncio
+    async def test_block_user(self, make_callback_query, user_factory):
+        from bot.handlers.admin.user_management_states import block_user_handler
+
+        user_factory(telegram_id=800030, role_id=1)
+
+        call = make_callback_query(data="block-user_800030", user_id=900030)
+
+        mock_auth = MagicMock()
+        mock_auth.block_user = MagicMock(return_value=True)
+
+        with patch('bot.main.auth_middleware', mock_auth):
+            await block_user_handler(call)
+
+        call.message.edit_text.assert_called_once()
+        mock_auth.block_user.assert_called_once_with(800030)
+
+    @pytest.mark.asyncio
+    async def test_unblock_user(self, make_callback_query, user_factory):
+        from bot.handlers.admin.user_management_states import unblock_user_handler
+
+        user_factory(telegram_id=800031, role_id=1)
+
+        call = make_callback_query(data="unblock-user_800031", user_id=900031)
+
+        mock_auth = MagicMock()
+        mock_auth.unblock_user = MagicMock(return_value=True)
+
+        with patch('bot.main.auth_middleware', mock_auth):
+            await unblock_user_handler(call)
+
+        call.message.edit_text.assert_called_once()
+        mock_auth.unblock_user.assert_called_once_with(800031)
+
+    @pytest.mark.asyncio
+    async def test_cannot_block_owner(self, make_callback_query, user_factory):
+        from bot.handlers.admin.user_management_states import block_user_handler
+        from bot.database.methods.read import select_max_role_id
+
+        max_role = select_max_role_id()
+        user_factory(telegram_id=800032, role_id=max_role)
+
+        call = make_callback_query(data="block-user_800032", user_id=900032)
+
+        await block_user_handler(call)
+
+        call.answer.assert_called_once()
+
+
+class TestCategoryManagement:
+
+    @pytest.mark.asyncio
+    async def test_add_category(self, make_message, fsm_context):
+        from bot.handlers.admin.categories_management_states import process_category_for_add
+
+        msg = make_message(text="NewCategory", user_id=900040)
+
+        await process_category_for_add(msg, fsm_context)
+
+        msg.answer.assert_called_once()
+        text = msg.answer.call_args[0][0]
+        assert "success" in text
+
+    @pytest.mark.asyncio
+    async def test_add_duplicate_category(self, make_message, fsm_context, category_factory):
+        from bot.handlers.admin.categories_management_states import process_category_for_add
+
+        category_factory("ExistingCat")
+
+        msg = make_message(text="ExistingCat", user_id=900041)
+
+        await process_category_for_add(msg, fsm_context)
+
+        msg.answer.assert_called_once()
+        text = msg.answer.call_args[0][0]
+        assert "exist" in text
+
+    @pytest.mark.asyncio
+    async def test_delete_category(self, make_message, fsm_context, category_factory):
+        from bot.handlers.admin.categories_management_states import process_category_for_delete
+
+        category_factory("ToDelete")
+
+        msg = make_message(text="ToDelete", user_id=900042)
+
+        await process_category_for_delete(msg, fsm_context)
+
+        msg.answer.assert_called_once()
+        text = msg.answer.call_args[0][0]
+        assert "success" in text
+
+    @pytest.mark.asyncio
+    async def test_delete_nonexistent_category(self, make_message, fsm_context):
+        from bot.handlers.admin.categories_management_states import process_category_for_delete
+
+        msg = make_message(text="NoSuchCat", user_id=900043)
+
+        await process_category_for_delete(msg, fsm_context)
+
+        msg.answer.assert_called_once()
+        text = msg.answer.call_args[0][0]
+        assert "not_found" in text
+
+    @pytest.mark.asyncio
+    async def test_rename_category(self, make_message, fsm_context, category_factory):
+        from bot.handlers.admin.categories_management_states import (
+            check_category_for_update,
+            check_category_name_for_update,
+        )
+
+        category_factory("OldName")
+
+        # Step 1: enter old name
+        msg1 = make_message(text="OldName", user_id=900044)
+        await check_category_for_update(msg1, fsm_context)
+
+        # Step 2: enter new name
+        msg2 = make_message(text="NewName", user_id=900044)
+        await check_category_name_for_update(msg2, fsm_context)
+
+        msg2.answer.assert_called_once()
+        text = msg2.answer.call_args[0][0]
+        assert "success" in text
+
+
+class TestGoodsManagement:
+
+    @pytest.mark.asyncio
+    async def test_delete_item(self, make_message, fsm_context, item_factory):
+        from bot.handlers.admin.goods_management_states import delete_str_item
+        from bot.database.methods.read import check_item
+
+        item_factory(name="ToDeleteItem", price=100, category="DelCat", values=[("v1", False)])
+
+        msg = make_message(text="ToDeleteItem", user_id=900050)
+
+        await delete_str_item(msg, fsm_context)
+
+        msg.answer.assert_called_once()
+        text = msg.answer.call_args[0][0]
+        assert "success" in text
+
+        # Verify item deleted
+        item = check_item("ToDeleteItem")
+        assert item is None
+
+    @pytest.mark.asyncio
+    async def test_delete_item_not_found(self, make_message, fsm_context):
+        from bot.handlers.admin.goods_management_states import delete_str_item
+
+        msg = make_message(text="NoSuchItem", user_id=900051)
+
+        await delete_str_item(msg, fsm_context)
+
+        msg.answer.assert_called_once()
+        text = msg.answer.call_args[0][0]
+        assert "not_found" in text
+
+    @pytest.mark.asyncio
+    async def test_show_items_not_found(self, make_message, fsm_context):
+        from bot.handlers.admin.goods_management_states import show_str_item
+
+        msg = make_message(text="NoItem", user_id=900052)
+
+        await show_str_item(msg, fsm_context)
+
+        msg.answer.assert_called_once()
+        text = msg.answer.call_args[0][0]
+        assert "not_found" in text

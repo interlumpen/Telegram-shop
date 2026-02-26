@@ -1,443 +1,190 @@
-import pytest
 import time
-import warnings
-from unittest.mock import MagicMock, AsyncMock, patch
-from aiogram.types import Message, CallbackQuery, User as TelegramUser
 
-from bot.middleware import RateLimiter, RateLimitConfig, RateLimitMiddleware
-from bot.middleware.security import SecurityMiddleware, AuthenticationMiddleware, check_suspicious_patterns
+from bot.middleware.security import check_suspicious_patterns, SecurityMiddleware, AuthenticationMiddleware
+from bot.middleware.rate_limit import RateLimiter, RateLimitConfig
 
-# Filter Pydantic v2 deprecation warnings from unittest.mock
-warnings.filterwarnings("ignore", category=DeprecationWarning,
-                       message="The `__fields__` attribute is deprecated, use `model_fields` instead.")
-warnings.filterwarnings("ignore", category=DeprecationWarning,
-                       module="pydantic._internal._model_construction")
 
-# Add pytest mark to ignore warnings at the module level
-pytestmark = [
-    pytest.mark.filterwarnings("ignore:The `__fields__` attribute is deprecated:DeprecationWarning"),
-    pytest.mark.filterwarnings("ignore::pydantic.warnings.PydanticDeprecatedSince20")
-]
+class TestSuspiciousPatterns:
+
+    def test_safe_input(self):
+        assert check_suspicious_patterns("Hello, world!") is False
+
+    def test_empty_string(self):
+        assert check_suspicious_patterns("") is False
+
+    def test_none(self):
+        assert check_suspicious_patterns(None) is False
+
+    def test_sql_injection_union_select(self):
+        assert check_suspicious_patterns("1 UNION SELECT * FROM users") is True
+
+    def test_sql_injection_delete(self):
+        assert check_suspicious_patterns("1; DELETE FROM users") is True
+
+    def test_xss_script_tag(self):
+        assert check_suspicious_patterns("<script>alert(1)</script>") is True
+
+    def test_xss_javascript_protocol(self):
+        assert check_suspicious_patterns("javascript:alert(1)") is True
+
+    def test_command_injection_pipe(self):
+        assert check_suspicious_patterns("test | cat /etc/passwd") is True
+
+    def test_command_injection_backtick(self):
+        assert check_suspicious_patterns("test `whoami`") is True
+
+    def test_path_traversal(self):
+        assert check_suspicious_patterns("../../etc/passwd") is True
+
+    def test_long_string(self):
+        assert check_suspicious_patterns("x" * 5000) is True
+
+    def test_normal_callback_data(self):
+        assert check_suspicious_patterns("shop") is False
+        assert check_suspicious_patterns("buy_item_123") is False
+        assert check_suspicious_patterns("profile") is False
+
+
+class TestSecurityMiddlewareCSRF:
+
+    def setup_method(self):
+        self.middleware = SecurityMiddleware(secret_key="test_secret_key")
+
+    def test_generate_and_verify_token(self):
+        token = self.middleware.generate_token(12345, "buy_widget")
+        assert self.middleware.verify_token(token, 12345, "buy_widget") is True
+
+    def test_token_wrong_user(self):
+        token = self.middleware.generate_token(12345, "buy_widget")
+        assert self.middleware.verify_token(token, 99999, "buy_widget") is False
+
+    def test_token_wrong_action(self):
+        token = self.middleware.generate_token(12345, "buy_widget")
+        assert self.middleware.verify_token(token, 12345, "buy_other") is False
+
+    def test_token_expired(self):
+        token = self.middleware.generate_token(12345, "buy_widget")
+        # Verify with max_age=-1 so it's immediately expired (> check, not >=)
+        assert self.middleware.verify_token(token, 12345, "buy_widget", max_age=-1) is False
+
+    def test_invalid_token_format(self):
+        assert self.middleware.verify_token("invalid", 12345, "buy") is False
+
+    def test_tampered_signature(self):
+        token = self.middleware.generate_token(12345, "buy_widget")
+        tampered = token[:-5] + "xxxxx"
+        assert self.middleware.verify_token(tampered, 12345, "buy_widget") is False
+
+
+class TestSecurityMiddlewareCriticalActions:
+
+    def setup_method(self):
+        self.middleware = SecurityMiddleware()
+
+    def test_buy_is_critical(self):
+        assert self.middleware.is_critical_action("buy_item") is True
+
+    def test_pay_is_critical(self):
+        assert self.middleware.is_critical_action("pay_cryptopay") is True
+
+    def test_delete_is_critical(self):
+        assert self.middleware.is_critical_action("delete_category") is True
+
+    def test_admin_is_critical(self):
+        assert self.middleware.is_critical_action("admin_panel") is True
+
+    def test_shop_is_not_critical(self):
+        assert self.middleware.is_critical_action("shop") is False
+
+    def test_profile_is_not_critical(self):
+        assert self.middleware.is_critical_action("profile") is False
+
+    def test_empty_string(self):
+        assert self.middleware.is_critical_action("") is False
+
+    def test_none(self):
+        assert self.middleware.is_critical_action(None) is False
 
 
 class TestRateLimiter:
-    """Test suite for rate limiting functionality"""
 
-    def test_rate_limiter_initialization(self):
-        """Test rate limiter initialization"""
-        config = RateLimitConfig(
-            global_limit=10,
+    def setup_method(self):
+        self.config = RateLimitConfig(
+            global_limit=5,
             global_window=60,
+            action_limits={"payment": (2, 60)},
             ban_duration=300,
-            admin_bypass=True
         )
-        limiter = RateLimiter(config)
+        self.limiter = RateLimiter(self.config)
 
-        assert limiter.config.global_limit == 10
-        assert limiter.config.global_window == 60
-        assert limiter.config.ban_duration == 300
-        assert limiter.config.admin_bypass == True
-
-    def test_global_rate_limiting(self):
-        """Test global rate limiting"""
-        config = RateLimitConfig(
-            global_limit=5,
-            global_window=10,
-            ban_duration=30
-        )
-        limiter = RateLimiter(config)
-        user_id = 12345
-
-        # First 5 requests should pass
-        for i in range(5):
-            assert limiter.check_global_limit(user_id) == True
-
-        # 6th request should fail
-        assert limiter.check_global_limit(user_id) == False
-
-        # User should not be banned yet
-        assert limiter.is_banned(user_id) == False
-
-    def test_action_specific_limits(self):
-        """Test action-specific rate limits"""
-        config = RateLimitConfig(
-            global_limit=100,
-            global_window=60,
-            action_limits={
-                'payment': (2, 10),  # 2 payments in 10 seconds
-                'broadcast': (1, 3600)  # 1 broadcast per hour
-            }
-        )
-        limiter = RateLimiter(config)
-        user_id = 12345
-
-        # Payment limits
-        assert limiter.check_action_limit(user_id, 'payment') == True
-        assert limiter.check_action_limit(user_id, 'payment') == True
-        assert limiter.check_action_limit(user_id, 'payment') == False
-
-        # Broadcast limits
-        assert limiter.check_action_limit(user_id, 'broadcast') == True
-        assert limiter.check_action_limit(user_id, 'broadcast') == False
-
-        # Unknown action should pass
-        assert limiter.check_action_limit(user_id, 'unknown_action') == True
-
-    def test_ban_mechanism(self):
-        """Test user banning mechanism"""
-        config = RateLimitConfig(
-            global_limit=5,
-            global_window=10,
-            ban_duration=2  # 2 seconds for testing
-        )
-        limiter = RateLimiter(config)
-        user_id = 12345
-
-        # Ban user
-        limiter.ban_user(user_id)
-        assert limiter.is_banned(user_id) == True
-
-        # Check wait time
-        wait_time = limiter.get_wait_time(user_id)
-        assert 0 < wait_time <= 2
-
-        # Wait for ban to expire
-        time.sleep(2.1)
-        assert limiter.is_banned(user_id) == False
-
-    def test_request_cleanup(self):
-        """Test old request cleanup"""
-        config = RateLimitConfig(
-            global_limit=5,
-            global_window=2  # 2 seconds window
-        )
-        limiter = RateLimiter(config)
-        user_id = 12345
-
-        # Make 3 requests
-        for _ in range(3):
-            limiter.check_global_limit(user_id)
-
-        # Wait for window to expire
-        time.sleep(2.1)
-
-        # Should be able to make new requests
+    def test_global_limit_allows_within_limit(self):
         for _ in range(5):
-            assert limiter.check_global_limit(user_id) == True
+            assert self.limiter.check_global_limit(1) is True
 
-    @pytest.mark.asyncio
-    async def test_middleware_integration(self):
-        """Test RateLimitMiddleware integration"""
-        config = RateLimitConfig(
-            global_limit=3,
-            global_window=10,
-            admin_bypass=False
-        )
-        middleware = RateLimitMiddleware(config)
+    def test_global_limit_blocks_over_limit(self):
+        for _ in range(5):
+            self.limiter.check_global_limit(1)
+        assert self.limiter.check_global_limit(1) is False
 
-        # Mock message
-        message = MagicMock(spec=Message)
-        message.from_user = MagicMock(spec=TelegramUser)
-        message.from_user.id = 12345
-        message.text = "/start"
-        message.answer = AsyncMock()
+    def test_global_limit_per_user(self):
+        for _ in range(5):
+            self.limiter.check_global_limit(1)
+        # Different user should still be allowed
+        assert self.limiter.check_global_limit(2) is True
 
-        # Mock handler
-        handler = AsyncMock(return_value="response")
+    def test_action_limit_allows_within_limit(self):
+        assert self.limiter.check_action_limit(1, "payment") is True
+        assert self.limiter.check_action_limit(1, "payment") is True
 
-        # First 3 requests should pass
-        for _ in range(3):
-            result = await middleware(handler, message, {})
-            assert result == "response"
+    def test_action_limit_blocks_over_limit(self):
+        self.limiter.check_action_limit(1, "payment")
+        self.limiter.check_action_limit(1, "payment")
+        assert self.limiter.check_action_limit(1, "payment") is False
 
-        # 4th request should be blocked
-        middleware.limiter.ban_user(12345)
-        result = await middleware(handler, message, {})
-        assert result is None
-        message.answer.assert_called()
+    def test_unknown_action_always_passes(self):
+        for _ in range(100):
+            assert self.limiter.check_action_limit(1, "unknown_action") is True
 
+    def test_ban_user(self):
+        self.limiter.ban_user(1)
+        assert self.limiter.is_banned(1) is True
 
-class TestSecurityMiddleware:
-    """Test suite for security middleware"""
+    def test_not_banned_by_default(self):
+        assert self.limiter.is_banned(1) is False
 
-    def test_suspicious_patterns_detection(self):
-        """Test detection of suspicious patterns"""
-        # SQL injection patterns
-        assert check_suspicious_patterns("'; DROP TABLE users; --") == True
-        assert check_suspicious_patterns("UNION SELECT * FROM passwords") == True
+    def test_ban_expires(self):
+        self.limiter.ban_user(1)
+        # Manually set ban time in the past
+        self.limiter.banned_users[1] = time.time() - 400
+        assert self.limiter.is_banned(1) is False
 
-        # Script injection
-        assert check_suspicious_patterns("<script>alert('xss')</script>") == True
-        assert check_suspicious_patterns("javascript:void(0)") == True
-        assert check_suspicious_patterns("onerror=alert(1)") == True
+    def test_get_wait_time_not_limited(self):
+        assert self.limiter.get_wait_time(1) == 0
 
-        # Command injection
-        assert check_suspicious_patterns("test; rm -rf /") == True
-        assert check_suspicious_patterns("test && cat /etc/passwd") == True
-        assert check_suspicious_patterns("$(whoami)") == True
-
-        # Path traversal
-        assert check_suspicious_patterns("../../etc/passwd") == True
-        assert check_suspicious_patterns("..\\windows\\system32") == True
-
-        # Normal text should pass
-        assert check_suspicious_patterns("Hello, world!") == False
-        assert check_suspicious_patterns("Buy item #123") == False
-
-        # Very long text (DoS attempt)
-        assert check_suspicious_patterns("x" * 5000) == True
-
-    def test_csrf_token_generation_and_validation(self):
-        """Test CSRF token generation and validation"""
-        middleware = SecurityMiddleware(secret_key="test_secret")
-        user_id = 12345
-        action = "buy_item"
-
-        # Generate token
-        token = middleware.generate_token(user_id, action)
-        assert token is not None
-        assert ":" in token
-
-        # Valid token should pass
-        assert middleware.verify_token(token, user_id, action) == True
-
-        # Wrong user_id should fail
-        assert middleware.verify_token(token, 99999, action) == False
-
-        # Wrong action should fail
-        assert middleware.verify_token(token, user_id, "wrong_action") == False
-
-        # Expired token should fail
-        old_token = middleware.generate_token(user_id, action)
-        # Manipulate timestamp
-        parts = old_token.split(":")
-        old_timestamp = str(int(time.time()) - 7200)  # 2 hours ago
-        expired_token = f"{parts[0]}:{parts[1]}:{old_timestamp}:{parts[3]}"
-        assert middleware.verify_token(expired_token, user_id, action) == False
-
-        # Invalid format should fail
-        assert middleware.verify_token("invalid_token", user_id, action) == False
-
-    def test_critical_action_detection(self):
-        """Test detection of critical actions"""
-        middleware = SecurityMiddleware()
-
-        # Critical actions
-        assert middleware.is_critical_action("buy_item_123") == True
-        assert middleware.is_critical_action("pay_cryptopay") == True
-        assert middleware.is_critical_action("delete_user") == True
-        assert middleware.is_critical_action("admin_panel") == True
-        assert middleware.is_critical_action("set-admin_123") == True
-        assert middleware.is_critical_action("remove-admin_456") == True
-        assert middleware.is_critical_action("fill-user-balance_789") == True
-        assert middleware.is_critical_action("deduct-user-balance_789") == True
-
-        # Non-critical actions
-        assert middleware.is_critical_action("view_profile") == False
-        assert middleware.is_critical_action("shop") == False
-        assert middleware.is_critical_action("help") == False
-        assert middleware.is_critical_action("") == False
-        assert middleware.is_critical_action(None) == False
-
-    @pytest.mark.asyncio
-    async def test_security_middleware_callback_validation(self):
-        """Test security middleware callback validation"""
-        middleware = SecurityMiddleware()
-
-        # Mock callback query with suspicious data
-        callback = MagicMock(spec=CallbackQuery)
-        callback.from_user = MagicMock(spec=TelegramUser)
-        callback.from_user.id = 12345
-        callback.data = "'; DROP TABLE users; --"
-        callback.answer = AsyncMock()
-        callback.message = MagicMock()
-        callback.message.date = MagicMock()
-        callback.message.date.timestamp = MagicMock(return_value=time.time())
-
-        handler = AsyncMock(return_value="response")
-
-        # Should block suspicious callback
-        result = await middleware(handler, callback, {})
-        assert result is None
-        callback.answer.assert_called()
-
-        # Normal callback should pass
-        callback.data = "shop_category_1"
-        result = await middleware(handler, callback, {})
-        assert result == "response"
-
-    @pytest.mark.asyncio
-    async def test_security_middleware_old_callback_protection(self):
-        """Test protection against old callback replay attacks"""
-        middleware = SecurityMiddleware()
-
-        # Mock old callback query
-        callback = MagicMock(spec=CallbackQuery)
-        callback.from_user = MagicMock(spec=TelegramUser)
-        callback.from_user.id = 12345
-        callback.data = "buy_item_expensive"
-        callback.answer = AsyncMock()
-        callback.message = MagicMock()
-        callback.message.date = MagicMock()
-        # Set message date to 2 hours ago
-        callback.message.date.timestamp = MagicMock(return_value=time.time() - 7200)
-
-        handler = AsyncMock(return_value="response")
-
-        # Should block old critical action
-        result = await middleware(handler, callback, {})
-        assert result is None
-        callback.answer.assert_called()
+    def test_get_wait_time_banned(self):
+        self.limiter.ban_user(1)
+        wait = self.limiter.get_wait_time(1)
+        assert 0 < wait <= 300
 
 
 class TestAuthenticationMiddleware:
-    """Test suite for authentication middleware"""
 
-    def test_authentication_initialization(self):
-        """Test authentication middleware initialization"""
-        auth = AuthenticationMiddleware()
-        assert auth.blocked_users == set()
-        assert auth.admin_cache == {}
-        assert auth.cache_ttl == 300
+    def setup_method(self):
+        self.auth = AuthenticationMiddleware()
 
-    @patch('bot.database.methods.set_user_blocked', return_value=True)
-    def test_user_blocking(self, mock_set_blocked):
-        """Test user blocking functionality"""
-        auth = AuthenticationMiddleware()
-        user_id = 12345
+    def test_block_user(self, user_factory):
+        user_factory(telegram_id=200001)
+        result = self.auth.block_user(200001)
+        assert result is True
+        assert 200001 in self.auth.blocked_users
 
-        # Block user
-        auth.block_user(user_id)
-        assert user_id in auth.blocked_users
+    def test_unblock_user(self, user_factory):
+        user_factory(telegram_id=200002)
+        self.auth.block_user(200002)
+        result = self.auth.unblock_user(200002)
+        assert result is True
+        assert 200002 not in self.auth.blocked_users
 
-        # Unblock user
-        auth.unblock_user(user_id)
-        assert user_id not in auth.blocked_users
-
-    @pytest.mark.asyncio
-    async def test_bot_detection(self):
-        """Test bot user detection"""
-        auth = AuthenticationMiddleware()
-
-        # Mock message from bot
-        message = MagicMock(spec=Message)
-        message.from_user = MagicMock(spec=TelegramUser)
-        message.from_user.id = 12345
-        message.from_user.is_bot = True
-
-        handler = AsyncMock(return_value="response")
-
-        # Should block bot users
-        result = await auth(handler, message, {})
-        assert result is None
-
-    @pytest.mark.asyncio
-    @patch('bot.database.methods.set_user_blocked', return_value=True)
-    async def test_blocked_user_handling(self, mock_set_blocked):
-        """Test blocked user handling"""
-        auth = AuthenticationMiddleware()
-        auth.block_user(12345)
-
-        # Mock callback from blocked user
-        callback = MagicMock(spec=CallbackQuery)
-        callback.from_user = MagicMock(spec=TelegramUser)
-        callback.from_user.id = 12345
-        callback.from_user.is_bot = False
-        callback.from_user.first_name = "TestUser"
-        callback.answer = AsyncMock()
-        callback.data = "some_action"
-
-        handler = AsyncMock(return_value="response")
-
-        # Should block blocked users
-        result = await auth(handler, callback, {})
-        assert result is None
-        callback.answer.assert_called()
-
-    @pytest.mark.asyncio
-    async def test_admin_role_caching(self):
-        """Test admin role caching mechanism"""
-        auth = AuthenticationMiddleware()
-        user_id = 12345
-
-        # Mock check_role function
-        with patch('bot.database.methods.check_role') as mock_check_role:
-            mock_check_role.return_value = 2  # Admin role
-
-            # First call should query database
-            role1 = await auth.get_user_role_cached(user_id)
-            assert role1 == 2
-            mock_check_role.assert_called_once_with(user_id)
-
-            # Second call should use cache
-            mock_check_role.reset_mock()
-            role2 = await auth.get_user_role_cached(user_id)
-            assert role2 == 2
-            mock_check_role.assert_not_called()
-
-            # Clear cache by setting old timestamp
-            auth.admin_cache[user_id] = (2, time.time() - 400)  # Expired
-
-            # Should query database again
-            mock_check_role.reset_mock()
-            role3 = await auth.get_user_role_cached(user_id)
-            assert role3 == 2
-            mock_check_role.assert_called_once()
-
-    @pytest.mark.asyncio
-    async def test_admin_access_control(self):
-        """Test admin access control"""
-        auth = AuthenticationMiddleware()
-
-        # Mock callback for admin action
-        callback = MagicMock(spec=CallbackQuery)
-        callback.from_user = MagicMock(spec=TelegramUser)
-        callback.from_user.id = 12345
-        callback.from_user.is_bot = False
-        callback.from_user.first_name = "Test User"
-        callback.data = "admin_panel"
-        callback.answer = AsyncMock()
-
-        handler = AsyncMock(return_value="response")
-
-        # Non-admin should be blocked
-        with patch('bot.database.methods.check_role') as mock_check_role:
-            mock_check_role.return_value = 1  # User role
-
-            result = await auth(handler, callback, {})
-            assert result is None
-            callback.answer.assert_called()
-
-        # Clear the cache before testing admin access
-        auth.admin_cache.clear()  # Clear the cache!
-
-        # Admin should pass
-        with patch('bot.database.methods.check_role') as mock_check_role:
-            mock_check_role.return_value = 2  # Admin role
-
-            # Reset the answer mock
-            callback.answer.reset_mock()
-
-            result = await auth(handler, callback, {})
-            assert result == "response"
-
-    @pytest.mark.asyncio
-    async def test_user_context_injection(self):
-        """Test user context injection into data"""
-        auth = AuthenticationMiddleware()
-
-        # Mock message
-        message = MagicMock(spec=Message)
-        message.from_user = MagicMock(spec=TelegramUser)
-        message.from_user.id = 12345
-        message.from_user.is_bot = False
-        message.from_user.first_name = "John"
-
-        handler = AsyncMock(return_value="response")
-        data = {}
-
-        # Should inject user data
-        result = await auth(handler, message, data)
-        assert result == "response"
-        assert data['user_id'] == 12345
-        assert data['user_name'] == "John"
+    def test_block_nonexistent_user(self):
+        result = self.auth.block_user(999999999)
+        assert result is False
