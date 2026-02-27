@@ -279,7 +279,7 @@ class TestGoodsManagement:
     @pytest.mark.asyncio
     async def test_delete_item(self, make_message, fsm_context, item_factory):
         from bot.handlers.admin.goods_management_states import delete_str_item
-        from bot.database.methods.read import check_item
+        from bot.database.methods.read import get_item_info
 
         item_factory(name="ToDeleteItem", price=100, category="DelCat", values=[("v1", False)])
 
@@ -292,7 +292,7 @@ class TestGoodsManagement:
         assert "success" in text
 
         # Verify item deleted
-        item = check_item("ToDeleteItem")
+        item = get_item_info("ToDeleteItem")
         assert item is None
 
     @pytest.mark.asyncio

@@ -1,5 +1,8 @@
 import asyncio
+import logging
 from typing import Coroutine, Any
+
+logger = logging.getLogger(__name__)
 
 
 def safe_create_task(coro: Coroutine[Any, Any, None]) -> None:
@@ -20,4 +23,4 @@ def safe_create_task(coro: Coroutine[Any, Any, None]) -> None:
         except RuntimeError:
             # If asyncio.run() also fails (nested event loop), just ignore
             # This is fire-and-forget for cache invalidation anyway
-            pass
+            logger.debug("Cache invalidation fallback failed (no event loop)")

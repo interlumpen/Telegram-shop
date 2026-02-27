@@ -18,7 +18,7 @@ from bot.middleware.security import SecurityMiddleware, AuthenticationMiddleware
 from bot.misc.caching import init_cache_manager, get_cache_manager
 from bot.misc.caching import CacheScheduler
 from bot.misc.caching import get_redis_storage
-from bot.misc.services import RecoveryManager, StateManager
+from bot.misc.services import RecoveryManager
 from bot.misc.obvervability import init_metrics, get_metrics, AnalyticsMiddleware
 from bot.misc.obvervability import MonitoringServer
 
@@ -115,8 +115,7 @@ async def __on_shutdown(dp: Dispatcher, bot: Bot) -> None:
     # Create a data directory if it does not exist
     Path("data").mkdir(exist_ok=True)
 
-    # Saving status
-    state_manager = StateManager()
+    # Saving metrics
     metrics = get_metrics()
     if metrics:
         summary = metrics.get_metrics_summary()

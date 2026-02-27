@@ -1,3 +1,4 @@
+import logging
 import time
 from typing import Dict, Any, Callable, Awaitable
 from collections import defaultdict
@@ -8,6 +9,8 @@ from aiogram.types import Message, CallbackQuery, TelegramObject
 from aiogram.exceptions import TelegramBadRequest
 
 from bot.i18n import localize
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -257,8 +260,7 @@ class RateLimitMiddleware(BaseMiddleware):
                 try:
                     await event.answer(localize("middleware.waiting", time=wait_time))
                 except TelegramBadRequest as e:
-                    # Ignore message sending errors (deleted chat, etc.)
-                    pass
+                    logger.debug(f"Rate limit notification failed: {e}")
             return None
 
         # skip ahead

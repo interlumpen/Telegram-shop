@@ -169,36 +169,3 @@ class RecoveryManager:
             await asyncio.sleep(60)
 
 
-class StateManager:
-    """Save state manager for recovery"""
-
-    def __init__(self):
-        self.state_file = "data/bot_state.json"
-
-    async def save_broadcast_state(self, user_ids: list, sent_count: int,
-                                   message_text: str, start_time: datetime):
-        """Saving the mailing status"""
-        import json
-        from pathlib import Path
-
-        Path("data").mkdir(exist_ok=True)
-
-        state = {
-            "user_ids": user_ids,
-            "sent_count": sent_count,
-            "message_text": message_text,
-            "start_time": start_time.isoformat(),
-            "timestamp": datetime.now().isoformat()
-        }
-
-        try:
-            with open(self.state_file, 'w') as f:
-                json.dump(state, f)
-
-            # Also save in Redis for quick access
-            from bot.misc.caching.cache import get_cache_manager
-            cache = get_cache_manager()
-            if cache:
-                await cache.set("broadcast:state", state, ttl=3600)
-        except Exception as e:
-            logger.error(f"Failed to save broadcast state: {e}")

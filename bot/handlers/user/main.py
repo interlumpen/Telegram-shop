@@ -20,6 +20,17 @@ from bot.logger_mesh import logger
 router = Router()
 
 
+def _parse_channel_username() -> str | None:
+    """Extract channel username from CHANNEL_URL env variable."""
+    channel_url = EnvKeys.CHANNEL_URL or ""
+    parsed = urlparse(channel_url)
+    return (
+        parsed.path.lstrip('/')
+        if parsed.path
+        else channel_url.replace("https://t.me/", "").replace("t.me/", "").lstrip('@')
+    ) or None
+
+
 @router.message(F.text.startswith('/start'))
 async def start(message: Message, state: FSMContext):
     """
@@ -46,14 +57,7 @@ async def start(message: Message, state: FSMContext):
         role=user_role
     )
 
-    # Parse channel username safely from ENV
-    channel_url = EnvKeys.CHANNEL_URL or ""
-    parsed = urlparse(channel_url)
-    channel_username = (
-                           parsed.path.lstrip('/')
-                           if parsed.path else channel_url.replace("https://t.me/", "").replace("t.me/", "").lstrip('@')
-                       ) or None
-
+    channel_username = _parse_channel_username()
     role_data = check_role(user_id)
 
     # Optional subscription check
@@ -93,12 +97,7 @@ async def back_to_menu_callback_handler(call: CallbackQuery, state: FSMContext):
 
     role_id = user.get('role_id')
 
-    channel_url = EnvKeys.CHANNEL_URL or ""
-    parsed = urlparse(channel_url)
-    channel_username = (
-                           parsed.path.lstrip('/')
-                           if parsed.path else channel_url.replace("https://t.me/", "").replace("t.me/", "").lstrip('@')
-                       ) or None
+    channel_username = _parse_channel_username()
 
     markup = main_menu(role=role_id, channel=channel_username, helper=EnvKeys.HELPER_ID)
     await call.message.edit_text(localize("menu.title"), reply_markup=markup)
@@ -151,12 +150,7 @@ async def check_sub_to_channel(call: CallbackQuery, state: FSMContext):
     Re-check channel subscription after user clicks "Check".
     """
     user_id = call.from_user.id
-    chat = EnvKeys.CHANNEL_URL or ""
-    parsed_url = urlparse(chat)
-    channel_username = (
-                           parsed_url.path.lstrip('/')
-                           if parsed_url.path else chat.replace("https://t.me/", "").replace("t.me/", "").lstrip('@')
-                       ) or None
+    channel_username = _parse_channel_username()
     helper = EnvKeys.HELPER_ID
 
     if channel_username:

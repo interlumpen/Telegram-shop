@@ -22,6 +22,25 @@ from bot.states import BalanceStates
 router = Router()
 
 
+async def _notify_referrer_bonus(bot, user_id: int, amount: int, payer_name: str, payer_id: int):
+    """Send referral bonus notification to the referrer if applicable."""
+    referral_id = get_user_referral(user_id)
+    if not referral_id or not EnvKeys.REFERRAL_PERCENT:
+        return
+    try:
+        bonus = int(Decimal(EnvKeys.REFERRAL_PERCENT) / Decimal(100) * Decimal(amount))
+        if bonus > 0:
+            await bot.send_message(
+                referral_id,
+                localize('payments.referral.bonus',
+                         amount=bonus, name=payer_name,
+                         id=payer_id, currency=EnvKeys.PAY_CURRENCY),
+                reply_markup=close()
+            )
+    except (TelegramBadRequest, TelegramForbiddenError) as e:
+        logger.error(f"Failed to send referral notification to user {referral_id}: {e}")
+
+
 @router.callback_query(F.data == "replenish_balance")
 async def replenish_balance_callback_handler(call: CallbackQuery, state: FSMContext):
     """Ask user for the amount if at least one payment method is enabled."""
@@ -226,8 +245,6 @@ async def checking_payment(call: CallbackQuery, state: FSMContext):
             balance_amount = int(Decimal(str(info.get("amount", "0"))).quantize(Decimal("1.")))
 
             # Use transactional payment processing
-            used_transaction_version = False
-
             success, error_msg = process_payment_with_referral(
                 user_id=user_id,
                 amount=Decimal(balance_amount),
@@ -235,8 +252,6 @@ async def checking_payment(call: CallbackQuery, state: FSMContext):
                 external_id=str(invoice_id),
                 referral_percent=EnvKeys.REFERRAL_PERCENT
             )
-
-            used_transaction_version = True
 
             if not success:
                 if error_msg == "already_processed":
@@ -246,24 +261,7 @@ async def checking_payment(call: CallbackQuery, state: FSMContext):
                 return
 
             # Send a notification to the referrer
-            referral_id = get_user_referral(user_id)
-            if referral_id and EnvKeys.REFERRAL_PERCENT and used_transaction_version:
-                try:
-                    referral_amount = int(
-                        Decimal(EnvKeys.REFERRAL_PERCENT) / Decimal(100) * Decimal(balance_amount)
-                    )
-                    if referral_amount > 0:
-                        await call.bot.send_message(
-                            referral_id,
-                            localize('payments.referral.bonus',
-                                     amount=referral_amount,
-                                     name=call.from_user.first_name,
-                                     id=call.from_user.id,
-                                     currency=EnvKeys.PAY_CURRENCY),
-                            reply_markup=close()
-                        )
-                except (TelegramBadRequest, TelegramForbiddenError) as e:
-                    logger.error(f"Failed to send balance notification to user {call.from_user.id}: {e}")
+            await _notify_referrer_bonus(call.bot, user_id, balance_amount, call.from_user.first_name, call.from_user.id)
 
             await call.message.edit_text(
                 localize("payments.topped_simple",
@@ -360,24 +358,7 @@ async def successful_payment_handler(message: Message):
         return
 
     # Sending notification to referrer
-    referral_id = get_user_referral(user_id)
-    if referral_id and EnvKeys.REFERRAL_PERCENT:
-        try:
-            referral_operation = int(
-                Decimal(EnvKeys.REFERRAL_PERCENT) / Decimal(100) * Decimal(amount)
-            )
-            if referral_operation > 0:
-                await message.bot.send_message(
-                    referral_id,
-                    localize('payments.referral.bonus',
-                             amount=referral_operation,
-                             currency=EnvKeys.PAY_CURRENCY,
-                             name=message.from_user.first_name,
-                             id=message.from_user.id),
-                    reply_markup=close()
-                )
-        except (TelegramBadRequest, TelegramForbiddenError) as e:
-            logger.error(f"Failed to send referral notification to user {referral_id}: {e}")
+    await _notify_referrer_bonus(message.bot, user_id, amount, message.from_user.first_name, message.from_user.id)
 
     suffix = localize("payments.success_suffix.stars") if sp.currency == "XTR" else localize(
         "payments.success_suffix.tg")

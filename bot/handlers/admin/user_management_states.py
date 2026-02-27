@@ -26,6 +26,83 @@ from bot.misc import EnvKeys, LazyPaginator, validate_telegram_id, validate_mone
 router = Router()
 
 
+async def _build_user_profile(bot, target_id: int):
+    """Build user profile text and action buttons for admin view.
+    Returns (text, markup) or None if user not found.
+    """
+    user = await check_user_cached(target_id)
+    if not user:
+        return None
+
+    user_info = await bot.get_chat(target_id)
+    operations = select_user_operations(target_id)
+    overall_balance = sum(operations) if operations else 0
+    items_count = select_user_items(target_id)
+    role = check_role_name_by_id(user.get('role_id'))
+    referrals = check_user_referrals(user.get('telegram_id'))
+
+    earnings_stats = get_referral_earnings_stats(target_id)
+    has_referrals = referrals > 0
+    has_earnings = earnings_stats['total_earnings_count'] > 0
+
+    # Action buttons
+    actions: list[tuple[str, str]] = []
+    role_name = role
+
+    if role_name == 'ADMIN':
+        actions.append((localize('btn.admin.demote'), f"remove-admin_{target_id}"))
+    elif role_name != 'OWNER':
+        actions.append((localize('btn.admin.promote'), f"set-admin_{target_id}"))
+
+    actions.append((localize('btn.admin.replenish_user'), f"fill-user-balance_{target_id}"))
+    actions.append((localize('btn.admin.deduct_user'), f"deduct-user-balance_{target_id}"))
+
+    if role_name != 'OWNER':
+        if is_user_blocked(target_id):
+            actions.append((localize('btn.admin.unblock'), f"unblock-user_{target_id}"))
+        else:
+            actions.append((localize('btn.admin.block'), f"block-user_{target_id}"))
+
+    if items_count:
+        actions.append((localize('btn.purchased'), f"user-items_{target_id}"))
+
+    if has_referrals:
+        actions.append((localize('admin.users.btn.view_referrals'), f"admin-view-referrals_{target_id}"))
+
+    if has_earnings:
+        actions.append((localize('admin.users.btn.view_earnings'), f"admin-view-earnings_{target_id}"))
+
+    actions.append((localize('btn.back'), "user_management"))
+    markup = simple_buttons(actions, per_row=1)
+
+    lines = [
+        localize('profile.caption', name=user_info.first_name, id=target_id),
+        '',
+        localize('profile.id', id=target_id),
+        localize('profile.balance', amount=user.get('balance'), currency=EnvKeys.PAY_CURRENCY),
+        localize('profile.total_topup', amount=overall_balance, currency=EnvKeys.PAY_CURRENCY),
+        localize('profile.purchased_count', count=items_count),
+        '',
+        localize('admin.users.referrals', count=referrals),
+        localize('admin.users.role', role=role),
+        localize('profile.registration_date', dt=user.get('registration_date')),
+    ]
+
+    if is_user_blocked(target_id):
+        lines.append(localize('admin.users.status.blocked'))
+
+    if has_earnings:
+        lines.append('')
+        lines.append(localize('referrals.stats.template',
+                              active_count=earnings_stats['active_referrals_count'],
+                              total_earned=int(earnings_stats['total_amount']),
+                              total_original=int(earnings_stats['total_original_amount']),
+                              earnings_count=earnings_stats['total_earnings_count'],
+                              currency=EnvKeys.PAY_CURRENCY))
+
+    return '\n'.join(lines), markup
+
+
 @router.callback_query(F.data == 'user_management', HasPermissionFilter(Permission.USERS_MANAGE))
 async def user_callback_handler(call: CallbackQuery, state: FSMContext):
     """
@@ -43,96 +120,20 @@ async def user_callback_handler(call: CallbackQuery, state: FSMContext):
 async def check_user_data(message: Message, state: FSMContext):
     """Validates ID and shows user profile directly."""
     try:
-        # Validate user ID
         target_id = validate_telegram_id(message.text.strip())
 
-        user = await check_user_cached(target_id)
-        if not user:
+        result = await _build_user_profile(message.bot, target_id)
+        if not result:
             await message.answer(
                 localize('admin.users.profile_unavailable'),
                 reply_markup=back('console')
             )
             return
 
-        # Get user profile data
-        user_info = await message.bot.get_chat(target_id)
-        operations = select_user_operations(target_id)
-        overall_balance = sum(operations) if operations else 0
-        items_count = select_user_items(target_id)
-        role = check_role_name_by_id(user.get('role_id'))
-        referrals = check_user_referrals(user.get('telegram_id'))
-
-        # Get referral earnings stats for the user
-        earnings_stats = get_referral_earnings_stats(target_id)
-        has_referrals = referrals > 0
-        has_earnings = earnings_stats['total_earnings_count'] > 0
-
-        # Action buttons
-        actions: list[tuple[str, str]] = []
-        role_name = role  # 'USER' | 'ADMIN' | 'OWNER'
-
-        if role_name == 'OWNER':
-            # Do nothing: owner's role is immutable for safety
-            pass
-        elif role_name == 'ADMIN':
-            actions.append((localize('btn.admin.demote'), f"remove-admin_{target_id}"))
-        else:  # USER
-            actions.append((localize('btn.admin.promote'), f"set-admin_{target_id}"))
-
-        actions.append((localize('btn.admin.replenish_user'), f"fill-user-balance_{target_id}"))
-        actions.append((localize('btn.admin.deduct_user'), f"deduct-user-balance_{target_id}"))
-
-        # Block/unblock button (not for OWNER)
-        if role_name != 'OWNER':
-            if is_user_blocked(target_id):
-                actions.append((localize('btn.admin.unblock'), f"unblock-user_{target_id}"))
-            else:
-                actions.append((localize('btn.admin.block'), f"block-user_{target_id}"))
-
-        if items_count:
-            actions.append((localize('btn.purchased'), f"user-items_{target_id}"))
-
-        # Add referral-related buttons
-        if has_referrals:
-            actions.append((localize('admin.users.btn.view_referrals'), f"admin-view-referrals_{target_id}"))
-
-        if has_earnings:
-            actions.append((localize('admin.users.btn.view_earnings'), f"admin-view-earnings_{target_id}"))
-
-        actions.append((localize('btn.back'), "user_management"))
-
-        markup = simple_buttons(actions, per_row=1)
-
-        lines = [
-            localize('profile.caption', name=user_info.first_name, id=target_id),
-            '',
-            localize('profile.id', id=target_id),
-            localize('profile.balance', amount=user.get('balance'), currency=EnvKeys.PAY_CURRENCY),
-            localize('profile.total_topup', amount=overall_balance, currency=EnvKeys.PAY_CURRENCY),
-            localize('profile.purchased_count', count=items_count),
-            '',
-            localize('admin.users.referrals', count=referrals),
-            localize('admin.users.role', role=role),
-            localize('profile.registration_date', dt=user.get('registration_date')),
-        ]
-
-        # Add referral earnings stats if available
-        if has_earnings:
-            lines.append('')
-            lines.append(localize('referrals.stats.template',
-                                  active_count=earnings_stats['active_referrals_count'],
-                                  total_earned=int(earnings_stats['total_amount']),
-                                  total_original=int(earnings_stats['total_original_amount']),
-                                  earnings_count=earnings_stats['total_earnings_count'],
-                                  currency=EnvKeys.PAY_CURRENCY))
-
-        await message.answer(
-            '\n'.join(lines),
-            parse_mode='HTML',
-            reply_markup=markup
-        )
+        text, markup = result
+        await message.answer(text, parse_mode='HTML', reply_markup=markup)
         await state.clear()
-    except ValueError as e:
+    except ValueError:
         await message.answer(
             localize('admin.users.invalid_id'),
             reply_markup=back('console')
@@ -152,95 +153,13 @@ async def user_profile_view(call: CallbackQuery):
         await call.answer(localize('errors.invalid_data'), show_alert=True)
         return
 
-    user = await check_user_cached(target_id)
-    if not user:
+    result = await _build_user_profile(call.message.bot, target_id)
+    if not result:
         await call.answer(localize('admin.users.not_found'), show_alert=True)
         return
 
-    user_info = await call.message.bot.get_chat(target_id)
-
-    operations = select_user_operations(target_id)
-    overall_balance = sum(operations) if operations else 0
-    items_count = select_user_items(target_id)
-    role = check_role_name_by_id(user.get('role_id'))
-    referrals = check_user_referrals(user.get('telegram_id'))
-
-    # Get referral earnings stats for the user
-    earnings_stats = get_referral_earnings_stats(target_id)
-    has_referrals = referrals > 0
-    has_earnings = earnings_stats['total_earnings_count'] > 0
-
-    # Action buttons
-    actions: list[tuple[str, str]] = []
-    role_name = role  # 'USER' | 'ADMIN' | 'OWNER'
-
-    if role_name == 'OWNER':
-        # Do nothing: owner's role is immutable for safety
-        pass
-    elif role_name == 'ADMIN':
-        actions.append((localize('btn.admin.demote'), f"remove-admin_{target_id}"))
-    else:  # USER
-        actions.append((localize('btn.admin.promote'), f"set-admin_{target_id}"))
-
-    actions.append((localize('btn.admin.replenish_user'), f"fill-user-balance_{target_id}"))
-    actions.append((localize('btn.admin.deduct_user'), f"deduct-user-balance_{target_id}"))
-
-    # Block/unblock button (not for OWNER)
-    if role_name != 'OWNER':
-        if is_user_blocked(target_id):
-            actions.append((localize('btn.admin.unblock'), f"unblock-user_{target_id}"))
-        else:
-            actions.append((localize('btn.admin.block'), f"block-user_{target_id}"))
-
-    if items_count:
-        actions.append((localize('btn.purchased'), f"user-items_{target_id}"))
-
-    # Add referral-related buttons
-    if has_referrals:
-        actions.append((localize('admin.users.btn.view_referrals'), f"admin-view-referrals_{target_id}"))
-
-    if has_earnings:
-        actions.append((localize('admin.users.btn.view_earnings'), f"admin-view-earnings_{target_id}"))
-
-    actions.append((localize('btn.back'), "user_management"))
-
-    markup = simple_buttons(actions, per_row=1)
-
-    # Check if user is blocked for status display
-    user_blocked = is_user_blocked(target_id)
-
-    lines = [
-        localize('profile.caption', name=user_info.first_name, id=target_id),
-        '',
-        localize('profile.id', id=target_id),
-        localize('profile.balance', amount=user.get('balance'), currency=EnvKeys.PAY_CURRENCY),
-        localize('profile.total_topup', amount=overall_balance, currency=EnvKeys.PAY_CURRENCY),
-        localize('profile.purchased_count', count=items_count),
-        '',
-        localize('admin.users.referrals', count=referrals),
-        localize('admin.users.role', role=role),
-        localize('profile.registration_date', dt=user.get('registration_date')),
-    ]
-
-    # Add blocked status if blocked
-    if user_blocked:
-        lines.append(localize('admin.users.status.blocked'))
-
-    # Add referral earnings stats if available
-    if has_earnings:
-        lines.append('')
-        lines.append(localize('referrals.stats.template',
-                              active_count=earnings_stats['active_referrals_count'],
-                              total_earned=int(earnings_stats['total_amount']),
-                              total_original=int(earnings_stats['total_original_amount']),
-                              earnings_count=earnings_stats['total_earnings_count'],
-                              currency=EnvKeys.PAY_CURRENCY))
-
-    await call.message.edit_text(
-        '\n'.join(lines),
-        parse_mode='HTML',
-        reply_markup=markup
-    )
+    text, markup = result
+    await call.message.edit_text(text, parse_mode='HTML', reply_markup=markup)
 
 
 @router.callback_query(F.data.startswith('admin-view-referrals_'), HasPermissionFilter(Permission.USERS_MANAGE))

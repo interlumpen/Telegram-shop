@@ -99,24 +99,38 @@ async def query_user_referrals(user_id: int, offset: int = 0, limit: int = 10, c
         if count_only:
             return s.query(func.count(User.telegram_id)).filter(User.referral_id == user_id).scalar() or 0
 
-        referrals = s.query(User).filter(User.referral_id == user_id) \
-            .offset(offset) \
-            .limit(limit) \
+        # Subquery for per-referral earnings
+        earnings_subq = (
+            s.query(
+                ReferralEarnings.referral_id,
+                func.coalesce(func.sum(ReferralEarnings.amount), 0).label('total_earned')
+            )
+            .filter(ReferralEarnings.referrer_id == user_id)
+            .group_by(ReferralEarnings.referral_id)
+            .subquery()
+        )
+
+        rows = (
+            s.query(
+                User.telegram_id,
+                User.registration_date,
+                func.coalesce(earnings_subq.c.total_earned, 0).label('total_earned')
+            )
+            .outerjoin(earnings_subq, User.telegram_id == earnings_subq.c.referral_id)
+            .filter(User.referral_id == user_id)
+            .offset(offset)
+            .limit(limit)
             .all()
+        )
 
-        result = []
-        for ref in referrals:
-            # Get total earned from this referral
-            total_earned = s.query(func.sum(ReferralEarnings.amount)).filter(
-                ReferralEarnings.referrer_id == user_id,
-                ReferralEarnings.referral_id == ref.telegram_id
-            ).scalar() or 0
-
-            result.append({
-                'telegram_id': ref.telegram_id,
-                'registration_date': ref.registration_date,
-                'total_earned': total_earned
-            })
+        result = [
+            {
+                'telegram_id': row.telegram_id,
+                'registration_date': row.registration_date,
+                'total_earned': row.total_earned
+            }
+            for row in rows
+        ]
 
         return sorted(result, key=lambda x: x['total_earned'], reverse=True)
 

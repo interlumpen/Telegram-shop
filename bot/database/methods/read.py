@@ -2,7 +2,7 @@ import asyncio
 import datetime
 from decimal import Decimal
 from functools import wraps
-from typing import Optional, Dict
+from typing import Optional, Dict, TypeVar, Callable, Any, Coroutine
 
 from sqlalchemy import func, exists
 
@@ -10,10 +10,12 @@ from bot.database.models import Database, User, ItemValues, Goods, Categories, R
     Operations, ReferralEarnings
 from bot.misc.caching import get_cache_manager
 
+F = TypeVar('F', bound=Callable[..., Any])
+
 
 # Wrapper for synchronous functions to asynchronous functions with caching
-def async_cached(ttl: int = 300, key_prefix: str = ""):
-    def decorator(sync_func):
+def async_cached(ttl: int = 300, key_prefix: str = "") -> Callable[[F], Callable[..., Coroutine[Any, Any, Any]]]:
+    def decorator(sync_func: F) -> Callable[..., Coroutine[Any, Any, Any]]:
         @wraps(sync_func)
         async def async_wrapper(*args, **kwargs):
             # Generate the cache key
@@ -129,13 +131,6 @@ def get_goods_info(item_id: int) -> dict | None:
     """Return item_value row as dict by id, or None."""
     with Database().session() as s:
         result = s.query(ItemValues).filter(ItemValues.id == int(item_id)).first()
-        return result.__dict__ if result else None
-
-
-def check_item(item_name: str) -> dict | None:
-    """Return item (position) as dict by name, or None."""
-    with Database().session() as s:
-        result = s.query(Goods).filter(Goods.name == item_name).first()
         return result.__dict__ if result else None
 
 
@@ -314,12 +309,6 @@ def check_role_cached(telegram_id: int):
 def check_category_cached(category_name: str):
     """Cached Category Check"""
     return check_category(category_name)
-
-
-@async_cached(ttl=1800, key_prefix="item")
-def check_item_cached(item_name: str):
-    """Cached product verification"""
-    return check_item(item_name)
 
 
 @async_cached(ttl=900, key_prefix="item_info")

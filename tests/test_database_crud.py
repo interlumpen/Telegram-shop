@@ -6,7 +6,7 @@ from bot.database.methods.create import create_user, create_item, add_values_to_
 
 from bot.database.methods.read import (
     check_user, check_role, get_role_id_by_name, check_role_name_by_id, select_max_role_id, select_today_users,
-    get_user_count, get_all_users, check_category, check_item, get_item_info, check_value, select_item_values_amount,
+    get_user_count, get_all_users, check_category, get_item_info, get_item_info, check_value, select_item_values_amount,
     select_count_items, select_count_goods, select_count_categories, select_user_items, select_user_operations,
     check_user_referrals, get_user_referral, get_referral_earnings_stats, get_one_referral_earning,
     select_today_orders, select_all_orders, select_today_operations, select_all_operations, select_users_balance,
@@ -143,9 +143,9 @@ class TestCategoryCRUD:
 
 
 class TestItemCRUD:
-    def test_create_and_check_item(self, item_factory):
+    def test_create_and_get_item_info(self, item_factory):
         item_factory(name="Widget", price=50, category="Gadgets")
-        item = check_item("Widget")
+        item = get_item_info("Widget")
         assert item is not None
         assert item["name"] == "Widget"
         assert item["price"] == Decimal("50")
@@ -208,8 +208,8 @@ class TestItemCRUD:
         item_factory(name="RenameOld", price=10, category="RenCat")
         ok, err = update_item("RenameOld", "RenameNew", "desc", 10, "RenCat")
         assert ok is True
-        assert check_item("RenameOld") is None
-        assert check_item("RenameNew") is not None
+        assert get_item_info("RenameOld") is None
+        assert get_item_info("RenameNew") is not None
 
     def test_update_item_not_found(self):
         ok, err = update_item("Ghost", "Ghost2", "d", 1, "c")
@@ -218,13 +218,13 @@ class TestItemCRUD:
     def test_delete_item(self, item_factory):
         item_factory(name="DelItem", category="DelCat", values=[("dv", False)])
         delete_item("DelItem")
-        assert check_item("DelItem") is None
+        assert get_item_info("DelItem") is None
         assert select_item_values_amount("DelItem") == 0
 
     def test_delete_only_items(self, item_factory):
         item_factory(name="DelOnlyItem", category="DOCat", values=[("x", False)])
         delete_only_items("DelOnlyItem")
-        assert check_item("DelOnlyItem") is not None
+        assert get_item_info("DelOnlyItem") is not None
         assert select_item_values_amount("DelOnlyItem") == 0
 
     def test_delete_item_from_position(self, item_factory):
