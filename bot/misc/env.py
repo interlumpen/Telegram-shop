@@ -58,8 +58,11 @@ class EnvKeys(ABC):
     LOG_TO_FILE: Final = _get_optional("LOG_TO_FILE", "1")
     DEBUG: Final = _get_optional("DEBUG", "0")
 
-    # Monitoring
-    MONITORING_HOST: Final = _get_optional("MONITORING_HOST", "localhost")
-    MONITORING_PORT: Final = int(_get_optional("MONITORING_PORT", "9090"))
+    # Web admin panel
+    ADMIN_HOST: Final = _get_optional("ADMIN_HOST", _get_optional("MONITORING_HOST", "localhost"))
+    ADMIN_PORT: Final = int(_get_optional("ADMIN_PORT", _get_optional("MONITORING_PORT", "9090")))
+    ADMIN_USERNAME: Final = _get_optional("ADMIN_USERNAME", "admin")
+    ADMIN_PASSWORD: Final = _get_optional("ADMIN_PASSWORD", "admin")
+    SECRET_KEY: Final = _get_optional("SECRET_KEY", "change-me-in-production")
 
     DATABASE_URL: Final = f"{DB_DRIVER}://{POSTGRES_USER}:{POSTGRES_PASSWORD}@{POSTGRES_HOST}:{DB_PORT}/{POSTGRES_DB}"

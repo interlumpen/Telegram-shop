@@ -6,7 +6,7 @@ logger = logging.getLogger(__name__)
 
 
 class RecoveryManager:
-    """Disaster Recovery Manager"""
+    """Disaster Recovery Manager — payment recovery and health monitoring"""
 
     def __init__(self, bot):
         self.bot = bot
@@ -18,17 +18,10 @@ class RecoveryManager:
         logger.info("Starting recovery manager...")
         self.running = True
 
-        # Recovery of pending payments
         self.recovery_tasks.append(
             asyncio.create_task(self._safe_run(self.recover_pending_payments()))
         )
 
-        # Restore interrupted mailings
-        self.recovery_tasks.append(
-            asyncio.create_task(self._safe_run(self.recover_interrupted_broadcasts()))
-        )
-
-        # Periodic status checks
         self.recovery_tasks.append(
             asyncio.create_task(self._safe_run(self.periodic_health_check()))
         )
@@ -58,7 +51,6 @@ class RecoveryManager:
         while self.running:
             try:
                 with Database().session() as s:
-                    # Find payments older than 1 hour in pending status
                     cutoff = datetime.now() - timedelta(hours=1)
                     pending_payments = s.query(Payments).filter(
                         Payments.status == "pending",
@@ -72,7 +64,6 @@ class RecoveryManager:
             except Exception as e:
                 logger.error(f"Error recovering payments: {e}")
 
-            # Wait 5 minutes before the next check
             await asyncio.sleep(300)
 
     async def _check_and_process_payment(self, payment):
@@ -90,7 +81,6 @@ class RecoveryManager:
                 info = await crypto.get_invoice(payment.external_id)
 
                 if info.get("status") == "paid":
-                    # Process payment
                     success, _ = process_payment_with_referral(
                         user_id=payment.user_id,
                         amount=payment.amount,
@@ -101,7 +91,6 @@ class RecoveryManager:
 
                     if success:
                         logger.info(f"Recovered payment {payment.external_id}")
-                        # Notify user
                         try:
                             await self.bot.send_message(
                                 payment.user_id,
@@ -111,7 +100,6 @@ class RecoveryManager:
                             logger.error(f"Failed to notify user {payment.user_id}: {e}")
 
                 elif info.get("status") in ["expired", "failed"]:
-                    # Mark as unsuccessful
                     with Database().session() as s:
                         s.query(Payments).filter(
                             Payments.id == payment.id
@@ -120,44 +108,21 @@ class RecoveryManager:
         except Exception as e:
             logger.error(f"Error processing payment {payment.id}: {e}")
 
-    async def recover_interrupted_broadcasts(self):
-        """Restore interrupted mailings"""
-        # Loading state from Redis at startup
-        try:
-            from bot.misc.caching.cache import get_cache_manager
-
-            cache = get_cache_manager()
-            if cache:
-                broadcast_state = await cache.get("broadcast:interrupted")
-                if broadcast_state:
-                    logger.info(f"Found interrupted broadcast: {broadcast_state}")
-                    # Continue mailing from where left off
-                    await self._resume_broadcast(broadcast_state)
-        except Exception as e:
-            logger.error(f"Error recovering broadcasts: {e}")
-
-    async def _resume_broadcast(self, state: dict):
-        """Resuming an interrupted mailing"""
-        logger.info("Broadcast resumption not implemented yet")
-
     async def periodic_health_check(self):
         """Periodic system health checks"""
         from bot.database import Database
 
         while self.running:
             try:
-                # Check connections to database
                 with Database().session() as s:
                     from sqlalchemy import text
                     s.execute(text("SELECT 1"))
 
-                # Checking Redis
                 from bot.misc.caching.cache import get_cache_manager
                 cache = get_cache_manager()
                 if cache:
                     await cache.set("health:check", "ok", ttl=60)
 
-                # Telegram API check
                 me = await self.bot.get_me()
 
                 logger.debug(f"Health check passed: Bot @{me.username} is alive")
@@ -165,7 +130,4 @@ class RecoveryManager:
             except Exception as e:
                 logger.error(f"Health check failed: {e}")
 
-            # Wait 60 seconds before the next test
             await asyncio.sleep(60)
-
-

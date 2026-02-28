@@ -14,7 +14,7 @@ else
     # Update GID if different
     CURRENT_GID=$(getent group botgroup | cut -d: -f3)
     if [ "$CURRENT_GID" != "$PGID" ]; then
-        groupmod -g "$PGID" botgroup 2>/dev/null || true
+        groupmod -g "$PGID" botgroup || true
     fi
 fi
 
@@ -25,10 +25,10 @@ if id botuser > /dev/null 2>&1; then
     CURRENT_GID=$(id -g botuser)
 
     if [ "$CURRENT_UID" != "$PUID" ]; then
-        usermod -u "$PUID" botuser 2>/dev/null || true
+        usermod -u "$PUID" botuser || true
     fi
     if [ "$CURRENT_GID" != "$PGID" ]; then
-        usermod -g botgroup botuser 2>/dev/null || true
+        usermod -g botgroup botuser || true
     fi
 else
     # Create user with specified UID/GID
@@ -42,13 +42,18 @@ mkdir -p /app/logs /app/data
 chown botuser:botgroup /app/logs /app/data
 
 # Ensure log files exist and are writable
-touch /app/logs/bot.log /app/logs/audit.log 2>/dev/null || true
-chown botuser:botgroup /app/logs/bot.log /app/logs/audit.log 2>/dev/null || true
+touch /app/logs/bot.log /app/logs/audit.log
+chown botuser:botgroup /app/logs/bot.log /app/logs/audit.log
 
 # Set ownership on app directory itself (but not recursively to avoid slowdown)
 chown botuser:botgroup /app
 
-echo "Permissions configured. Running as botuser..."
+echo "Permissions configured. Running migrations..."
 
-# Run migrations and start bot as botuser using gosu
-exec gosu botuser bash -lc "alembic upgrade head && python run.py"
+# Run migrations separately — if they fail, set -e stops the container before bot starts
+gosu botuser alembic upgrade head
+
+echo "Migrations complete. Starting bot..."
+
+# exec gives PID 1 to the Python process — SIGTERM propagates correctly for graceful shutdown
+exec gosu botuser python run.py

@@ -7,13 +7,13 @@ from aiogram.types import CallbackQuery, Message, PreCheckoutQuery, SuccessfulPa
 from aiogram.fsm.context import FSMContext
 from aiogram.exceptions import TelegramBadRequest, TelegramForbiddenError
 
-from bot.database.methods import get_user_referral, buy_item_transaction, process_payment_with_referral
+from bot.database.methods import get_user_referral, buy_item_transaction, process_payment_with_referral, create_pending_payment
 from bot.keyboards import back, payment_menu, close, get_payment_choice
 from bot.logger_mesh import audit_logger, logger
 from bot.misc import EnvKeys, ItemPurchaseRequest, validate_telegram_id, validate_money_amount, PaymentRequest, \
     sanitize_html
 from bot.handlers.other import _any_payment_method_enabled, is_safe_item_name
-from bot.misc.obvervability import get_metrics
+from bot.misc.metrics import get_metrics
 from bot.misc.services import CryptoPayAPI, CryptoPayAPIError, send_stars_invoice, send_fiat_invoice
 from bot.filters import ValidAmountFilter
 from bot.i18n import localize
@@ -158,6 +158,14 @@ async def process_replenish_balance(call: CallbackQuery, state: FSMContext):
             pay_url = invoice.get("mini_app_invoice_url")
             invoice_id = invoice.get("invoice_id")
 
+            create_pending_payment(
+                provider="cryptopay",
+                external_id=str(invoice_id),
+                user_id=call.from_user.id,
+                amount=int(amount_dec),
+                currency=payment_request.currency,
+            )
+
             await state.update_data(invoice_id=invoice_id, payment_type="cryptopay")
 
             await call.message.edit_text(
@@ -260,6 +268,10 @@ async def checking_payment(call: CallbackQuery, state: FSMContext):
                     await call.answer(localize("errors.general_error", e=error_msg), show_alert=True)
                 return
 
+            metrics = get_metrics()
+            if metrics:
+                metrics.track_event("payment", user_id, {"amount": balance_amount, "provider": "cryptopay"})
+
             # Send a notification to the referrer
             await _notify_referrer_bonus(call.bot, user_id, balance_amount, call.from_user.first_name, call.from_user.id)
 
@@ -360,6 +372,10 @@ async def successful_payment_handler(message: Message):
     # Sending notification to referrer
     await _notify_referrer_bonus(message.bot, user_id, amount, message.from_user.first_name, message.from_user.id)
 
+    metrics = get_metrics()
+    if metrics:
+        metrics.track_event("payment", user_id, {"amount": amount, "provider": provider})
+
     suffix = localize("payments.success_suffix.stars") if sp.currency == "XTR" else localize(
         "payments.success_suffix.tg")
     await message.answer(
@@ -391,9 +407,6 @@ async def buy_item_callback_handler(call: CallbackQuery, state: FSMContext):
             return
 
         metrics = get_metrics()
-        if metrics:
-            # Tracking the purchase funnel
-            metrics.track_conversion("purchase_funnel", "view_item", call.from_user.id)
 
         # Validation via Pydantic
         purchase_request = ItemPurchaseRequest(

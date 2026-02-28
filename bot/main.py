@@ -1,3 +1,4 @@
+import asyncio
 import logging
 import sys
 import json
@@ -19,12 +20,11 @@ from bot.misc.caching import init_cache_manager, get_cache_manager
 from bot.misc.caching import CacheScheduler
 from bot.misc.caching import get_redis_storage
 from bot.misc.services import RecoveryManager
-from bot.misc.obvervability import init_metrics, get_metrics, AnalyticsMiddleware
-from bot.misc.obvervability import MonitoringServer
+from bot.misc.metrics import init_metrics, get_metrics, AnalyticsMiddleware
 
 # Global variables for components
 recovery_manager = None
-monitoring_server = None
+admin_server = None
 cache_scheduler = None
 
 # Global middleware instances for access from handlers
@@ -34,7 +34,7 @@ auth_middleware: AuthenticationMiddleware = None
 
 async def __on_start_up(dp: Dispatcher, bot: Bot) -> None:
     """Initialize bot on startup"""
-    global recovery_manager, monitoring_server
+    global recovery_manager, admin_server
 
     # Registration of handlers and models
     register_all_handlers(dp)
@@ -97,18 +97,26 @@ async def __on_start_up(dp: Dispatcher, bot: Bot) -> None:
     recovery_manager = RecoveryManager(bot)
     await recovery_manager.start()
 
-    # Start the monitoring server
-    monitoring_host = EnvKeys.MONITORING_HOST
-    monitoring_port = EnvKeys.MONITORING_PORT
-    monitoring_server = MonitoringServer(host=monitoring_host, port=monitoring_port)
-    await monitoring_server.start()
+    # Start the admin web server
+    import uvicorn
+    from bot.web import create_admin_app
 
-    logging.info(f"Recovery and monitoring systems initialized on {monitoring_host}:{monitoring_port}")
+    admin_app = create_admin_app()
+    config = uvicorn.Config(
+        admin_app,
+        host=EnvKeys.ADMIN_HOST,
+        port=EnvKeys.ADMIN_PORT,
+        log_level="warning",
+    )
+    admin_server = uvicorn.Server(config)
+    asyncio.create_task(admin_server.serve())
+
+    logging.info(f"Recovery and admin panel initialized on {EnvKeys.ADMIN_HOST}:{EnvKeys.ADMIN_PORT}")
 
 
 async def __on_shutdown(dp: Dispatcher, bot: Bot) -> None:
     """Initialize bot shutdown"""
-    global recovery_manager, monitoring_server
+    global recovery_manager, admin_server
 
     logging.info("Starting shutdown...")
 
@@ -126,9 +134,9 @@ async def __on_shutdown(dp: Dispatcher, bot: Bot) -> None:
     if recovery_manager:
         await recovery_manager.stop()
 
-    # Monitoring server stop
-    if monitoring_server:
-        await monitoring_server.stop()
+    # Admin server stop
+    if admin_server:
+        admin_server.should_exit = True
 
     logging.info("Shutdown completed")
 
@@ -181,9 +189,7 @@ async def start_bot() -> None:
     logging.getLogger("aiogram.dispatcher").setLevel(logging.WARNING)
     logging.getLogger("aiogram.event").setLevel(logging.WARNING)
     logging.getLogger("aiogram.middlewares").setLevel(logging.WARNING)
-    logging.getLogger("aiohttp.access").setLevel(logging.WARNING)
-    logging.getLogger("aiohttp.server").setLevel(logging.WARNING)
-    logging.getLogger("aiohttp.web").setLevel(logging.WARNING)
+    logging.getLogger("uvicorn").setLevel(logging.WARNING)
 
     # Checking critical environment variables
     if not EnvKeys.TOKEN:

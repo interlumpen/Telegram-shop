@@ -12,6 +12,7 @@ from bot.database.methods import (
 from bot.keyboards import item_info, back, lazy_paginated_keyboard
 from bot.i18n import localize
 from bot.misc import EnvKeys, LazyPaginator
+from bot.misc.metrics import get_metrics
 from bot.states import ShopStates
 
 router = Router()
@@ -22,6 +23,10 @@ async def shop_callback_handler(call: CallbackQuery, state: FSMContext):
     """
     Show list of shop categories with lazy loading.
     """
+    metrics = get_metrics()
+    if metrics:
+        metrics.track_conversion("purchase_funnel", "view_shop", call.from_user.id)
+
     paginator = LazyPaginator(query_categories, per_page=10)
 
     # Pre-fetch page items to build index map and store in state
@@ -198,6 +203,10 @@ async def item_info_callback_handler(call: CallbackQuery, state: FSMContext):
     if not item_info_data:
         await call.answer(localize("shop.item.not_found"), show_alert=True)
         return
+
+    metrics = get_metrics()
+    if metrics:
+        metrics.track_conversion("purchase_funnel", "view_item", call.from_user.id)
 
     if not category:
         category = item_info_data.get('category_name', '')

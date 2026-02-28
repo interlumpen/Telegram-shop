@@ -93,18 +93,17 @@ via the command line (CLI) without the need for a shell and advanced monitoring 
     - Cache scheduler: hourly stats refresh, daily cleanup at 3:00 AM
 - **Performance Optimizations**: Up to 60% reduction in database queries for read operations
 
-### Monitoring & Analytics
+### Web Admin Panel & Monitoring
 
+- **SQLAdmin Web Interface**:
+    - Full database admin panel with authentication
+    - Browse, search, filter, and edit all tables
+    - Read-only views for purchases, payments, and operations
 - **Real-Time Metrics Collection**:
     - Event tracking (purchases, payments, user actions)
     - Performance metrics (response times, query durations)
     - Error tracking and categorization
     - Conversion funnel analysis
-- **Web-Based Monitoring Dashboard**:
-    - Interactive UI at `/dashboard`
-    - Live statistics and system health
-    - Error tracking and analysis
-    - Performance visualization
 - **Prometheus-Compatible Metrics**:
     - Export endpoint at `/metrics/prometheus`
     - Ready for integration with Grafana
@@ -113,28 +112,20 @@ via the command line (CLI) without the need for a shell and advanced monitoring 
     - System status at `/health`
     - Database connectivity check
     - Redis status monitoring
-    - Bot API availability
 
 ### Disaster Recovery System
 
-- **Automatic Recovery Manager**:
-    - Pending payment recovery
-    - Interrupted broadcast resumption
-    - Failed transaction rollback
-    - Connection pool recovery
-- **State Persistence**:
-    - Critical state saving to `data/bot_state.json`
-    - Broadcast progress saved to disk and Redis
-    - Graceful shutdown handling
-- **Health Monitoring**:
-    - Periodic system health checks (database, Redis, Telegram API)
-    - Automatic component restart
-    - Dead connection detection
-    - Resource cleanup for long-running sessions
 - **Payment Recovery**:
-    - Automatic check for stuck payments
+    - Automatic check for stuck CryptoPay payments (every 5 minutes)
+    - Verifies payment status via CryptoPay API
     - Idempotent payment processing
     - User notification on recovery
+- **Health Monitoring**:
+    - Periodic system health checks (database, Redis, Telegram API)
+    - Logs failures for observability
+- **Graceful Shutdown**:
+    - Metrics snapshot saved to `data/final_metrics.json`
+    - Recovery tasks properly cancelled
 
 ## 🔒 Security
 
@@ -208,6 +199,7 @@ via the command line (CLI) without the need for a shell and advanced monitoring 
 - **State Pattern**: FSM for multi-step processes
 - **Transaction Script**: Business logic encapsulation
 - **Middleware Pattern**: Metrics collection and event tracking via AnalyticsMiddleware
+- **Conversion Funnel**: Purchase funnel tracking (view_shop → view_item → purchase)
 
 ### Performance Architecture
 
@@ -239,12 +231,11 @@ via the command line (CLI) without the need for a shell and advanced monitoring 
 - **Telegram Stars API**: Native digital currency
 - **Telegram Payments API**: Traditional payment providers
 
-### Monitoring & Analytics
+### Web Admin & Monitoring
 
+- **Admin Panel**: SQLAdmin with Starlette
 - **Metrics Collection**: Custom MetricsCollector with event tracking
-- **Web Server**: aiohttp for monitoring dashboard
 - **Export Formats**: JSON, Prometheus metrics format
-- **Visualization**: Built-in HTML/CSS dashboard
 
 ### DevOps
 
@@ -310,26 +301,29 @@ The application requires the following environment variables:
 </details>
 
 <details>
-<summary><b>📊 Monitoring</b></summary>
+<summary><b>📊 Web Admin Panel</b></summary>
 
-| Variable          | Description                    | Default     |
-|-------------------|--------------------------------|-------------|
-| `MONITORING_HOST` | Monitoring server bind address | `localhost` |
-| `MONITORING_PORT` | Monitoring server port         | `9090`      |
+| Variable         | Description                       | Default                      |
+|------------------|-----------------------------------|------------------------------|
+| `ADMIN_HOST`     | Admin panel bind address          | `localhost`                  |
+| `ADMIN_PORT`     | Admin panel port                  | `9090`                       |
+| `ADMIN_USERNAME` | Admin panel login                 | `admin`                      |
+| `ADMIN_PASSWORD` | Admin panel password              | `admin`                      |
+| `SECRET_KEY`     | Secret key for session encryption | `change-me-in-production`    |
 
-**Note**: When running in Docker, set `MONITORING_HOST=0.0.0.0` to allow external access.
+**Note**: In Docker, `ADMIN_HOST` is automatically set to `0.0.0.0` and the admin panel is bound to `127.0.0.1:9090` (localhost only). Change `ADMIN_PASSWORD` and `SECRET_KEY` in production.
 
 </details>
 
 <details>
 <summary><b>📦 Redis Storage</b></summary>
 
-| Variable         | Description                 | Default     |
-|------------------|-----------------------------|-------------|
-| `REDIS_HOST`     | Redis server address        | `localhost` |
-| `REDIS_PORT`     | Redis server port           | `6379`      |
-| `REDIS_DB`       | Redis database number       | `0`         |
-| `REDIS_PASSWORD` | Redis password (if enabled) | -           |
+| Variable         | Description                             | Default     |
+|------------------|-----------------------------------------|-------------|
+| `REDIS_HOST`     | Redis server address                    | `localhost` |
+| `REDIS_PORT`     | Redis server port                       | `6379`      |
+| `REDIS_DB`       | Redis database number                   | `0`         |
+| `REDIS_PASSWORD` | Redis password (leave empty for Docker) | -           |
 
 </details>
 
@@ -374,7 +368,7 @@ nano .env  # or use any text editor
 3. **Start the bot**
 
 ```bash
-docker compose up -d --build bot
+docker compose up -d --build
 ```
 
 **Linux Users**: If you encounter permission errors for `./logs` or `./data` directories, set `PUID` and `PGID` in your
@@ -396,7 +390,7 @@ The bot will automatically:
 - Apply all migrations
 - Initialize roles and permissions
 - Start accepting messages
-- Launch monitoring dashboard on port 9090
+- Launch admin panel at http://localhost:9090/admin (localhost only)
 - Initialize recovery systems
 - Enable Docker health check via `/health` endpoint
 
@@ -406,9 +400,9 @@ The bot will automatically:
 docker compose logs -f bot
 ```
 
-5. Access monitoring dashboard
+5. Access admin panel
 
-Open in browser: http://localhost:9090/dashboard
+Open in browser: http://localhost:9090/admin (login: admin/admin)
 
 ### 🔧 Manual Deployment
 
@@ -472,9 +466,9 @@ alembic upgrade head
 python run.py
 ```
 
-9. Access monitoring (optional)
+9. Access admin panel (optional)
 
-Open in browser: http://localhost:9090/
+Open in browser: http://localhost:9090/admin
 
 ### 📝 Post-Installation
 
@@ -496,53 +490,40 @@ alembic upgrade head
     - Send `/start` to your bot
     - Check that main menu appears
     - Access admin panel (owner only initially)
-    - Check monitoring dashboard at http://localhost:9090/
+    - Check admin panel at http://localhost:9090/admin
 
-## 📊 Monitoring & Metrics
+## 📊 Admin Panel & Metrics
 
-### Dashboard Overview
+### Web Admin Panel
 
-The bot includes a comprehensive web-based monitoring system accessible at http://localhost:9090/
+The bot includes a web-based admin panel powered by SQLAdmin, accessible at http://localhost:9090/admin
 
-#### Available Endpoints
+- Login with credentials from your `.env` file (`ADMIN_USERNAME` / `ADMIN_PASSWORD`)
+- Browse all database tables: users, roles, categories, products, purchases, payments, operations, referral earnings
+- Search, filter, and sort records
+- Read-only access for financial tables (purchases, payments, operations)
 
-- / - Overview page with system status
-- /dashboard - Real-time metrics dashboard
-- /events - Event tracking and statistics
-- /performance - Performance metrics and timing analysis
-- /errors - Error tracking and debugging
+#### Monitoring Endpoints
+
+- /health - Health check endpoint (database, Redis status)
 - /metrics - Raw metrics in JSON format
 - /metrics/prometheus - Prometheus-compatible metrics export
-- /health - Health check endpoint for monitoring tools
 
 ### Recovery System
 
-The bot includes an automatic disaster recovery system that handles:
+The bot includes a recovery system for stuck payments:
 
 #### Payment Recovery
 
-- Checks for stuck payments every 5 minutes
-- Automatically processes confirmed but uncredited payments
+- Checks for stuck CryptoPay payments every 5 minutes
+- Verifies payment status via CryptoPay API
+- Automatically credits confirmed but uncredited payments
 - Notifies users when recovery succeeds
-
-#### Broadcast Recovery
-
-- Saves broadcast state during execution
-- Resumes interrupted broadcasts on restart
-- Tracks delivery statistics
 
 #### Health Monitoring
 
-- Periodic checks of all system components
-- Automatic restart of failed services
-- Connection pool health verification
-- Memory leak detection
-
-#### State Persistence
-
-- Critical state saved to data/ directory
-- Automatic backup before shutdown
-- Recovery checkpoints during long operations
+- Periodic checks of database, Redis, and Telegram API (every 60 seconds)
+- Logs failures for observability
 
 ## 📱 Usage
 
@@ -701,7 +682,7 @@ metrics.track_conversion("purchase_funnel", "view_item", user_id)
 
 # Get metrics summary
 summary = metrics.get_metrics_summary()
-prometheus_format = await metrics.export_to_prometheus()
+prometheus_format = metrics.export_to_prometheus()
 ```
 
 ### Recovery Management

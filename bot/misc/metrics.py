@@ -23,15 +23,6 @@ class MetricsCollector:
         """Event Tracking"""
         self.events[event_name] += 1
 
-        # Saving detailed information for important events
-        if event_name in ["purchase", "payment", "registration"]:
-            event_data = {
-                "timestamp": datetime.now().isoformat(),
-                "user_id": user_id,
-                "metadata": metadata
-            }
-            self._save_event(event_name, event_data)
-
     def track_timing(self, operation: str, duration: float):
         """Tracking the time of an operation"""
         self.timings[operation].append(duration)
@@ -91,13 +82,6 @@ class MetricsCollector:
             "conversions": conversion_rates,
             "timestamp": datetime.now().isoformat()
         }
-
-    def _save_event(self, event_name: str, event_data: Dict):
-        """Saving the event for further analysis"""
-        try:
-            logger.debug(f"Analytics event: {event_name} - {event_data}")
-        except Exception as e:
-            logger.error(f"Failed to save event to DB: {e}")
 
     def export_to_prometheus(self):
         """Exporting metrics in Prometheus format"""

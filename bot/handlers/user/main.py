@@ -8,12 +8,13 @@ from urllib.parse import urlparse
 import datetime
 
 from bot.database.methods import (
-    select_max_role_id, create_user, check_role,
+    select_max_role_id, create_user, check_role, check_user,
     select_user_operations, select_user_items, check_user_cached
 )
 from bot.handlers.other import check_sub_channel
 from bot.keyboards import main_menu, back, profile_keyboard, check_sub
 from bot.misc import EnvKeys
+from bot.misc.metrics import get_metrics
 from bot.i18n import localize
 from bot.logger_mesh import logger
 
@@ -49,6 +50,8 @@ async def start(message: Message, state: FSMContext):
     referral_id = message.text[7:] if message.text[7:] != str(user_id) else None
     user_role = owner_max_role if user_id == EnvKeys.OWNER_ID else 1
 
+    is_new_user = check_user(user_id) is None
+
     # registration_date is DateTime
     create_user(
         telegram_id=int(user_id),
@@ -56,6 +59,11 @@ async def start(message: Message, state: FSMContext):
         referral_id=int(referral_id) if referral_id else None,
         role=user_role
     )
+
+    if is_new_user:
+        metrics = get_metrics()
+        if metrics:
+            metrics.track_event("registration", user_id)
 
     channel_username = _parse_channel_username()
     role_data = check_role(user_id)

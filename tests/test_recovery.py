@@ -75,12 +75,11 @@ class TestRecoveryManager:
     async def test_start_creates_tasks(self):
         # Patch the recovery methods to not actually run
         self.manager.recover_pending_payments = AsyncMock()
-        self.manager.recover_interrupted_broadcasts = AsyncMock()
         self.manager.periodic_health_check = AsyncMock()
 
         await self.manager.start()
         assert self.manager.running is True
-        assert len(self.manager.recovery_tasks) == 3
+        assert len(self.manager.recovery_tasks) == 2
 
         await self.manager.stop()
         assert self.manager.running is False

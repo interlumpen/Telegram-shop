@@ -1,7 +1,7 @@
 import pytest
 from unittest.mock import AsyncMock, MagicMock
 
-from bot.misc.obvervability.metrics import MetricsCollector, AnalyticsMiddleware
+from bot.misc.metrics import MetricsCollector, AnalyticsMiddleware
 
 
 class TestMetricsCollector:

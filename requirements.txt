@@ -9,9 +9,14 @@ redis~=6.4.0
 # Database drivers
 psycopg2-binary~=2.9
 
+# Admin panel
+sqladmin>=0.20
+starlette
+uvicorn
+itsdangerous
+
 # Validation & Security
 pydantic~=2.5.0
-python-dotenv~=1.0.0
 cryptography~=41.0.7
 
 # Utils
