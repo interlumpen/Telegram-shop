@@ -109,6 +109,7 @@ class AuthenticationMiddleware(BaseMiddleware):
         self.blocked_users: set[int] = set()
         self.admin_cache: Dict[int, tuple[int, float]] = {}  # user_id: (role, timestamp)
         self.cache_ttl = 300  # 5 minutes
+        self.maintenance_mode: bool = False
 
     async def __call__(
             self,
@@ -137,6 +138,16 @@ class AuthenticationMiddleware(BaseMiddleware):
         if user.is_bot:
             audit_logger.warning(f"Bot attempted to interact: {user.id}")
             return None
+
+        # Maintenance mode: block regular users
+        if self.maintenance_mode:
+            role = await self.get_user_role_cached(user.id)
+            if role <= 1:
+                if isinstance(event, Message):
+                    await event.answer(localize("maintenance.active"))
+                elif isinstance(event, CallbackQuery):
+                    await event.answer(localize("maintenance.active"), show_alert=True)
+                return None
 
         # Add user information to the context
         data['user_id'] = user.id

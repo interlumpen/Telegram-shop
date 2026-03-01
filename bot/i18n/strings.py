@@ -346,6 +346,13 @@ TRANSLATIONS: dict[str, dict[str, str]] = {
         "middleware.security.blocked": "❌ Доступ заблокирован",
         "middleware.security.not_admin": "⛔ Недостаточно прав",
         "middleware.security.invalid_csrf": "⚠️ Сессия устарела. Пожалуйста, попробуйте снова.",
+        "maintenance.active": "🔧 Бот находится на техническом обслуживании. Пожалуйста, попробуйте позже.",
+
+        # === Admin: Maintenance ===
+        "admin.menu.maintenance_on": "🔧 Тех. работы: ВКЛ",
+        "admin.menu.maintenance_off": "🔧 Тех. работы: ВЫКЛ",
+        "admin.maintenance.enabled": "✅ Режим тех. работ включён",
+        "admin.maintenance.disabled": "✅ Режим тех. работ выключён",
 
         # === Errors ===
         "errors.not_subscribed": "Вы не подписались",
@@ -703,6 +710,13 @@ TRANSLATIONS: dict[str, dict[str, str]] = {
         "middleware.security.blocked": "❌ Access blocked",
         "middleware.security.not_admin": "⛔ Insufficient permissions",
         "middleware.security.invalid_csrf": "⚠️ Session expired. Please try again.",
+        "maintenance.active": "🔧 The bot is under maintenance. Please try again later.",
+
+        # === Admin: Maintenance ===
+        "admin.menu.maintenance_on": "🔧 Maintenance: ON",
+        "admin.menu.maintenance_off": "🔧 Maintenance: OFF",
+        "admin.maintenance.enabled": "✅ Maintenance mode enabled",
+        "admin.maintenance.disabled": "✅ Maintenance mode disabled",
 
         # === Errors ===
         "errors.not_subscribed": "You are not subscribed",

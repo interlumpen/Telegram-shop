@@ -38,7 +38,7 @@ def profile_keyboard(referral_percent: int, user_items: int = 0) -> InlineKeyboa
     return kb.as_markup()
 
 
-def admin_console_keyboard() -> InlineKeyboardMarkup:
+def admin_console_keyboard(maintenance_mode: bool = False) -> InlineKeyboardMarkup:
     """
     Admin panel.
     """
@@ -48,6 +48,8 @@ def admin_console_keyboard() -> InlineKeyboardMarkup:
     kb.button(text=localize("admin.menu.categories"), callback_data="categories_management")
     kb.button(text=localize("admin.menu.users"), callback_data="user_management")
     kb.button(text=localize("admin.menu.broadcast"), callback_data="send_message")
+    maintenance_key = "admin.menu.maintenance_on" if maintenance_mode else "admin.menu.maintenance_off"
+    kb.button(text=localize(maintenance_key), callback_data="toggle_maintenance")
     kb.button(text=localize("btn.back"), callback_data="back_to_menu")
     kb.adjust(1)
     return kb.as_markup()

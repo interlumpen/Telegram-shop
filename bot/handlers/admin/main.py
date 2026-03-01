@@ -11,6 +11,11 @@ from bot.database.models import Permission
 router = Router()
 
 
+def _get_auth_middleware():
+    from bot.main import auth_middleware
+    return auth_middleware
+
+
 @router.callback_query(F.data == 'console', HasPermissionFilter(permission=Permission.SHOP_MANAGE))
 async def console_callback_handler(call: CallbackQuery, state: FSMContext):
     """
@@ -19,8 +24,35 @@ async def console_callback_handler(call: CallbackQuery, state: FSMContext):
     user_id = call.from_user.id
     role = await check_role_cached(user_id)
     if role > 1:
-        await call.message.edit_text(localize("admin.menu.main"), reply_markup=admin_console_keyboard())
+        mw = _get_auth_middleware()
+        maintenance = mw.maintenance_mode if mw else False
+        await call.message.edit_text(
+            localize("admin.menu.main"),
+            reply_markup=admin_console_keyboard(maintenance_mode=maintenance),
+        )
     else:
         await call.answer(localize("admin.menu.rights"))
 
     await state.clear()
+
+
+@router.callback_query(F.data == 'toggle_maintenance', HasPermissionFilter(permission=Permission.SHOP_MANAGE))
+async def toggle_maintenance_handler(call: CallbackQuery):
+    """
+    Toggle maintenance mode on/off.
+    """
+    mw = _get_auth_middleware()
+    if not mw:
+        return
+
+    mw.maintenance_mode = not mw.maintenance_mode
+
+    if mw.maintenance_mode:
+        await call.answer(localize("admin.maintenance.enabled"), show_alert=True)
+    else:
+        await call.answer(localize("admin.maintenance.disabled"), show_alert=True)
+
+    await call.message.edit_text(
+        localize("admin.menu.main"),
+        reply_markup=admin_console_keyboard(maintenance_mode=mw.maintenance_mode),
+    )
