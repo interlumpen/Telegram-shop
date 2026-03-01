@@ -1,6 +1,6 @@
 import logging
 from contextlib import contextmanager
-from sqlalchemy import create_engine, Engine, QueuePool
+from sqlalchemy import create_engine, event, Engine, QueuePool
 from sqlalchemy.orm import declarative_base, sessionmaker
 
 from bot.database.dsn import dsn
@@ -31,6 +31,11 @@ class Database(metaclass=SingletonMeta):
                 "client_encoding": "utf8"
             }
         )
+
+        # Force UTF-8 at the psycopg2 driver level after each connection.
+        @event.listens_for(self.__engine, "connect")
+        def _set_client_encoding(dbapi_connection, connection_record):
+            dbapi_connection.set_client_encoding('UTF8')
 
         # Pool state logging
         logging.info(f"Database pool initialized: size={20}, max_overflow={40}")

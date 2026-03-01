@@ -127,7 +127,7 @@ async def __on_shutdown(dp: Dispatcher, bot: Bot) -> None:
     metrics = get_metrics()
     if metrics:
         summary = metrics.get_metrics_summary()
-        with open("data/final_metrics.json", "w") as f:
+        with open("data/final_metrics.json", "w", encoding="utf-8") as f:
             json.dump(summary, f, indent=2)
 
     # Recovery Manager Stop

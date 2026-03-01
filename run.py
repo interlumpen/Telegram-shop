@@ -2,7 +2,7 @@ import asyncio
 import logging
 from dotenv import load_dotenv
 
-load_dotenv()
+load_dotenv(encoding='utf-8')
 
 from bot import start_bot
 
