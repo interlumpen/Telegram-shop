@@ -27,7 +27,7 @@ class Database(metaclass=SingletonMeta):
             # Additional optimizations
             connect_args={
                 "connect_timeout": 10,
-                "options": "-c statement_timeout=30000",  # 30 seconds per request
+                "options": "-c statement_timeout=30000 -c lc_messages=C",
                 "client_encoding": "utf8"
             }
         )
