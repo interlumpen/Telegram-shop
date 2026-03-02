@@ -19,7 +19,7 @@ from bot.database.methods import (
 )
 from bot.keyboards import back, simple_buttons, lazy_paginated_keyboard
 from bot.filters import HasPermissionFilter
-from bot.logger_mesh import audit_logger
+from bot.database.methods.audit import log_audit
 from bot.misc import EnvKeys, LazyPaginator, sanitize_html, SearchQuery, StatsCache, get_cache_manager
 from bot.i18n import localize
 from bot.states import GoodsFSM
@@ -336,6 +336,6 @@ async def process_item_show(message: Message, state: FSMContext):
             localize("errors.invalid_data"),
             reply_markup=back("show_bought_item")
         )
-        audit_logger.error(f"Search error: {e}")
+        log_audit("search_error", level="ERROR", details=str(e))
 
     await state.clear()

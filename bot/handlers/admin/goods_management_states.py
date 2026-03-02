@@ -10,7 +10,7 @@ from bot.database.models import Permission
 from bot.database.methods import get_item_info_cached, delete_item, get_goods_info, delete_item_from_position, \
     query_items_in_position
 from bot.keyboards.inline import back, simple_buttons, lazy_paginated_keyboard
-from bot.logger_mesh import audit_logger
+from bot.database.methods.audit import log_audit
 from bot.filters import HasPermissionFilter
 from bot.misc import EnvKeys, LazyPaginator
 from bot.states import GoodsFSM
@@ -64,9 +64,7 @@ async def delete_str_item(message: Message, state):
             reply_markup=back('goods_management')
         )
         admin_info = await message.bot.get_chat(message.from_user.id)
-        audit_logger.info(
-            f'User {message.from_user.id} ({admin_info.first_name}) deleted the position "{item_name}"'
-        )
+        log_audit("delete_item", user_id=message.from_user.id, resource_type="Item", resource_id=item_name, details=f"admin={admin_info.first_name}")
     await state.clear()
 
 
@@ -345,6 +343,4 @@ async def process_delete_item_from_position(call: CallbackQuery, state: FSMConte
         )
 
     admin_info = await call.message.bot.get_chat(call.from_user.id)
-    audit_logger.info(
-        f"User {call.from_user.id} ({admin_info.first_name}) deleted product with id={item_id} from position {position_name or '<?>'}"
-    )
+    log_audit("delete_item_value", user_id=call.from_user.id, resource_type="ItemValue", resource_id=str(item_id), details=f"admin={admin_info.first_name}, position={position_name or '<?>'}")

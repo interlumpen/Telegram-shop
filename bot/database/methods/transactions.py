@@ -7,6 +7,7 @@ from bot.database import Database
 from bot.misc import EnvKeys
 from bot.database.methods.read import invalidate_user_cache, invalidate_stats_cache
 from bot.database.methods.cache_utils import safe_create_task
+from bot.database.methods.audit import log_audit
 
 
 def buy_item_transaction(telegram_id: int, item_name: str) -> tuple[bool, str, dict | None]:
@@ -87,6 +88,14 @@ def buy_item_transaction(telegram_id: int, item_name: str) -> tuple[bool, str, d
 
         except Exception as e:
             s.rollback()
+            log_audit(
+                "purchase_failed",
+                level="WARNING",
+                user_id=telegram_id,
+                resource_type="Item",
+                resource_id=item_name,
+                details=str(e),
+            )
             return False, f"transaction_error: {str(e)}", None
 
 
@@ -156,6 +165,13 @@ def process_payment_with_referral(
 
                     if referrer:
                         referrer.balance += referral_amount
+                        log_audit(
+                            "referral_bonus",
+                            user_id=user.referral_id,
+                            resource_type="User",
+                            resource_id=str(user_id),
+                            details=f"paid={amount}, bonus={referral_amount}",
+                        )
 
                         # Create a referral credit record
                         from bot.database.models import ReferralEarnings
@@ -180,4 +196,11 @@ def process_payment_with_referral(
 
         except Exception as e:
             s.rollback()
+            log_audit(
+                "payment_failed",
+                level="WARNING",
+                user_id=user_id,
+                resource_type="Payment",
+                details=f"provider={provider}, amount={amount}, error={e}",
+            )
             return False, f"error: {str(e)}"

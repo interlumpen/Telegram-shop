@@ -9,7 +9,7 @@ from bot.database.methods import (
     check_category_cached, get_item_info_cached, create_item, add_values_to_item
 )
 from bot.keyboards.inline import back, question_buttons, simple_buttons
-from bot.logger_mesh import audit_logger
+from bot.database.methods.audit import log_audit
 from bot.filters import HasPermissionFilter
 from bot.misc import EnvKeys
 from bot.i18n import localize
@@ -217,9 +217,7 @@ async def finish_adding_items_callback_handler(call: CallbackQuery, state):
             await call.answer(localize("errors.channel.telegram_bad_request", e=e))
 
     admin_info = await call.message.bot.get_chat(call.from_user.id)
-    audit_logger.info(
-        f'Admin {call.from_user.id} ({admin_info.first_name}) created a new item "{item_name}"'
-    )
+    log_audit("create_item", user_id=call.from_user.id, resource_type="Item", resource_id=item_name, details=f"admin={admin_info.first_name}")
     await state.clear()
 
 
@@ -271,7 +269,5 @@ async def finish_adding_item_callback_handler(message: Message, state):
 
     await message.answer(localize('admin.goods.add.single.created'), reply_markup=back('goods_management'))
     admin_info = await message.bot.get_chat(message.from_user.id)
-    audit_logger.info(
-        f'Admin {message.from_user.id} ({admin_info.first_name}) created an infinite item "{item_name}"'
-    )
+    log_audit("create_item", user_id=message.from_user.id, resource_type="Item", resource_id=item_name, details=f"admin={admin_info.first_name}, infinite=true")
     await state.clear()

@@ -166,6 +166,11 @@ class BoughtGoods(Database.BASE):
     unique_id = Column(BigInteger, nullable=False, unique=True)
     user_telegram_id = relationship("User", back_populates="user_goods")
 
+    __table_args__ = (
+        Index('ix_bought_goods_datetime', 'bought_datetime'),
+        Index('ix_bought_goods_buyer_datetime', 'buyer_id', 'bought_datetime'),
+    )
+
     def __init__(self, name: str, value: str, price, bought_datetime, unique_id, buyer_id: int = 0, **kw: Any):
         super().__init__(**kw)
         self.item_name = name
@@ -179,10 +184,14 @@ class BoughtGoods(Database.BASE):
 class Operations(Database.BASE):
     __tablename__ = 'operations'
     id = Column(Integer, primary_key=True)
-    user_id = Column(BigInteger, ForeignKey('users.telegram_id', ondelete="CASCADE"), nullable=False, index=True)
+    user_id = Column(BigInteger, ForeignKey('users.telegram_id', ondelete="SET NULL"), nullable=True, index=True)
     operation_value = Column(Numeric(12, 2), nullable=False)
     operation_time = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
     user_telegram_id = relationship("User", back_populates="user_operations")
+
+    __table_args__ = (
+        Index('ix_operations_time', 'operation_time'),
+    )
 
     def __init__(self, user_id: int, operation_value, operation_time, **kw: Any):
         super().__init__(**kw)
@@ -196,7 +205,7 @@ class Payments(Database.BASE):
     id = Column(Integer, primary_key=True)
     provider = Column(String(32), nullable=False, index=True)
     external_id = Column(String(128), nullable=False)
-    user_id = Column(BigInteger, ForeignKey('users.telegram_id', ondelete="CASCADE"), nullable=False, index=True)
+    user_id = Column(BigInteger, ForeignKey('users.telegram_id', ondelete="SET NULL"), nullable=True, index=True)
     amount = Column(Numeric(12, 2), nullable=False)
     currency = Column(String(8), nullable=False)
     status = Column(String(16), nullable=False, default="pending")
@@ -205,6 +214,7 @@ class Payments(Database.BASE):
 
     __table_args__ = (
         UniqueConstraint('provider', 'external_id', name='uq_payment_provider_ext'),
+        Index('ix_payments_status_created', 'status', 'created_at'),
     )
 
 
@@ -240,6 +250,28 @@ class ReferralEarnings(Database.BASE):
         self.referral_id = referral_id
         self.amount = amount
         self.original_amount = original_amount
+
+
+class AuditLog(Database.BASE):
+    __tablename__ = 'audit_log'
+    id = Column(Integer, primary_key=True)
+    timestamp = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
+    level = Column(String(8), nullable=False, default="INFO")
+    user_id = Column(BigInteger, nullable=True)
+    action = Column(String(64), nullable=False)
+    resource_type = Column(String(32), nullable=True)
+    resource_id = Column(String(128), nullable=True)
+    details = Column(Text, nullable=True)
+    ip_address = Column(String(45), nullable=True)
+
+    __table_args__ = (
+        Index('ix_audit_log_timestamp', 'timestamp'),
+        Index('ix_audit_log_user_id', 'user_id'),
+        Index('ix_audit_log_action', 'action'),
+    )
+
+    def __repr__(self):
+        return f'<AuditLog {self.action} user={self.user_id} @ {self.timestamp}>'
 
 
 def register_models():

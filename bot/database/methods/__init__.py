@@ -5,3 +5,4 @@ from bot.database.methods.delete import *
 from bot.database.methods.lazy_queries import *
 from bot.database.methods.transactions import *
 from bot.database.methods.cache_utils import *
+from bot.database.methods.audit import log_audit

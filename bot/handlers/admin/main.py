@@ -7,6 +7,7 @@ from bot.keyboards import admin_console_keyboard
 from bot.database.methods import check_role_cached
 from bot.filters import HasPermissionFilter
 from bot.database.models import Permission
+from bot.database.methods.audit import log_audit
 
 router = Router()
 
@@ -46,6 +47,12 @@ async def toggle_maintenance_handler(call: CallbackQuery):
         return
 
     mw.maintenance_mode = not mw.maintenance_mode
+    state_str = "ON" if mw.maintenance_mode else "OFF"
+    log_audit(
+        "toggle_maintenance",
+        user_id=call.from_user.id,
+        details=f"admin={call.from_user.username}, state={state_str}",
+    )
 
     if mw.maintenance_mode:
         await call.answer(localize("admin.maintenance.enabled"), show_alert=True)

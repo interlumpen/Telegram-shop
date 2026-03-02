@@ -38,7 +38,7 @@ via the command line (CLI) without the need for a shell and advanced monitoring 
 - [Tech Stack](#-tech-stack)
 - [Environment Variables](#-environment-variables)
 - [Installation](#-installation)
-- [Monitoring & Metrics](#-monitoring--metrics)
+- [Admin Panel & Metrics](#-admin-panel--metrics)
 - [Usage](#-usage)
 - [API Documentation](#-api-documentation)
 - [Testing](#-testing)
@@ -69,7 +69,7 @@ via the command line (CLI) without the need for a shell and advanced monitoring 
     - User management with balance control
     - Product and category management
     - Broadcast messaging system
-    - Audit logging with rotation
+    - Dual-write audit logging (rotating file + database table with web UI)
 
 ### User Experience
 
@@ -98,7 +98,8 @@ via the command line (CLI) without the need for a shell and advanced monitoring 
 - **SQLAdmin Web Interface**:
     - Full database admin panel with authentication
     - Browse, search, filter, and edit all tables
-    - Read-only views for purchases, payments, and operations
+    - Read-only views for purchases, payments, operations, and audit logs
+    - All CRUD operations via web panel are audit-logged automatically
 - **Real-Time Metrics Collection**:
     - Event tracking (purchases, payments, user actions)
     - Performance metrics (response times, query durations)
@@ -190,6 +191,7 @@ via the command line (CLI) without the need for a shell and advanced monitoring 
 - **Products**: Categories, items, stock management
 - **Transactions**: Purchases, payments, operations
 - **Referrals**: Earnings tracking and statistics
+- **Audit Log**: Structured action log with user, action, resource, details, and IP tracking
 
 ### Key Design Patterns
 
@@ -240,7 +242,7 @@ via the command line (CLI) without the need for a shell and advanced monitoring 
 ### DevOps
 
 - **Containerization**: Docker & Docker Compose
-- **Logging**: Rotating file handlers with audit trails
+- **Logging**: Rotating file handlers + structured database audit log (`audit_log` table)
 - **Testing**: Pytest with async support
 - **CI/CD Ready**: Environment-based configuration
 - **Health Checks**: Built-in health monitoring endpoints
@@ -400,7 +402,7 @@ The bot will automatically:
 docker compose logs -f bot
 ```
 
-5. Access admin panel
+5. **Access admin panel**
 
 Open in browser: http://localhost:9090/admin (login: admin/admin)
 
@@ -410,7 +412,7 @@ Open in browser: http://localhost:9090/admin (login: admin/admin)
 
 ```bash
 git clone https://github.com/interlumpen/Telegram-shop.git
-cd telegram-shop-bot
+cd Telegram-shop
 ```
 
 2. **Create virtual environment**
@@ -448,25 +450,19 @@ export POSTGRES_PASSWORD="your_password"
 # Set other required variables
 ```
 
-6. **Update DATABASE_URL** in `bot/misc/env.py`:
-
-```python
-DATABASE_URL = "postgresql+psycopg2://shop_user:your_password@localhost:5432/telegram_shop"
-```
-
-7. **Run migrations**
+6. **Run migrations**
 
 ```bash
 alembic upgrade head
 ```
 
-8. **Start the bot**
+7. **Start the bot**
 
 ```bash
 python run.py
 ```
 
-9. Access admin panel (optional)
+8. **Access admin panel** (optional)
 
 Open in browser: http://localhost:9090/admin
 
@@ -499,9 +495,10 @@ alembic upgrade head
 The bot includes a web-based admin panel powered by SQLAdmin, accessible at http://localhost:9090/admin
 
 - Login with credentials from your `.env` file (`ADMIN_USERNAME` / `ADMIN_PASSWORD`)
-- Browse all database tables: users, roles, categories, products, purchases, payments, operations, referral earnings
+- Browse all database tables: users, roles, categories, products, purchases, payments, operations, referral earnings, audit logs
 - Search, filter, and sort records
-- Read-only access for financial tables (purchases, payments, operations)
+- Read-only access for financial tables (purchases, payments, operations) and audit logs
+- All create/edit/delete operations through the web panel are automatically audit-logged
 
 #### Monitoring Endpoints
 
@@ -583,7 +580,7 @@ Available for users with ADMIN/OWNER role:
 
 ![Products](assets/shop_menu_picture.png)
 
-#### Categories & Items  Management
+#### Categories & Items Management
 
 - Categories, products, stock control
 
@@ -694,7 +691,23 @@ await recovery_manager.start()
 
 # Manual recovery trigger
 await recovery_manager.recover_pending_payments()
-await recovery_manager.recover_interrupted_broadcasts()
+```
+
+### Audit Logging
+
+```python
+from bot.database.methods.audit import log_audit
+
+# Dual-write: logs to both rotating file and audit_log DB table
+log_audit(
+    "purchase",                              # action name
+    level="INFO",                            # INFO / WARNING / ERROR
+    user_id=123456789,                       # who performed the action
+    resource_type="Item",                    # affected entity type
+    resource_id="Premium Account",           # affected entity ID
+    details="price=100 RUB",                 # free-form context
+    ip_address=None,                         # for web admin actions
+)
 ```
 
 ### Caching & Performance

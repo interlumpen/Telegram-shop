@@ -1,5 +1,5 @@
-import json
 import logging
+from typing import Any
 
 from sqladmin import Admin, ModelView
 from sqladmin.authentication import AuthenticationBackend
@@ -10,12 +10,14 @@ from starlette.routing import Route
 from sqlalchemy import text
 
 from bot.misc import EnvKeys
+from bot.database.methods.audit import log_audit
 
 logger = logging.getLogger(__name__)
 from bot.database.main import Database
 from bot.database.models.main import (
     User, Role, Categories, Goods, ItemValues,
     BoughtGoods, Operations, Payments, ReferralEarnings,
+    AuditLog,
 )
 from bot.misc.metrics import get_metrics
 from bot.misc.caching import get_cache_manager
@@ -30,10 +32,13 @@ class AdminAuth(AuthenticationBackend):
 
         if username == EnvKeys.ADMIN_USERNAME and password == EnvKeys.ADMIN_PASSWORD:
             request.session.update({"authenticated": True})
+            log_audit("web_login", user_id=None, details=f"user={username}", ip_address=request.client.host)
             return True
+        log_audit("web_login_failed", level="WARNING", details=f"user={username}", ip_address=request.client.host)
         return False
 
     async def logout(self, request: Request) -> bool:
+        log_audit("web_logout", ip_address=request.client.host)
         request.session.clear()
         return True
 
@@ -41,8 +46,30 @@ class AdminAuth(AuthenticationBackend):
         return request.session.get("authenticated", False)
 
 
+# Audited base view for mutable models
+class AuditModelView(ModelView):
+    async def after_model_change(self, data: dict, model: Any, is_created: bool, request: Request) -> None:
+        action = f"sqladmin_{'create' if is_created else 'update'}"
+        log_audit(
+            action,
+            resource_type=self.name,
+            resource_id=str(getattr(model, 'id', getattr(model, 'name', None))),
+            details=repr(model),
+            ip_address=request.client.host,
+        )
+
+    async def after_model_delete(self, model: Any, request: Request) -> None:
+        log_audit(
+            "sqladmin_delete",
+            resource_type=self.name,
+            resource_id=str(getattr(model, 'id', getattr(model, 'name', None))),
+            details=repr(model),
+            ip_address=request.client.host,
+        )
+
+
 # Model Views
-class UserAdmin(ModelView, model=User):
+class UserAdmin(AuditModelView, model=User):
     column_list = [User.telegram_id, User.balance, User.role_id, User.referral_id,
                    User.registration_date, User.is_blocked]
     column_searchable_list = [User.telegram_id]
@@ -53,7 +80,7 @@ class UserAdmin(ModelView, model=User):
     icon = "fa-solid fa-users"
 
 
-class RoleAdmin(ModelView, model=Role):
+class RoleAdmin(AuditModelView, model=Role):
     column_list = [Role.id, Role.name, Role.default, Role.permissions]
     column_sortable_list = [Role.id, Role.name]
     name = "Role"
@@ -61,7 +88,7 @@ class RoleAdmin(ModelView, model=Role):
     icon = "fa-solid fa-shield-halved"
 
 
-class CategoryAdmin(ModelView, model=Categories):
+class CategoryAdmin(AuditModelView, model=Categories):
     column_list = [Categories.name]
     column_searchable_list = [Categories.name]
     name = "Category"
@@ -69,7 +96,7 @@ class CategoryAdmin(ModelView, model=Categories):
     icon = "fa-solid fa-folder"
 
 
-class GoodsAdmin(ModelView, model=Goods):
+class GoodsAdmin(AuditModelView, model=Goods):
     column_list = [Goods.name, Goods.price, Goods.description, Goods.category_name]
     column_searchable_list = [Goods.name, Goods.category_name]
     column_sortable_list = [Goods.name, Goods.price, Goods.category_name]
@@ -78,7 +105,7 @@ class GoodsAdmin(ModelView, model=Goods):
     icon = "fa-solid fa-box"
 
 
-class ItemValuesAdmin(ModelView, model=ItemValues):
+class ItemValuesAdmin(AuditModelView, model=ItemValues):
     column_list = [ItemValues.id, ItemValues.item_name, ItemValues.value, ItemValues.is_infinity]
     column_searchable_list = [ItemValues.item_name]
     column_sortable_list = [ItemValues.id, ItemValues.item_name]
@@ -143,6 +170,21 @@ class ReferralEarningsAdmin(ModelView, model=ReferralEarnings):
     name = "Referral Earning"
     name_plural = "Referral Earnings"
     icon = "fa-solid fa-handshake"
+
+
+class AuditLogAdmin(ModelView, model=AuditLog):
+    column_list = [AuditLog.id, AuditLog.timestamp, AuditLog.level, AuditLog.user_id,
+                   AuditLog.action, AuditLog.resource_type, AuditLog.resource_id,
+                   AuditLog.details, AuditLog.ip_address]
+    column_searchable_list = [AuditLog.action, AuditLog.resource_type, AuditLog.details]
+    column_sortable_list = [AuditLog.id, AuditLog.timestamp, AuditLog.level, AuditLog.action]
+    column_default_sort = (AuditLog.id, True)
+    can_create = False
+    can_edit = False
+    can_delete = False
+    name = "Audit Log"
+    name_plural = "Audit Logs"
+    icon = "fa-solid fa-clipboard-list"
 
 
 # Health & Metrics Endpoints
@@ -220,5 +262,6 @@ def create_admin_app() -> Starlette:
     admin.add_view(OperationsAdmin)
     admin.add_view(PaymentsAdmin)
     admin.add_view(ReferralEarningsAdmin)
+    admin.add_view(AuditLogAdmin)
 
     return app

@@ -6,7 +6,7 @@ from bot.database.models import Permission
 from bot.database.methods import check_category_cached, create_category, delete_category, update_category
 from bot.keyboards.inline import back, simple_buttons
 from bot.filters import HasPermissionFilter
-from bot.logger_mesh import audit_logger
+from bot.database.methods.audit import log_audit
 from bot.misc import CategoryRequest
 from bot.states import CategoryFSM
 
@@ -63,16 +63,14 @@ async def process_category_for_add(message: Message, state):
             )
 
             admin_info = await message.bot.get_chat(message.from_user.id)
-            audit_logger.info(
-                f'Admin {message.from_user.id} ({admin_info.first_name}) created category "{category_name}"'
-            )
+            log_audit("create_category", user_id=message.from_user.id, resource_type="Category", resource_id=category_name, details=f"admin={admin_info.first_name}")
 
     except Exception as e:
         await message.answer(
             localize("errors.invalid_data"),
             reply_markup=back("categories_management"),
         )
-        audit_logger.error(f"Category creation error: {e}")
+        log_audit("create_category_error", level="ERROR", user_id=message.from_user.id, resource_type="Category", details=str(e))
 
     await state.clear()
 
@@ -109,9 +107,7 @@ async def process_category_for_delete(message: Message, state):
             reply_markup=back("categories_management"),
         )
         admin_info = await message.bot.get_chat(message.from_user.id)
-        audit_logger.info(
-            f'Admin {message.from_user.id} ({admin_info.first_name}) deleted category "{category_name}"'
-        )
+        log_audit("delete_category", user_id=message.from_user.id, resource_type="Category", resource_id=category_name, details=f"admin={admin_info.first_name}")
 
     await state.clear()
 
@@ -175,8 +171,6 @@ async def check_category_name_for_update(message: Message, state):
     )
 
     admin_info = await message.bot.get_chat(message.from_user.id)
-    audit_logger.info(
-        f'Admin {message.from_user.id} ({admin_info.first_name}) renamed category "{old_name}" to "{new_name}"'
-    )
+    log_audit("rename_category", user_id=message.from_user.id, resource_type="Category", resource_id=new_name, details=f"admin={admin_info.first_name}, old_name={old_name}")
 
     await state.clear()

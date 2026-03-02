@@ -10,7 +10,7 @@ from bot.i18n import localize
 from bot.database.models import Permission
 from bot.database.methods import get_all_users
 from bot.keyboards import back, close
-from bot.logger_mesh import audit_logger
+from bot.database.methods.audit import log_audit
 from bot.filters import HasPermissionFilter
 from bot.misc import BroadcastMessage, sanitize_html
 from bot.misc.services import BroadcastManager, BroadcastStats
@@ -73,7 +73,7 @@ async def broadcast_messages(message: Message, state: FSMContext):
                     reply_markup=back("send_message")
                 )
             except (TelegramBadRequest, TelegramForbiddenError) as e:
-                audit_logger.warning(f"Failed to update broadcast progress message: {e}")
+                log_audit("broadcast_progress_fail", level="WARNING", details=str(e))
 
         # Start the mailing
         broadcast_manager = BroadcastManager(
@@ -105,17 +105,14 @@ async def broadcast_messages(message: Message, state: FSMContext):
 
         # Logging
         user_info = await message.bot.get_chat(message.from_user.id)
-        audit_logger.info(
-            f"User {user_info.id} ({user_info.first_name}) sent a broadcast. "
-            f"Delivered to {stats.sent}/{stats.total} users in {duration} seconds"
-        )
+        log_audit("broadcast_sent", user_id=user_info.id, details=f"admin={user_info.first_name}, delivered={stats.sent}/{stats.total}, duration={duration}s")
 
     except Exception as e:
         await message.answer(
             localize("errors.invalid_data"),
             reply_markup=back("send_message")
         )
-        audit_logger.error(f"Broadcast error: {e}")
+        log_audit("broadcast_error", level="ERROR", user_id=message.from_user.id, details=str(e))
 
     await state.clear()
 

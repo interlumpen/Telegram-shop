@@ -3,6 +3,7 @@ import asyncio
 from bot.database.methods import invalidate_item_cache, invalidate_category_cache
 from bot.database.methods.cache_utils import safe_create_task
 from bot.database.models import Database, Goods, ItemValues, Categories
+from bot.database.methods.audit import log_audit
 
 
 def delete_item(item_name: str) -> None:
@@ -30,6 +31,15 @@ def delete_item_from_position(item_id: int) -> None:
 def delete_category(category_name: str) -> None:
     """Delete a category and all products/stock inside it."""
     with Database().session() as s:
+        items = s.query(Goods.name).filter(Goods.category_name == category_name).all()
+        if items:
+            item_names = [i[0] for i in items]
+            log_audit(
+                "cascade_delete",
+                resource_type="Category",
+                resource_id=category_name,
+                details=f"deleted items: {item_names}",
+            )
         s.query(Categories).filter(Categories.name == category_name).delete(synchronize_session=False)
 
     # Invalidate the cache

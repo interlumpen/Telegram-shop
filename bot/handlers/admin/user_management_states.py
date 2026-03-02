@@ -15,7 +15,7 @@ from bot.database.methods import (
     is_user_blocked
 )
 from bot.keyboards import back, close, simple_buttons, lazy_paginated_keyboard
-from bot.logger_mesh import audit_logger
+from bot.database.methods.audit import log_audit
 from bot.filters import HasPermissionFilter
 from bot.states import UserMgmtStates
 
@@ -493,13 +493,10 @@ async def process_admin_for_purpose(call: CallbackQuery):
             reply_markup=close()
         )
     except (TelegramBadRequest, TelegramForbiddenError) as e:
-        audit_logger.error(f"Failed to notify user {user_id} about admin role assignment: {e}")
+        log_audit("set_admin_notify_fail", level="ERROR", user_id=user_id, details=str(e))
 
     admin_info = await call.message.bot.get_chat(call.from_user.id)
-    audit_logger.info(
-        f"User {call.from_user.id} ({admin_info.first_name}) assigned user"
-        f"{user_id} ({user_info.first_name}) as administrator"
-    )
+    log_audit("set_admin", user_id=call.from_user.id, resource_type="User", resource_id=str(user_id), details=f"admin={admin_info.first_name}, target={user_info.first_name}")
 
 
 @router.callback_query(F.data.startswith('remove-admin_'), HasPermissionFilter(Permission.ADMINS_MANAGE))
@@ -539,13 +536,10 @@ async def process_admin_for_remove(call: CallbackQuery):
             reply_markup=close()
         )
     except (TelegramBadRequest, TelegramForbiddenError) as e:
-        audit_logger.error(f"Failed to notify user {user_id} about admin role removal: {e}")
+        log_audit("remove_admin_notify_fail", level="ERROR", user_id=user_id, details=str(e))
 
     admin_info = await call.message.bot.get_chat(call.from_user.id)
-    audit_logger.info(
-        f"User {call.from_user.id} ({admin_info.first_name}) revoked the role administrator"
-        f" from the user {user_id} ({user_info.first_name})"
-    )
+    log_audit("remove_admin", user_id=call.from_user.id, resource_type="User", resource_id=str(user_id), details=f"admin={admin_info.first_name}, target={user_info.first_name}")
 
 
 @router.callback_query(F.data.startswith('fill-user-balance_'), HasPermissionFilter(Permission.USERS_MANAGE))
@@ -603,10 +597,7 @@ async def process_replenish_user_balance(message: Message, state: FSMContext):
 
         # Audit logging
         admin_info = await message.bot.get_chat(message.from_user.id)
-        audit_logger.info(
-            f"User {message.from_user.id} ({admin_info.first_name}) topped up the balance of user "
-            f"{user_id} ({user_info.first_name}) by {int(amount)}"
-        )
+        log_audit("balance_topup", user_id=message.from_user.id, resource_type="User", resource_id=str(user_id), details=f"admin={admin_info.first_name}, target={user_info.first_name}, amount={int(amount)}")
 
         # Notify user
         try:
@@ -618,7 +609,7 @@ async def process_replenish_user_balance(message: Message, state: FSMContext):
                 reply_markup=close()
             )
         except (TelegramBadRequest, TelegramForbiddenError) as e:
-            audit_logger.error(f"Failed to notify user {user_id} about balance top-up: {e}")
+            log_audit("balance_topup_notify_fail", level="ERROR", user_id=user_id, details=str(e))
 
         await state.clear()
 
@@ -698,10 +689,7 @@ async def process_deduct_user_balance(message: Message, state: FSMContext):
 
         # Audit logging
         admin_info = await message.bot.get_chat(message.from_user.id)
-        audit_logger.info(
-            f"User {message.from_user.id} ({admin_info.first_name}) deducted {int(amount)} from user "
-            f"{user_id} ({user_info.first_name})"
-        )
+        log_audit("balance_deduct", user_id=message.from_user.id, resource_type="User", resource_id=str(user_id), details=f"admin={admin_info.first_name}, target={user_info.first_name}, amount={int(amount)}")
 
         # Notify user
         try:
@@ -713,7 +701,7 @@ async def process_deduct_user_balance(message: Message, state: FSMContext):
                 reply_markup=close()
             )
         except (TelegramBadRequest, TelegramForbiddenError) as e:
-            audit_logger.error(f"Failed to notify user {user_id} about balance deduction: {e}")
+            log_audit("balance_deduct_notify_fail", level="ERROR", user_id=user_id, details=str(e))
 
         await state.clear()
 
@@ -771,10 +759,7 @@ async def block_user_handler(call: CallbackQuery):
     )
 
     admin_info = await call.message.bot.get_chat(call.from_user.id)
-    audit_logger.info(
-        f"Admin {call.from_user.id} ({admin_info.first_name}) blocked user "
-        f"{user_id} ({user_info.first_name})"
-    )
+    log_audit("block_user", user_id=call.from_user.id, resource_type="User", resource_id=str(user_id), details=f"admin={admin_info.first_name}, target={user_info.first_name}")
 
 
 @router.callback_query(F.data.startswith('unblock-user_'), HasPermissionFilter(Permission.USERS_MANAGE))
@@ -803,7 +788,4 @@ async def unblock_user_handler(call: CallbackQuery):
     )
 
     admin_info = await call.message.bot.get_chat(call.from_user.id)
-    audit_logger.info(
-        f"Admin {call.from_user.id} ({admin_info.first_name}) unblocked user "
-        f"{user_id} ({user_info.first_name})"
-    )
+    log_audit("unblock_user", user_id=call.from_user.id, resource_type="User", resource_id=str(user_id), details=f"admin={admin_info.first_name}, target={user_info.first_name}")

@@ -8,7 +8,7 @@ from bot.database.models import Permission
 from bot.database.methods import get_item_info_cached, add_values_to_item, update_item, check_value, delete_only_items
 
 from bot.keyboards.inline import back, question_buttons, simple_buttons
-from bot.logger_mesh import audit_logger
+from bot.database.methods.audit import log_audit
 from bot.filters import HasPermissionFilter
 from bot.misc import EnvKeys
 from bot.i18n import localize
@@ -149,9 +149,7 @@ async def updating_item_amount(call: CallbackQuery, state):
             await call.answer(localize("errors.channel.telegram_bad_request", e=e))
 
     admin_info = await call.message.bot.get_chat(call.from_user.id)
-    audit_logger.info(
-        f'Admin {call.from_user.id} ({admin_info.first_name}) added {added} value(s) to item "{item_name}".'
-    )
+    log_audit("add_item_values", user_id=call.from_user.id, resource_type="Item", resource_id=item_name, details=f"admin={admin_info.first_name}, added={added}")
     await state.clear()
 
 
@@ -248,9 +246,7 @@ async def update_item_process(call: CallbackQuery, state):
         update_item(item_old_name, item_new_name, item_description, price, category)
         await call.message.edit_text(localize('admin.goods.update.success'), reply_markup=back('goods_management'))
         admin_info = await call.message.bot.get_chat(call.from_user.id)
-        audit_logger.info(
-            f'Admin {call.from_user.id} ({admin_info.first_name}) updated item "{item_old_name}" → "{item_new_name}".'
-        )
+        log_audit("update_item", user_id=call.from_user.id, resource_type="Item", resource_id=item_new_name, details=f"admin={admin_info.first_name}, old_name={item_old_name}")
         await state.clear()
         return
 
@@ -293,9 +289,7 @@ async def update_item_infinity(message: Message, state):
 
     await message.answer(localize('admin.goods.update.success'), reply_markup=back('goods_management'))
     admin_info = await message.bot.get_chat(message.from_user.id)
-    audit_logger.info(
-        f'Admin {message.from_user.id} ({admin_info.first_name}) updated item "{item_old_name}" → "{item_new_name}".'
-    )
+    log_audit("update_item", user_id=message.from_user.id, resource_type="Item", resource_id=item_new_name, details=f"admin={admin_info.first_name}, old_name={item_old_name}")
     await state.clear()
 
 
@@ -401,7 +395,5 @@ async def update_item_no_infinity(call: CallbackQuery, state):
 
     await call.message.edit_text("\n".join(text_lines), parse_mode="HTML", reply_markup=back('goods_management'))
     admin_info = await call.message.bot.get_chat(call.from_user.id)
-    audit_logger.info(
-        f'Admin {call.from_user.id} ({admin_info.first_name}) updated item "{item_old_name}" → "{item_new_name}".'
-    )
+    log_audit("update_item", user_id=call.from_user.id, resource_type="Item", resource_id=item_new_name, details=f"admin={admin_info.first_name}, old_name={item_old_name}")
     await state.clear()

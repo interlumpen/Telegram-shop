@@ -4,7 +4,7 @@ from aiogram import BaseMiddleware
 from aiogram.types import TelegramObject, CallbackQuery, Message
 
 from bot.i18n import localize
-from bot.logger_mesh import audit_logger
+from bot.database.methods.audit import log_audit
 
 
 def check_suspicious_patterns(text: str) -> bool:
@@ -66,8 +66,10 @@ class SecurityMiddleware(BaseMiddleware):
             # Checking critical actions
             if self.is_critical_action(event.data):
                 # Logging a critical action
-                audit_logger.info(
-                    f"Critical action: user={user.id}, action={event.data[:50]}"
+                log_audit(
+                    "critical_action",
+                    user_id=user.id,
+                    details=f"callback={event.data[:50]}",
                 )
 
                 # Check that the callback is not too old (protection against replay attacks)
@@ -83,16 +85,22 @@ class SecurityMiddleware(BaseMiddleware):
         # Check for suspicious patterns in the data
         if isinstance(event, CallbackQuery) and event.data:
             if check_suspicious_patterns(event.data):
-                audit_logger.warning(
-                    f"Suspicious callback data from user {user.id}: {event.data[:100]}"
+                log_audit(
+                    "suspicious_callback",
+                    level="WARNING",
+                    user_id=user.id,
+                    details=f"data={event.data[:100]}",
                 )
                 await event.answer(localize("middleware.security.invalid_data"), show_alert=True)
                 return None
 
         if isinstance(event, Message) and event.text:
             if check_suspicious_patterns(event.text):
-                audit_logger.warning(
-                    f"Suspicious message from user {user.id}: {event.text[:100]}"
+                log_audit(
+                    "suspicious_message",
+                    level="WARNING",
+                    user_id=user.id,
+                    details=f"text={event.text[:100]}",
                 )
                 # We don't block messages, we just log them
 
@@ -136,7 +144,7 @@ class AuthenticationMiddleware(BaseMiddleware):
 
         # Check bot
         if user.is_bot:
-            audit_logger.warning(f"Bot attempted to interact: {user.id}")
+            log_audit("bot_interaction", level="WARNING", user_id=user.id)
             return None
 
         # Maintenance mode: block regular users
@@ -159,7 +167,7 @@ class AuthenticationMiddleware(BaseMiddleware):
                 role = await self.get_user_role_cached(user.id)
                 if role <= 1:  # Not admin
                     await event.answer(localize("middleware.security.not_admin"), show_alert=True)
-                    audit_logger.warning(f"Unauthorized admin access attempt by user {user.id}")
+                    log_audit("unauthorized_admin_access", level="WARNING", user_id=user.id)
                     return None
                 data['user_role'] = role
 
@@ -188,7 +196,7 @@ class AuthenticationMiddleware(BaseMiddleware):
         success = set_user_blocked(user_id, True)
         if success:
             self.blocked_users.add(user_id)
-            audit_logger.info(f"User {user_id} has been blocked")
+            log_audit("block_user", user_id=user_id, resource_type="User", resource_id=str(user_id))
         return success
 
     def unblock_user(self, user_id: int) -> bool:
@@ -197,5 +205,5 @@ class AuthenticationMiddleware(BaseMiddleware):
         success = set_user_blocked(user_id, False)
         if success:
             self.blocked_users.discard(user_id)
-            audit_logger.info(f"User {user_id} has been unblocked")
+            log_audit("unblock_user", user_id=user_id, resource_type="User", resource_id=str(user_id))
         return success
