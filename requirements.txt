@@ -7,7 +7,7 @@ aiohttp~=3.12.14
 redis~=6.4.0
 
 # Database drivers
-psycopg2-binary~=2.9
+psycopg[binary]~=3.2
 
 # Admin panel
 sqladmin>=0.20

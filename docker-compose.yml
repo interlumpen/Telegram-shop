@@ -29,7 +29,7 @@ services:
       - .env
     environment:
       POSTGRES_HOST: db
-      DATABASE_URL: postgresql+psycopg2://${POSTGRES_USER}:${POSTGRES_PASSWORD}@db:${DB_PORT}/${POSTGRES_DB}
+      DATABASE_URL: postgresql+psycopg://${POSTGRES_USER}:${POSTGRES_PASSWORD}@db:${DB_PORT}/${POSTGRES_DB}
       REDIS_HOST: redis
       REDIS_PORT: 6379
       REDIS_DB: 0
