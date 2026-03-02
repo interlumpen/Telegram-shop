@@ -1,16 +1,17 @@
 from datetime import datetime
 from decimal import Decimal
-from random import randint
+from uuid import uuid4
 
 from bot.database.models import User, ItemValues, Goods, BoughtGoods, Payments, Operations
 from bot.database import Database
+from bot.database.main import run_sync
 from bot.misc import EnvKeys
 from bot.database.methods.read import invalidate_user_cache, invalidate_stats_cache
 from bot.database.methods.cache_utils import safe_create_task
 from bot.database.methods.audit import log_audit
 
 
-def buy_item_transaction(telegram_id: int, item_name: str) -> tuple[bool, str, dict | None]:
+def _buy_item_transaction(telegram_id: int, item_name: str) -> tuple[bool, str, dict | None]:
     """
     Complete transactional purchase of goods with checks and locks.
     Returns: (success, message, purchase_data)
@@ -47,7 +48,7 @@ def buy_item_transaction(telegram_id: int, item_name: str) -> tuple[bool, str, d
 
             # 4. receive and block the goods for purchase
             item_value = s.query(ItemValues).filter(
-                ItemValues.item_name == item_name
+                ItemValues.item_id == goods.id
             ).with_for_update(skip_locked=True).first()
 
             if not item_value:
@@ -68,7 +69,7 @@ def buy_item_transaction(telegram_id: int, item_name: str) -> tuple[bool, str, d
                 price=price,
                 buyer_id=telegram_id,
                 bought_datetime=datetime.now(),
-                unique_id=str(randint(1_000_000_000, 9_999_999_999))
+                unique_id=uuid4().int >> 65  # 63-bit positive UUID-derived ID
             )
             s.add(bought_item)
 
@@ -99,7 +100,7 @@ def buy_item_transaction(telegram_id: int, item_name: str) -> tuple[bool, str, d
             return False, f"transaction_error: {str(e)}", None
 
 
-def process_payment_with_referral(
+def _process_payment_with_referral(
         user_id: int,
         amount: Decimal,
         provider: str,
@@ -204,3 +205,8 @@ def process_payment_with_referral(
                 details=f"provider={provider}, amount={amount}, error={e}",
             )
             return False, f"error: {str(e)}"
+
+
+# Async public API
+buy_item_transaction = run_sync(_buy_item_transaction)
+process_payment_with_referral = run_sync(_process_payment_with_referral)

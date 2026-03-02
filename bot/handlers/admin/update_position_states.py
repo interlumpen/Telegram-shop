@@ -43,7 +43,7 @@ async def check_item_name_for_amount_upd(message: Message, state):
         return
 
     # If item is infinite, we logically can't add individual values
-    if check_value(item_name):
+    if await check_value(item_name):
         await message.answer(
             localize('admin.goods.update.amount.infinity_forbidden'),
             reply_markup=back('goods_management')
@@ -105,7 +105,7 @@ async def updating_item_amount(call: CallbackQuery, state):
         seen_in_batch.add(v_norm)
 
         # Try insert — False means it already exists in DB
-        if add_values_to_item(item_name, v_norm, False):
+        if await add_values_to_item(item_name, v_norm, False):
             added += 1
         else:
             skipped_db_dup += 1
@@ -207,7 +207,7 @@ async def update_item_price(message: Message, state):
     item_old_name = data.get('item_old_name')
 
     # If the item is NOT infinite now — ask to make it infinite
-    if not check_value(item_old_name):
+    if not await check_value(item_old_name):
         await message.answer(
             localize('admin.goods.update.infinity.make.question'),
             reply_markup=question_buttons('change_make_infinity', 'goods_management')
@@ -243,7 +243,7 @@ async def update_item_process(call: CallbackQuery, state):
 
     if decision_yesno == 'no':
         # No type change (keep infinity/regular), update meta only
-        update_item(item_old_name, item_new_name, item_description, price, category)
+        await update_item(item_old_name, item_new_name, item_description, price, category)
         await call.message.edit_text(localize('admin.goods.update.success'), reply_markup=back('goods_management'))
         admin_info = await call.message.bot.get_chat(call.from_user.id)
         log_audit("update_item", user_id=call.from_user.id, resource_type="Item", resource_id=item_new_name, details=f"admin={admin_info.first_name}, old_name={item_old_name}")
@@ -283,9 +283,9 @@ async def update_item_infinity(message: Message, state):
     price = data.get('item_price')
     value = message.text
 
-    delete_only_items(item_old_name)
-    add_values_to_item(item_old_name, value, True)
-    update_item(item_old_name, item_new_name, item_description, price, category)
+    await delete_only_items(item_old_name)
+    await add_values_to_item(item_old_name, value, True)
+    await update_item(item_old_name, item_new_name, item_description, price, category)
 
     await message.answer(localize('admin.goods.update.success'), reply_markup=back('goods_management'))
     admin_info = await message.bot.get_chat(message.from_user.id)
@@ -336,7 +336,7 @@ async def update_item_no_infinity(call: CallbackQuery, state):
     skipped_invalid = 0
     seen_in_batch: set[str] = set()
 
-    delete_only_items(item_old_name)
+    await delete_only_items(item_old_name)
 
     for v in raw_values:
         v_norm = (v or "").strip()
@@ -349,13 +349,13 @@ async def update_item_no_infinity(call: CallbackQuery, state):
             continue
         seen_in_batch.add(v_norm)
 
-        if add_values_to_item(item_old_name, v_norm, False):
+        if await add_values_to_item(item_old_name, v_norm, False):
             added += 1
         else:
             skipped_db_dup += 1
 
     # Update meta after values are in place
-    update_item(item_old_name, item_new_name, item_description, price, category)
+    await update_item(item_old_name, item_new_name, item_description, price, category)
 
     text_lines = [
         localize('admin.goods.update.success'),

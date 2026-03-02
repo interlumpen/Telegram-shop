@@ -46,14 +46,14 @@ async def start(message: Message, state: FSMContext):
     user_id = message.from_user.id
     await state.clear()
 
-    owner_max_role = select_max_role_id()
+    owner_max_role = await select_max_role_id()
     referral_id = message.text[7:] if message.text[7:] != str(user_id) else None
     user_role = owner_max_role if user_id == EnvKeys.OWNER_ID else 1
 
-    is_new_user = check_user(user_id) is None
+    is_new_user = (await check_user(user_id)) is None
 
     # registration_date is DateTime
-    create_user(
+    await create_user(
         telegram_id=int(user_id),
         registration_date=datetime.datetime.now(),
         referral_id=int(referral_id) if referral_id else None,
@@ -66,7 +66,7 @@ async def start(message: Message, state: FSMContext):
             metrics.track_event("registration", user_id)
 
     channel_username = _parse_channel_username()
-    role_data = check_role(user_id)
+    role_data = await check_role(user_id)
 
     # Optional subscription check
     try:
@@ -95,7 +95,7 @@ async def back_to_menu_callback_handler(call: CallbackQuery, state: FSMContext):
     user_id = call.from_user.id
     user = await check_user_cached(user_id)
     if not user:
-        create_user(
+        await create_user(
             telegram_id=user_id,
             registration_date=datetime.datetime.now(),
             referral_id=None,
@@ -135,9 +135,9 @@ async def profile_callback_handler(call: CallbackQuery, state: FSMContext):
     user_info = await check_user_cached(user_id)
     
     balance = user_info.get('balance')
-    operations = select_user_operations(user_id)
+    operations = await select_user_operations(user_id)
     overall_balance = sum(operations) if operations else 0
-    items = select_user_items(user_id)
+    items = await select_user_items(user_id)
     referral = EnvKeys.REFERRAL_PERCENT
 
     markup = profile_keyboard(referral, items)

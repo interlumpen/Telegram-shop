@@ -47,7 +47,7 @@ async def broadcast_messages(message: Message, state: FSMContext):
         # Sanitize HTML if needed
         safe_text = sanitize_html(broadcast_msg.text) if broadcast_msg.parse_mode == "HTML" else broadcast_msg.text
 
-        users = get_all_users()
+        users = await get_all_users()
         user_ids = [int(row[0]) for row in users]
 
         await message.delete()

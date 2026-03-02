@@ -20,9 +20,9 @@ class StatsCache:
         )
 
         return {
-            "users": select_today_users(date),
-            "orders": select_today_orders(date),
-            "operations": select_today_operations(date)
+            "users": await select_today_users(date),
+            "orders": await select_today_orders(date),
+            "operations": await select_today_operations(date)
         }
 
     @cache_result(ttl=300, key_prefix="stats:global")
@@ -34,11 +34,11 @@ class StatsCache:
         )
 
         return {
-            "total_users": get_user_count(),
-            "total_admins": select_admins(),
-            "total_revenue": select_all_orders(),
-            "total_items": select_count_items(),
-            "total_goods": select_count_goods()
+            "total_users": await get_user_count(),
+            "total_admins": await select_admins(),
+            "total_revenue": await select_all_orders(),
+            "total_items": await select_count_items(),
+            "total_goods": await select_count_goods()
         }
 
     async def warm_up_cache(self):

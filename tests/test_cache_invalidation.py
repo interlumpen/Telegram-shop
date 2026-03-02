@@ -6,9 +6,11 @@ import pytest
 from bot.database.methods.read import invalidate_user_cache, invalidate_item_cache, invalidate_category_cache, \
     invalidate_stats_cache
 
-from bot.database.methods.update import update_balance, set_role, set_user_blocked
-from bot.database.methods.delete import delete_item, delete_category
-from bot.database.methods.transactions import buy_item_transaction, process_payment_with_referral
+from bot.database.methods.update import _update_balance as update_balance, _set_role as set_role, \
+    _set_user_blocked as set_user_blocked
+from bot.database.methods.delete import _delete_item as delete_item, _delete_category as delete_category
+from bot.database.methods.transactions import _buy_item_transaction as buy_item_transaction, \
+    _process_payment_with_referral as process_payment_with_referral
 
 
 class TestCacheInvalidationFunctions:

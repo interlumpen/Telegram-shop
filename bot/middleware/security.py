@@ -136,7 +136,7 @@ class AuthenticationMiddleware(BaseMiddleware):
 
         # Checking blocked users (from DB and memory cache)
         from bot.database.methods import is_user_blocked
-        if user.id in self.blocked_users or is_user_blocked(user.id):
+        if user.id in self.blocked_users or await is_user_blocked(user.id):
             self.blocked_users.add(user.id)  # Update memory cache
             if isinstance(event, CallbackQuery):
                 await event.answer(localize("middleware.security.blocked"), show_alert=True)
@@ -183,26 +183,26 @@ class AuthenticationMiddleware(BaseMiddleware):
 
         # Download from DB
         from bot.database.methods import check_role
-        role = check_role(user_id) or 0
+        role = await check_role(user_id) or 0
 
         # Refresh cache
         self.admin_cache[user_id] = (role, time.time())
 
         return role
 
-    def block_user(self, user_id: int) -> bool:
+    async def block_user(self, user_id: int) -> bool:
         """Block a user (saves to DB and memory cache)"""
         from bot.database.methods import set_user_blocked
-        success = set_user_blocked(user_id, True)
+        success = await set_user_blocked(user_id, True)
         if success:
             self.blocked_users.add(user_id)
             log_audit("block_user", user_id=user_id, resource_type="User", resource_id=str(user_id))
         return success
 
-    def unblock_user(self, user_id: int) -> bool:
+    async def unblock_user(self, user_id: int) -> bool:
         """Unblock a user (saves to DB and removes from memory cache)"""
         from bot.database.methods import set_user_blocked
-        success = set_user_blocked(user_id, False)
+        success = await set_user_blocked(user_id, False)
         if success:
             self.blocked_users.discard(user_id)
             log_audit("unblock_user", user_id=user_id, resource_type="User", resource_id=str(user_id))

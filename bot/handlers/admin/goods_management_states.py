@@ -58,7 +58,7 @@ async def delete_str_item(message: Message, state):
             reply_markup=back('goods_management')
         )
     else:
-        delete_item(item_name)
+        await delete_item(item_name)
         await message.answer(
             localize('admin.goods.delete.position.success'),
             reply_markup=back('goods_management')
@@ -215,7 +215,7 @@ async def item_info_callback_handler(call: CallbackQuery, state: FSMContext):
         await call.answer(localize("admin.goods.item.invalid_id"), show_alert=True)
         return
 
-    item_info = get_goods_info(item_id)
+    item_info = await get_goods_info(item_id)
     if not item_info:
         await call.answer(localize("admin.goods.item.not_found"), show_alert=True)
         return
@@ -268,7 +268,7 @@ async def process_delete_item_from_position(call: CallbackQuery, state: FSMConte
     page = data.get('delete_page', '0')
     item_name = data.get('delete_item_name', '')
 
-    item_info = get_goods_info(item_id)
+    item_info = await get_goods_info(item_id)
     if not item_info:
         await call.answer(localize("admin.goods.item.already_deleted_or_missing"), show_alert=True)
         await call.message.edit_text(
@@ -278,7 +278,7 @@ async def process_delete_item_from_position(call: CallbackQuery, state: FSMConte
         return
 
     position_name = item_info["item_name"]
-    delete_item_from_position(item_id)
+    await delete_item_from_position(item_id)
 
     # Redraw the list page if needed
     if item_hash and item_name:

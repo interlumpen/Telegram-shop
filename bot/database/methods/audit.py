@@ -21,7 +21,13 @@ def log_audit(
     details: str | None = None,
     ip_address: str | None = None,
 ) -> None:
-    """Write audit entry to both the log file and the database."""
+    """Write audit entry to both the log file and the database.
+
+    NOTE: This function is intentionally kept synchronous so it can be called
+    from both sync (inside transactions/executor) and async contexts.
+    Callers in async context should use ``run_in_executor`` if needed, but
+    audit logging is typically fire-and-forget and fast enough to inline.
+    """
     # 1. File log
     log_level = _LOG_LEVELS.get(level, logging.INFO)
     parts = [f"action={action}"]

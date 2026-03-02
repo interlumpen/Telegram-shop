@@ -108,8 +108,9 @@ class User(Database.BASE):
 
 class Categories(Database.BASE):
     __tablename__ = 'categories'
-    name = Column(String(100), primary_key=True)
-    item = relationship("Goods", back_populates="category")
+    id = Column(Integer, primary_key=True)
+    name = Column(String(100), unique=True, nullable=False)
+    items = relationship("Goods", back_populates="category")
 
     def __init__(self, name: str, **kw: Any):
         super().__init__(**kw)
@@ -118,39 +119,38 @@ class Categories(Database.BASE):
 
 class Goods(Database.BASE):
     __tablename__ = 'goods'
-    name = Column(String(100), primary_key=True)
+    id = Column(Integer, primary_key=True)
+    name = Column(String(100), unique=True, nullable=False)
     price = Column(Numeric(12, 2), nullable=False)
     description = Column(Text, nullable=False)
-    category_name = Column(String(100), ForeignKey('categories.name', ondelete="CASCADE", onupdate="CASCADE"),
-                           nullable=False, index=True)
-    category = relationship("Categories", back_populates="item")
+    category_id = Column(Integer, ForeignKey('categories.id', ondelete="CASCADE"), nullable=False, index=True)
+    category = relationship("Categories", back_populates="items")
     values = relationship("ItemValues", back_populates="item")
 
-    def __init__(self, name: str, price, description: str, category_name: str, **kw: Any):
+    def __init__(self, name: str, price, description: str, category_id: int, **kw: Any):
         super().__init__(**kw)
         self.name = name
         self.price = price
         self.description = description
-        self.category_name = category_name
+        self.category_id = category_id
 
 
 class ItemValues(Database.BASE):
     __tablename__ = 'item_values'
     id = Column(Integer, primary_key=True)
-    item_name = Column(String(100), ForeignKey('goods.name', ondelete="CASCADE", onupdate="CASCADE"), nullable=False,
-                       index=True)
+    item_id = Column(Integer, ForeignKey('goods.id', ondelete="CASCADE"), nullable=False, index=True)
     value = Column(Text, nullable=True)
     is_infinity = Column(Boolean, nullable=False)
     item = relationship("Goods", back_populates="values")
 
     __table_args__ = (
-        UniqueConstraint('item_name', 'value', name='uq_item_value_per_item'),
-        Index('ix_item_values_item_inf', 'item_name', 'is_infinity'),
+        UniqueConstraint('item_id', 'value', name='uq_item_value_per_item'),
+        Index('ix_item_values_item_inf', 'item_id', 'is_infinity'),
     )
 
-    def __init__(self, name: str, value: str, is_infinity: bool, **kw: Any):
+    def __init__(self, item_id: int, value: str, is_infinity: bool, **kw: Any):
         super().__init__(**kw)
-        self.item_name = name
+        self.item_id = item_id
         self.value = value
         self.is_infinity = is_infinity
 
@@ -274,7 +274,13 @@ class AuditLog(Database.BASE):
         return f'<AuditLog {self.action} user={self.user_id} @ {self.timestamp}>'
 
 
-def register_models():
+async def register_models():
+    import asyncio
+    loop = asyncio.get_running_loop()
+    await loop.run_in_executor(None, _register_models_sync)
+
+
+def _register_models_sync():
     try:
         Database.BASE.metadata.create_all(Database().engine)
     except UnicodeDecodeError as e:

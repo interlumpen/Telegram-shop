@@ -97,18 +97,18 @@ class CategoryAdmin(AuditModelView, model=Categories):
 
 
 class GoodsAdmin(AuditModelView, model=Goods):
-    column_list = [Goods.name, Goods.price, Goods.description, Goods.category_name]
-    column_searchable_list = [Goods.name, Goods.category_name]
-    column_sortable_list = [Goods.name, Goods.price, Goods.category_name]
+    column_list = [Goods.id, Goods.name, Goods.price, Goods.description, Goods.category_id]
+    column_searchable_list = [Goods.name]
+    column_sortable_list = [Goods.id, Goods.name, Goods.price]
     name = "Product"
     name_plural = "Products"
     icon = "fa-solid fa-box"
 
 
 class ItemValuesAdmin(AuditModelView, model=ItemValues):
-    column_list = [ItemValues.id, ItemValues.item_name, ItemValues.value, ItemValues.is_infinity]
-    column_searchable_list = [ItemValues.item_name]
-    column_sortable_list = [ItemValues.id, ItemValues.item_name]
+    column_list = [ItemValues.id, ItemValues.item_id, ItemValues.value, ItemValues.is_infinity]
+    column_searchable_list = [ItemValues.value]
+    column_sortable_list = [ItemValues.id, ItemValues.item_id]
     name = "Stock Item"
     name_plural = "Stock Items"
     icon = "fa-solid fa-warehouse"

@@ -1,20 +1,33 @@
 import datetime
 from decimal import Decimal
 
-from bot.database.methods.create import create_user, create_item, add_values_to_item, create_operation, \
-    create_pending_payment, create_referral_earning
+from bot.database.methods.create import _create_user as create_user, _create_item as create_item, \
+    _add_values_to_item as add_values_to_item, _create_operation as create_operation, \
+    _create_pending_payment as create_pending_payment, _create_referral_earning as create_referral_earning
 
 from bot.database.methods.read import (
-    check_user, check_role, get_role_id_by_name, check_role_name_by_id, select_max_role_id, select_today_users,
-    get_user_count, get_all_users, check_category, get_item_info, get_item_info, check_value, select_item_values_amount,
-    select_count_items, select_count_goods, select_count_categories, select_user_items, select_user_operations,
-    check_user_referrals, get_user_referral, get_referral_earnings_stats, get_one_referral_earning,
-    select_today_orders, select_all_orders, select_today_operations, select_all_operations, select_users_balance,
+    _check_user as check_user, _check_role as check_role, _get_role_id_by_name as get_role_id_by_name,
+    _check_role_name_by_id as check_role_name_by_id, _select_max_role_id as select_max_role_id,
+    _select_today_users as select_today_users, _get_user_count as get_user_count,
+    _get_all_users as get_all_users, _check_category as check_category,
+    _get_item_info as get_item_info, _check_value as check_value,
+    _select_item_values_amount as select_item_values_amount,
+    _select_count_items as select_count_items, _select_count_goods as select_count_goods,
+    _select_count_categories as select_count_categories, _select_user_items as select_user_items,
+    _select_user_operations as select_user_operations,
+    _check_user_referrals as check_user_referrals, _get_user_referral as get_user_referral,
+    _get_referral_earnings_stats as get_referral_earnings_stats,
+    _get_one_referral_earning as get_one_referral_earning,
+    _select_today_orders as select_today_orders, _select_all_orders as select_all_orders,
+    _select_today_operations as select_today_operations, _select_all_operations as select_all_operations,
+    _select_users_balance as select_users_balance,
 )
-from bot.database.methods.update import update_balance, set_role, set_user_blocked, is_user_blocked, update_item, \
-    update_category
+from bot.database.methods.update import _update_balance as update_balance, _set_role as set_role, \
+    _set_user_blocked as set_user_blocked, _is_user_blocked as is_user_blocked, _update_item as update_item, \
+    _update_category as update_category
 
-from bot.database.methods.delete import delete_item, delete_only_items, delete_item_from_position, delete_category
+from bot.database.methods.delete import _delete_item as delete_item, _delete_only_items as delete_only_items, \
+    _delete_item_from_position as delete_item_from_position, _delete_category as delete_category
 
 
 NOW = datetime.datetime.now()
@@ -233,7 +246,9 @@ class TestItemCRUD:
         from bot.database import Database as DB
         from bot.database.models import ItemValues
         with DB().session() as s:
-            iv = s.query(ItemValues).filter(ItemValues.item_name == "PosItem").first()
+            from bot.database.models.main import Goods
+            pos = s.query(Goods).filter(Goods.name == "PosItem").first()
+            iv = s.query(ItemValues).filter(ItemValues.item_id == pos.id).first()
             iv_id = iv.id
         delete_item_from_position(iv_id)
         assert select_item_values_amount("PosItem") == 1

@@ -81,7 +81,7 @@ class RecoveryManager:
                 info = await crypto.get_invoice(payment.external_id)
 
                 if info.get("status") == "paid":
-                    success, _ = process_payment_with_referral(
+                    success, _ = await process_payment_with_referral(
                         user_id=payment.user_id,
                         amount=payment.amount,
                         provider=payment.provider,

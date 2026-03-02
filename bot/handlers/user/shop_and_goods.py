@@ -215,7 +215,7 @@ async def item_info_callback_handler(call: CallbackQuery, state: FSMContext):
 
     quantity_line = (
         localize("shop.item.quantity_unlimited")
-        if check_value(item_name)
+        if await check_value(item_name)
         else localize("shop.item.quantity_left", count=quantity)
     )
 
@@ -320,7 +320,7 @@ async def bought_item_info_callback_handler(call: CallbackQuery):
     Show details for a purchased item.
     """
     trash, item_id, back_data = call.data.split(':', 2)
-    item = get_bought_item_info(item_id)
+    item = await get_bought_item_info(item_id)
     if not item:
         await call.answer(localize("purchases.item.not_found"), show_alert=True)
         return

@@ -1,5 +1,7 @@
 import time
 
+import pytest
+
 from bot.middleware.security import check_suspicious_patterns, SecurityMiddleware, AuthenticationMiddleware
 from bot.middleware.rate_limit import RateLimiter, RateLimitConfig
 
@@ -137,19 +139,22 @@ class TestAuthenticationMiddleware:
     def setup_method(self):
         self.auth = AuthenticationMiddleware()
 
-    def test_block_user(self, user_factory):
+    @pytest.mark.asyncio
+    async def test_block_user(self, user_factory):
         user_factory(telegram_id=200001)
-        result = self.auth.block_user(200001)
+        result = await self.auth.block_user(200001)
         assert result is True
         assert 200001 in self.auth.blocked_users
 
-    def test_unblock_user(self, user_factory):
+    @pytest.mark.asyncio
+    async def test_unblock_user(self, user_factory):
         user_factory(telegram_id=200002)
-        self.auth.block_user(200002)
-        result = self.auth.unblock_user(200002)
+        await self.auth.block_user(200002)
+        result = await self.auth.unblock_user(200002)
         assert result is True
         assert 200002 not in self.auth.blocked_users
 
-    def test_block_nonexistent_user(self):
-        result = self.auth.block_user(999999999)
+    @pytest.mark.asyncio
+    async def test_block_nonexistent_user(self):
+        result = await self.auth.block_user(999999999)
         assert result is False

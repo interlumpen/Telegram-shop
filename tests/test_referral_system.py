@@ -2,8 +2,8 @@ import datetime
 import pytest
 from unittest.mock import patch, AsyncMock, MagicMock
 
-from bot.database.methods.create import create_user, create_referral_earning
-from bot.database.methods.read import get_one_referral_earning
+from bot.database.methods.create import _create_user as create_user, _create_referral_earning as create_referral_earning
+from bot.database.methods.read import _get_one_referral_earning as get_one_referral_earning
 
 
 class TestReferralPage:
@@ -29,7 +29,7 @@ class TestReferralPage:
                     break
 
         # Simpler approach: just test the data we can test
-        from bot.database.methods.read import check_user_referrals, get_referral_earnings_stats
+        from bot.database.methods.read import _check_user_referrals as check_user_referrals, _get_referral_earnings_stats as get_referral_earnings_stats
         referrals_count = check_user_referrals(700001)
         assert referrals_count == 0
 
@@ -47,7 +47,7 @@ class TestReferralPage:
             role=1,
         )
 
-        from bot.database.methods.read import check_user_referrals, get_referral_earnings_stats
+        from bot.database.methods.read import _check_user_referrals as check_user_referrals, _get_referral_earnings_stats as get_referral_earnings_stats
         referrals_count = check_user_referrals(700002)
         assert referrals_count == 1
 

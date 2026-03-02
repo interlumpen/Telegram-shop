@@ -1,8 +1,8 @@
 import pytest
 from decimal import Decimal
-from unittest.mock import patch, MagicMock
+from unittest.mock import patch, MagicMock, AsyncMock
 
-from bot.database.methods.read import check_user, get_role_id_by_name
+from bot.database.methods.read import _check_user as check_user, _get_role_id_by_name as get_role_id_by_name
 
 class TestCheckUserData:
 
@@ -83,7 +83,7 @@ class TestSetAdmin:
     @pytest.mark.asyncio
     async def test_cannot_change_owner_role(self, make_callback_query, user_factory):
         from bot.handlers.admin.user_management_states import process_admin_for_purpose
-        from bot.database.methods.read import select_max_role_id
+        from bot.database.methods.read import _select_max_role_id as select_max_role_id
 
         max_role = select_max_role_id()
         user_factory(telegram_id=800012, role_id=max_role)
@@ -158,7 +158,7 @@ class TestBlockUser:
         call = make_callback_query(data="block-user_800030", user_id=900030)
 
         mock_auth = MagicMock()
-        mock_auth.block_user = MagicMock(return_value=True)
+        mock_auth.block_user = AsyncMock(return_value=True)
 
         with patch('bot.main.auth_middleware', mock_auth):
             await block_user_handler(call)
@@ -175,7 +175,7 @@ class TestBlockUser:
         call = make_callback_query(data="unblock-user_800031", user_id=900031)
 
         mock_auth = MagicMock()
-        mock_auth.unblock_user = MagicMock(return_value=True)
+        mock_auth.unblock_user = AsyncMock(return_value=True)
 
         with patch('bot.main.auth_middleware', mock_auth):
             await unblock_user_handler(call)
@@ -186,7 +186,7 @@ class TestBlockUser:
     @pytest.mark.asyncio
     async def test_cannot_block_owner(self, make_callback_query, user_factory):
         from bot.handlers.admin.user_management_states import block_user_handler
-        from bot.database.methods.read import select_max_role_id
+        from bot.database.methods.read import _select_max_role_id as select_max_role_id
 
         max_role = select_max_role_id()
         user_factory(telegram_id=800032, role_id=max_role)
@@ -279,7 +279,7 @@ class TestGoodsManagement:
     @pytest.mark.asyncio
     async def test_delete_item(self, make_message, fsm_context, item_factory):
         from bot.handlers.admin.goods_management_states import delete_str_item
-        from bot.database.methods.read import get_item_info
+        from bot.database.methods.read import _get_item_info as get_item_info
 
         item_factory(name="ToDeleteItem", price=100, category="DelCat", values=[("v1", False)])
 

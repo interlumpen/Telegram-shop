@@ -56,7 +56,7 @@ async def process_category_for_add(message: Message, state):
                 reply_markup=back("categories_management"),
             )
         else:
-            create_category(category_name)
+            await create_category(category_name)
             await message.answer(
                 localize("admin.categories.add.success"),
                 reply_markup=back("categories_management"),
@@ -101,7 +101,7 @@ async def process_category_for_delete(message: Message, state):
             reply_markup=back("categories_management"),
         )
     else:
-        delete_category(category_name)
+        await delete_category(category_name)
         await message.answer(
             localize("admin.categories.delete.success"),
             reply_markup=back("categories_management"),
@@ -164,7 +164,7 @@ async def check_category_name_for_update(message: Message, state):
         await state.clear()
         return
 
-    update_category(old_name, new_name)
+    await update_category(old_name, new_name)
     await message.answer(
         localize("admin.categories.rename.success", old=old_name, new=new_name),
         reply_markup=back("categories_management"),

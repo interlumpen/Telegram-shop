@@ -211,8 +211,8 @@ def mock_localize():
 @pytest.fixture
 def user_factory():
     """Factory to create test users."""
-    from bot.database.methods.create import create_user
-    from bot.database.methods.update import update_balance
+    from bot.database.methods.create import _create_user
+    from bot.database.methods.update import _update_balance
 
     def _create(
             telegram_id: int = 100001,
@@ -220,16 +220,16 @@ def user_factory():
             role_id: int = 1,
             referral_id: int = None,
     ):
-        create_user(
+        _create_user(
             telegram_id=telegram_id,
             registration_date=datetime.datetime.now(),
             referral_id=referral_id,
             role=role_id,
         )
         if balance > 0:
-            update_balance(telegram_id, balance)
-        from bot.database.methods.read import check_user
-        return check_user(telegram_id)
+            _update_balance(telegram_id, balance)
+        from bot.database.methods.read import _check_user
+        return _check_user(telegram_id)
 
     return _create
 
@@ -237,10 +237,10 @@ def user_factory():
 @pytest.fixture
 def category_factory():
     """Factory to create categories."""
-    from bot.database.methods.create import create_category
+    from bot.database.methods.create import _create_category
 
     def _create(name: str = "TestCategory"):
-        create_category(name)
+        _create_category(name)
 
     return _create
 
@@ -248,7 +248,7 @@ def category_factory():
 @pytest.fixture
 def item_factory(category_factory):
     """Factory to create items with optional stock values."""
-    from bot.database.methods.create import create_item, add_values_to_item
+    from bot.database.methods.create import _create_item, _add_values_to_item
 
     def _create(
             name: str = "TestItem",
@@ -258,10 +258,10 @@ def item_factory(category_factory):
             values: list = None,
     ):
         category_factory(category)
-        create_item(name, description, price, category)
+        _create_item(name, description, price, category)
         if values:
             for val, is_inf in values:
-                add_values_to_item(name, val, is_inf)
+                _add_values_to_item(name, val, is_inf)
 
     return _create
 

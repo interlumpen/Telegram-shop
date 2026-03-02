@@ -92,6 +92,8 @@ via the command line (CLI) without the need for a shell and advanced monitoring 
     - Cache warm-up on startup (categories, user/admin counts)
     - Cache scheduler: hourly stats refresh, daily cleanup at 3:00 AM
 - **Performance Optimizations**: Up to 60% reduction in database queries for read operations
+- **Non-Blocking Database Layer**: All synchronous DB operations execute in a thread pool
+  via `run_sync()` decorator, keeping the asyncio event loop responsive under load
 
 ### Web Admin Panel & Monitoring
 
@@ -202,6 +204,7 @@ via the command line (CLI) without the need for a shell and advanced monitoring 
 - **Transaction Script**: Business logic encapsulation
 - **Middleware Pattern**: Metrics collection and event tracking via AnalyticsMiddleware
 - **Conversion Funnel**: Purchase funnel tracking (view_shop → view_item → purchase)
+- **Thread Pool Offloading**: Synchronous DB calls wrapped with `run_sync()` to avoid blocking the event loop
 
 ### Performance Architecture
 
@@ -632,25 +635,25 @@ Available for users with ADMIN/OWNER role:
 #### User Management
 
 ```python
-create_user(telegram_id: int, registration_date: datetime, referral_id: int, role: int) -> None
-check_user(telegram_id: int) -> Optional[User]
-update_balance(telegram_id: int, amount: int) -> None
+await create_user(telegram_id: int, registration_date: datetime, referral_id: int, role: int) -> None
+await check_user(telegram_id: int) -> Optional[User]
+await update_balance(telegram_id: int, amount: int) -> None
 ```
 
 #### Transaction Processing
 
 ```python
-buy_item_transaction(telegram_id: int, item_name: str) -> tuple[bool, str, dict]
-process_payment_with_referral(
+await buy_item_transaction(telegram_id: int, item_name: str) -> tuple[bool, str, dict]
+await process_payment_with_referral(
     user_id: int, amount: Decimal, provider: str, external_id: str, referral_percent: int = 0) -> tuple[bool, str]
 ```
 
 #### Product Management
 
 ```python
-create_item(item_name: str, item_description: str, item_price: int, category_name: str) -> None
-add_values_to_item(item_name: str, value: str, is_infinity: bool) -> bool
-delete_item(item_name: str) -> None
+await create_item(item_name: str, item_description: str, item_price: int, category_name: str) -> None
+await add_values_to_item(item_name: str, value: str, is_infinity: bool) -> bool
+await delete_item(item_name: str) -> None
 ```
 
 ### Middleware Configuration

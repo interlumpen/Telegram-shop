@@ -2,7 +2,7 @@ import pytest
 from unittest.mock import patch
 from aiogram.enums.chat_type import ChatType
 
-from bot.database.methods.read import check_user
+from bot.database.methods.read import _check_user as check_user
 
 
 class TestStartHandler:
@@ -67,7 +67,7 @@ class TestStartHandler:
     @pytest.mark.asyncio
     async def test_start_owner_gets_max_role(self, make_message, fsm_context):
         from bot.handlers.user.main import start
-        from bot.database.methods.read import select_max_role_id
+        from bot.database.methods.read import _select_max_role_id as select_max_role_id
 
         msg = make_message(text="/start", user_id=300030)
         msg.chat.type = ChatType.PRIVATE

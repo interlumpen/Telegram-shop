@@ -3,7 +3,7 @@ import pytest
 from decimal import Decimal
 from unittest.mock import patch, AsyncMock, MagicMock
 
-from bot.database.methods.read import check_user
+from bot.database.methods.read import _check_user as check_user
 from bot.database.main import Database
 from bot.database.models.main import Payments
 

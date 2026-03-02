@@ -21,6 +21,7 @@ from bot.misc.caching import CacheScheduler
 from bot.misc.caching import get_redis_storage
 from bot.misc.services import RecoveryManager
 from bot.misc.metrics import init_metrics, get_metrics, AnalyticsMiddleware
+from bot.database.methods.cache_utils import set_main_loop
 
 # Global variables for components
 recovery_manager = None
@@ -38,7 +39,7 @@ async def __on_start_up(dp: Dispatcher, bot: Bot) -> None:
 
     # Registration of handlers and models
     register_all_handlers(dp)
-    register_models()
+    await register_models()
 
     # Setting Rate Limiting
     rate_config = RateLimitConfig(
@@ -207,6 +208,9 @@ async def start_bot() -> None:
             "Using MemoryStorage - FSM states will be lost on restart! "
             "Consider setting up Redis for production."
         )
+
+    # Store reference to the main event loop for worker threads
+    set_main_loop(asyncio.get_running_loop())
 
     cache_scheduler = CacheScheduler()
     await cache_scheduler.start()

@@ -22,11 +22,11 @@ async def referral_callback_handler(call: CallbackQuery, state: FSMContext):
     Show referral info, personal invite link, and additional buttons.
     """
     user_id = call.from_user.id
-    referrals_count = check_user_referrals(user_id)
+    referrals_count = await check_user_referrals(user_id)
     referral_percent = EnvKeys.REFERRAL_PERCENT
     bot_username = await get_bot_info(call)
 
-    earnings_stats = get_referral_earnings_stats(user_id)
+    earnings_stats = await get_referral_earnings_stats(user_id)
 
     has_referrals = referrals_count > 0
     has_earnings = earnings_stats['total_earnings_count'] > 0
@@ -274,7 +274,7 @@ async def referral_callback_handler(call: CallbackQuery, state: FSMContext):
     Show referral info, personal invite link, and additional buttons.
     """
     trash, earning_id, back_data = call.data.split(':', 2)
-    earning_info = get_one_referral_earning(int(earning_id))
+    earning_info = await get_one_referral_earning(int(earning_id))
     user_info = await call.message.bot.get_chat(earning_info['referral_id'])
 
     await call.message.edit_text(localize('referral.item.info',

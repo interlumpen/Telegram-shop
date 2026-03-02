@@ -106,12 +106,12 @@ async def statistics_callback_handler(call: CallbackQuery):
             today_orders=daily_stats['orders'],
             all_orders=global_stats['total_revenue'],
             today_topups=daily_stats['operations'],
-            system_balance=select_users_balance(),
-            all_topups=select_all_operations(),
+            system_balance=await select_users_balance(),
+            all_topups=await select_all_operations(),
             items=global_stats['total_items'],
             goods=global_stats['total_goods'],
-            categories=select_count_categories(),
-            sold_count=select_count_bought_items(),
+            categories=await select_count_categories(),
+            sold_count=await select_count_bought_items(),
             currency=EnvKeys.PAY_CURRENCY
         )
 
@@ -119,18 +119,18 @@ async def statistics_callback_handler(call: CallbackQuery):
         # Fallback on direct requests if cache is unavailable
         text = localize(
             "admin.shop.stats.template",
-            today_users=select_today_users(today_str),
-            admins=select_admins(),
-            users=get_user_count(),
-            today_orders=select_today_orders(today_str),
-            all_orders=select_all_orders(),
-            today_topups=select_today_operations(today_str),
-            system_balance=select_users_balance(),
-            all_topups=select_all_operations(),
-            items=select_count_items(),
-            goods=select_count_goods(),
-            categories=select_count_categories(),
-            sold_count=select_count_bought_items(),
+            today_users=await select_today_users(today_str),
+            admins=await select_admins(),
+            users=await get_user_count(),
+            today_orders=await select_today_orders(today_str),
+            all_orders=await select_all_orders(),
+            today_topups=await select_today_operations(today_str),
+            system_balance=await select_users_balance(),
+            all_topups=await select_all_operations(),
+            items=await select_count_items(),
+            goods=await select_count_goods(),
+            categories=await select_count_categories(),
+            sold_count=await select_count_bought_items(),
             currency=EnvKeys.PAY_CURRENCY
         )
 
@@ -258,11 +258,11 @@ async def show_user_info(call: CallbackQuery):
 
     user = await check_user_cached(user_id)
     user_info = await call.message.bot.get_chat(user_id)
-    operations = select_user_operations(user_id)
+    operations = await select_user_operations(user_id)
     overall_balance = sum(operations) if operations else 0
-    items = select_user_items(user_id)
-    role = check_role_name_by_id(user.get('role_id'))
-    referrals = check_user_referrals(user.get('telegram_id'))
+    items = await select_user_items(user_id)
+    role = await check_role_name_by_id(user.get('role_id'))
+    referrals = await check_user_referrals(user.get('telegram_id'))
 
     text = (
         f"{localize('profile.caption', name=user_info.first_name, id=user_id)}\n\n"
@@ -311,7 +311,7 @@ async def process_item_show(message: Message, state: FSMContext):
             )
             return
 
-        item = select_bought_item(int(msg))
+        item = await select_bought_item(int(msg))
         if item:
             # Sanitize output values
             safe_value = sanitize_html(item['value'])

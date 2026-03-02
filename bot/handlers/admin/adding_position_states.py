@@ -158,7 +158,7 @@ async def finish_adding_items_callback_handler(call: CallbackQuery, state):
     seen_in_batch: set[str] = set()
 
     # Create position
-    create_item(item_name, item_description, item_price, category_name)
+    await create_item(item_name, item_description, item_price, category_name)
 
     for v in raw_values:
         v_norm = (v or "").strip()
@@ -173,7 +173,7 @@ async def finish_adding_items_callback_handler(call: CallbackQuery, state):
         seen_in_batch.add(v_norm)
 
         # Try to insert — False means it already exists in DB
-        if add_values_to_item(item_name, v_norm, False):
+        if await add_values_to_item(item_name, v_norm, False):
             added += 1
         else:
             skipped_db_dup += 1
@@ -238,9 +238,9 @@ async def finish_adding_item_callback_handler(message: Message, state):
         return
 
     # 1) Create position
-    create_item(item_name, item_description, item_price, category_name)
+    await create_item(item_name, item_description, item_price, category_name)
     # 2) Add 1 “infinite” value
-    add_values_to_item(item_name, single_value, True)
+    await add_values_to_item(item_name, single_value, True)
 
     # 3) Optionally notify a channel
     channel_url = EnvKeys.CHANNEL_URL or ""

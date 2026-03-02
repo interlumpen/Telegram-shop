@@ -25,7 +25,7 @@ router = Router()
 
 async def _notify_referrer_bonus(bot, user_id: int, amount: int, payer_name: str, payer_id: int):
     """Send referral bonus notification to the referrer if applicable."""
-    referral_id = get_user_referral(user_id)
+    referral_id = await get_user_referral(user_id)
     if not referral_id or not EnvKeys.REFERRAL_PERCENT:
         return
     try:
@@ -159,7 +159,7 @@ async def process_replenish_balance(call: CallbackQuery, state: FSMContext):
             pay_url = invoice.get("mini_app_invoice_url")
             invoice_id = invoice.get("invoice_id")
 
-            create_pending_payment(
+            await create_pending_payment(
                 provider="cryptopay",
                 external_id=str(invoice_id),
                 user_id=call.from_user.id,
@@ -254,7 +254,7 @@ async def checking_payment(call: CallbackQuery, state: FSMContext):
             balance_amount = int(Decimal(str(info.get("amount", "0"))).quantize(Decimal("1.")))
 
             # Use transactional payment processing
-            success, error_msg = process_payment_with_referral(
+            success, error_msg = await process_payment_with_referral(
                 user_id=user_id,
                 amount=Decimal(balance_amount),
                 provider="cryptopay",
@@ -357,7 +357,7 @@ async def successful_payment_handler(message: Message):
     provider = "telegram" if sp.currency != "XTR" else "stars"
     external_id = sp.telegram_payment_charge_id or sp.provider_payment_charge_id or f"{provider}:{user_id}:{sp.total_amount}:{datetime.datetime.now().timestamp()}"
 
-    success, error_msg = process_payment_with_referral(
+    success, error_msg = await process_payment_with_referral(
         user_id=user_id,
         amount=Decimal(amount),
         provider=provider,
@@ -439,7 +439,7 @@ async def buy_item_callback_handler(call: CallbackQuery, state: FSMContext):
         await call.answer(localize("shop.purchase.processing"))
 
         # Execute a transactional purchase
-        success, message, purchase_data = buy_item_transaction(
+        success, message, purchase_data = await buy_item_transaction(
             user_id,
             purchase_request.item_name
         )

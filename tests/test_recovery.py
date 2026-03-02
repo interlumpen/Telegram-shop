@@ -2,7 +2,7 @@ import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
 
 from bot.misc.services.recovery import RecoveryManager
-from bot.database.methods.create import create_pending_payment
+from bot.database.methods.create import _create_pending_payment as create_pending_payment
 from bot.database.main import Database
 from bot.database.models.main import Payments
 

@@ -35,13 +35,13 @@ async def _build_user_profile(bot, target_id: int):
         return None
 
     user_info = await bot.get_chat(target_id)
-    operations = select_user_operations(target_id)
+    operations = await select_user_operations(target_id)
     overall_balance = sum(operations) if operations else 0
-    items_count = select_user_items(target_id)
-    role = check_role_name_by_id(user.get('role_id'))
-    referrals = check_user_referrals(user.get('telegram_id'))
+    items_count = await select_user_items(target_id)
+    role = await check_role_name_by_id(user.get('role_id'))
+    referrals = await check_user_referrals(user.get('telegram_id'))
 
-    earnings_stats = get_referral_earnings_stats(target_id)
+    earnings_stats = await get_referral_earnings_stats(target_id)
     has_referrals = referrals > 0
     has_earnings = earnings_stats['total_earnings_count'] > 0
 
@@ -58,7 +58,7 @@ async def _build_user_profile(bot, target_id: int):
     actions.append((localize('btn.admin.deduct_user'), f"deduct-user-balance_{target_id}"))
 
     if role_name != 'OWNER':
-        if is_user_blocked(target_id):
+        if await is_user_blocked(target_id):
             actions.append((localize('btn.admin.unblock'), f"unblock-user_{target_id}"))
         else:
             actions.append((localize('btn.admin.block'), f"block-user_{target_id}"))
@@ -88,7 +88,7 @@ async def _build_user_profile(bot, target_id: int):
         localize('profile.registration_date', dt=user.get('registration_date')),
     ]
 
-    if is_user_blocked(target_id):
+    if await is_user_blocked(target_id):
         lines.append(localize('admin.users.status.blocked'))
 
     if has_earnings:
@@ -405,7 +405,7 @@ async def admin_earning_detail_handler(call: CallbackQuery):
         await call.answer(localize('errors.invalid_data'))
         return
 
-    earning_info = get_one_referral_earning(earning_id)
+    earning_info = await get_one_referral_earning(earning_id)
     if not earning_info:
         await call.answer(localize('errors.invalid_data'))
         return
@@ -473,13 +473,13 @@ async def process_admin_for_purpose(call: CallbackQuery):
         await call.answer(localize('admin.users.not_found'), show_alert=True)
         return
 
-    role_name = check_role_name_by_id(db_user.get('role_id'))
+    role_name = await check_role_name_by_id(db_user.get('role_id'))
     if role_name == 'OWNER':
         await call.answer(localize('admin.users.cannot_change_owner'), show_alert=True)
         return
 
-    admin_role_id = get_role_id_by_name('ADMIN')
-    set_role(user_id, admin_role_id)
+    admin_role_id = await get_role_id_by_name('ADMIN')
+    await set_role(user_id, admin_role_id)
 
     user_info = await call.message.bot.get_chat(user_id)
     await call.message.edit_text(
@@ -516,13 +516,13 @@ async def process_admin_for_remove(call: CallbackQuery):
         await call.answer(localize('admin.users.not_found'), show_alert=True)
         return
 
-    role_name = check_role_name_by_id(db_user.get('role_id'))
+    role_name = await check_role_name_by_id(db_user.get('role_id'))
     if role_name == 'OWNER':
         await call.answer(localize('admin.users.cannot_change_owner'), show_alert=True)
         return
 
-    user_role_id = get_role_id_by_name('USER')
-    set_role(user_id, user_role_id)
+    user_role_id = await get_role_id_by_name('USER')
+    await set_role(user_id, user_role_id)
 
     user_info = await call.message.bot.get_chat(user_id)
     await call.message.edit_text(
@@ -583,8 +583,8 @@ async def process_replenish_user_balance(message: Message, state: FSMContext):
         )
 
         # Apply top-up
-        create_operation(user_update.telegram_id, int(amount), datetime.datetime.now())
-        update_balance(user_update.telegram_id, int(amount))
+        await create_operation(user_update.telegram_id, int(amount), datetime.datetime.now())
+        await update_balance(user_update.telegram_id, int(amount))
 
         user_info = await message.bot.get_chat(user_id)
         await message.answer(
@@ -675,8 +675,8 @@ async def process_deduct_user_balance(message: Message, state: FSMContext):
             return
 
         # Apply deduction (negative amount)
-        create_operation(user_id, -int(amount), datetime.datetime.now())
-        update_balance(user_id, -int(amount))
+        await create_operation(user_id, -int(amount), datetime.datetime.now())
+        await update_balance(user_id, -int(amount))
 
         user_info = await message.bot.get_chat(user_id)
         await message.answer(
@@ -740,14 +740,14 @@ async def block_user_handler(call: CallbackQuery):
         await call.answer(localize('admin.users.not_found'), show_alert=True)
         return
 
-    role_name = check_role_name_by_id(db_user.get('role_id'))
+    role_name = await check_role_name_by_id(db_user.get('role_id'))
     if role_name == 'OWNER':
         await call.answer(localize('admin.users.cannot_block_owner'), show_alert=True)
         return
 
     from bot.main import auth_middleware
     if auth_middleware:
-        success = auth_middleware.block_user(user_id)
+        success = await auth_middleware.block_user(user_id)
         if not success:
             await call.answer(localize('errors.something_wrong'), show_alert=True)
             return
@@ -776,7 +776,7 @@ async def unblock_user_handler(call: CallbackQuery):
 
     from bot.main import auth_middleware
     if auth_middleware:
-        success = auth_middleware.unblock_user(user_id)
+        success = await auth_middleware.unblock_user(user_id)
         if not success:
             await call.answer(localize('errors.something_wrong'), show_alert=True)
             return

@@ -1,14 +1,15 @@
 from sqlalchemy import exc
 
-from bot.database.methods import invalidate_user_cache, invalidate_stats_cache, invalidate_item_cache, \
+from bot.database.methods.read import invalidate_user_cache, invalidate_stats_cache, invalidate_item_cache, \
     invalidate_category_cache
 from bot.database.methods.cache_utils import safe_create_task
 from bot.database.models import User, ItemValues, Goods, Categories, BoughtGoods
 from bot.database import Database
+from bot.database.main import run_sync
 from bot.i18n import localize
 
 
-def set_role(telegram_id: int, role: int) -> None:
+def _set_role(telegram_id: int, role: int) -> None:
     """Set user's role (by Telegram ID) and commit."""
     with Database().session() as s:
         s.query(User).filter(User.telegram_id == telegram_id).update(
@@ -19,7 +20,7 @@ def set_role(telegram_id: int, role: int) -> None:
     safe_create_task(invalidate_user_cache(telegram_id))
 
 
-def update_balance(telegram_id: int | str, summ: int) -> None:
+def _update_balance(telegram_id: int | str, summ: int) -> None:
     """Increase user's balance by `summ` and commit."""
     with Database().session() as s:
         s.query(User).filter(User.telegram_id == telegram_id).update(
@@ -31,13 +32,12 @@ def update_balance(telegram_id: int | str, summ: int) -> None:
     safe_create_task(invalidate_stats_cache())
 
 
-def update_item(item_name: str, new_name: str, description: str, price, category: str) -> tuple[bool, str | None]:
+def _update_item(item_name: str, new_name: str, description: str, price, category: str) -> tuple[bool, str | None]:
     """
-    Update a Goods record with proper locking.
+    Update a Goods record with proper locking. Now uses integer PKs.
     """
     try:
         with Database().session() as session:
-            # Blocking goods for updating
             goods = session.query(Goods).filter(
                 Goods.name == item_name
             ).with_for_update().one_or_none()
@@ -45,30 +45,30 @@ def update_item(item_name: str, new_name: str, description: str, price, category
             if not goods:
                 return False, localize("admin.goods.update.position.invalid")
 
+            # Resolve category_id
+            cat_id = session.query(Categories.id).filter(Categories.name == category).scalar()
+            if not cat_id:
+                return False, localize("admin.goods.update.position.invalid")
+
             if new_name == item_name:
                 goods.description = description
                 goods.price = price
-                goods.category_name = category
+                goods.category_id = cat_id
                 return True, None
 
             # Check that the new name is not already taken
             if session.query(Goods).filter(Goods.name == new_name).first():
                 return False, localize("admin.goods.update.position.exists")
 
-            # Create a new product
-            new_goods = Goods(name=new_name, price=price, description=description, category_name=category)
-            session.add(new_goods)
-            session.flush()
+            # Simply rename in place
+            goods.name = new_name
+            goods.description = description
+            goods.price = price
+            goods.category_id = cat_id
 
-            # Update linked records
-            session.query(ItemValues).filter(ItemValues.item_name == item_name) \
-                .update({ItemValues.item_name: new_name}, synchronize_session=False)
-
+            # Update denormalized item_name in BoughtGoods for history
             session.query(BoughtGoods).filter(BoughtGoods.item_name == item_name) \
                 .update({BoughtGoods.item_name: new_name}, synchronize_session=False)
-
-            # Remove the old merchandise
-            session.query(Goods).filter(Goods.name == item_name).delete(synchronize_session=False)
 
             safe_create_task(invalidate_item_cache(item_name, category))
             if new_name != item_name:
@@ -80,7 +80,7 @@ def update_item(item_name: str, new_name: str, description: str, price, category
         return False, f"DB Error: {e.__class__.__name__}"
 
 
-def set_user_blocked(telegram_id: int, blocked: bool) -> bool:
+def _set_user_blocked(telegram_id: int, blocked: bool) -> bool:
     """Set user blocked status and commit."""
     with Database().session() as s:
         user = s.query(User).filter(User.telegram_id == telegram_id).first()
@@ -91,42 +91,34 @@ def set_user_blocked(telegram_id: int, blocked: bool) -> bool:
         return False
 
 
-def is_user_blocked(telegram_id: int) -> bool:
+def _is_user_blocked(telegram_id: int) -> bool:
     """Check if user is blocked."""
     with Database().session() as s:
         user = s.query(User).filter(User.telegram_id == telegram_id).first()
         return user.is_blocked if user else False
 
 
-def update_category(category_name: str, new_name: str) -> None:
-    """Rename a category with proper transaction handling."""
+def _update_category(category_name: str, new_name: str) -> None:
+    """Rename a category. With integer PKs, just update the name field."""
     with Database().session() as s:
-        try:
-            s.begin()
+        category = s.query(Categories).filter(
+            Categories.name == category_name
+        ).with_for_update().one_or_none()
 
-            # Block the category
-            category = s.query(Categories).filter(
-                Categories.name == category_name
-            ).with_for_update().one_or_none()
+        if not category:
+            raise ValueError("Category not found")
 
-            if not category:
-                s.rollback()
-                raise ValueError("Category not found")
+        category.name = new_name
 
-            # Updating the merchandise
-            s.query(Goods).filter(Goods.category_name == category_name).update(
-                {Goods.category_name: new_name}
-            )
+    safe_create_task(invalidate_category_cache(category_name))
+    if new_name != category_name:
+        safe_create_task(invalidate_category_cache(new_name))
 
-            # Update the category
-            category.name = new_name
 
-            s.commit()
-
-            safe_create_task(invalidate_category_cache(category_name))
-            if new_name != category_name:
-                safe_create_task(invalidate_category_cache(new_name))
-
-        except Exception:
-            s.rollback()
-            raise
+# Async public API
+set_role = run_sync(_set_role)
+update_balance = run_sync(_update_balance)
+update_item = run_sync(_update_item)
+set_user_blocked = run_sync(_set_user_blocked)
+is_user_blocked = run_sync(_is_user_blocked)
+update_category = run_sync(_update_category)

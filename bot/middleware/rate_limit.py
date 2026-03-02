@@ -185,7 +185,7 @@ class RateLimitMiddleware(BaseMiddleware):
 
         try:
             from bot.database.methods import check_role
-            role = check_role(user_id) or 0
+            role = await check_role(user_id) or 0
             # Update cache
             self.admin_cache[user_id] = (role, time.time())
             return role > 1  # ADMIN or OWNER

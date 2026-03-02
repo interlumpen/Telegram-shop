@@ -1,9 +1,10 @@
 from decimal import Decimal
 
 from bot.database.main import Database
-from bot.database.methods.transactions import buy_item_transaction, process_payment_with_referral
-from bot.database.methods.create import create_pending_payment
-from bot.database.models.main import BoughtGoods, ItemValues, Payments, Operations, ReferralEarnings, User
+from bot.database.methods.transactions import _buy_item_transaction as buy_item_transaction, \
+    _process_payment_with_referral as process_payment_with_referral
+from bot.database.methods.create import _create_pending_payment as create_pending_payment
+from bot.database.models.main import BoughtGoods, ItemValues, Goods, Payments, Operations, ReferralEarnings, User
 
 
 def _get_balance(telegram_id: int) -> float:
@@ -41,8 +42,9 @@ class TestBuyItemTransaction:
             assert bought[0].value == "val1"
             assert float(bought[0].price) == 100.0
 
+            widget = s.query(Goods).filter(Goods.name == "Widget").first()
             iv_count = s.query(ItemValues).filter(
-                ItemValues.item_name == "Widget"
+                ItemValues.item_id == widget.id
             ).count()
             assert iv_count == 0
 
@@ -103,8 +105,9 @@ class TestBuyItemTransaction:
 
         # ItemValues should still exist
         with Database().session() as s:
+            inf_item = s.query(Goods).filter(Goods.name == "InfItem").first()
             iv_count = s.query(ItemValues).filter(
-                ItemValues.item_name == "InfItem"
+                ItemValues.item_id == inf_item.id
             ).count()
             assert iv_count == 1
 
@@ -136,8 +139,9 @@ class TestBuyItemTransaction:
 
         # All ItemValues gone
         with Database().session() as s:
+            multi = s.query(Goods).filter(Goods.name == "Multi").first()
             iv_count = s.query(ItemValues).filter(
-                ItemValues.item_name == "Multi"
+                ItemValues.item_id == multi.id
             ).count()
             assert iv_count == 0
 
