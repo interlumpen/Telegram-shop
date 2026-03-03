@@ -10,9 +10,9 @@ from bot.i18n import localize
 from bot.database.models import Permission
 from bot.database.methods import (
     select_user_operations, select_user_items, check_role_name_by_id, check_user_referrals, set_role, check_user_cached,
-    create_operation, update_balance, get_role_id_by_name, get_referral_earnings_stats, get_one_referral_earning,
+    get_role_id_by_name, get_referral_earnings_stats, get_one_referral_earning,
     query_user_bought_items, query_user_referrals, query_referral_earnings_from_user, query_all_referral_earnings,
-    is_user_blocked
+    is_user_blocked, admin_balance_change
 )
 from bot.keyboards import back, close, simple_buttons, lazy_paginated_keyboard
 from bot.database.methods.audit import log_audit
@@ -582,9 +582,8 @@ async def process_replenish_user_balance(message: Message, state: FSMContext):
             balance=amount
         )
 
-        # Apply top-up
-        await create_operation(user_update.telegram_id, int(amount), datetime.datetime.now())
-        await update_balance(user_update.telegram_id, int(amount))
+        # Apply top-up (atomic: operation + balance in one transaction)
+        await admin_balance_change(user_update.telegram_id, int(amount))
 
         user_info = await message.bot.get_chat(user_id)
         await message.answer(
@@ -657,15 +656,12 @@ async def process_deduct_user_balance(message: Message, state: FSMContext):
             max_amount=Decimal(EnvKeys.MAX_AMOUNT)
         )
 
-        # Check current balance
-        db_user = await check_user_cached(user_id)
-        if not db_user:
-            await message.answer(localize('admin.users.not_found'))
-            await state.clear()
-            return
-
-        current_balance = int(float(db_user.get('balance', 0)))
-        if current_balance < int(amount):
+        # Apply deduction (atomic: check + operation + balance in one transaction)
+        try:
+            await admin_balance_change(user_id, -int(amount))
+        except ValueError:
+            db_user = await check_user_cached(user_id)
+            current_balance = int(float(db_user.get('balance', 0))) if db_user else 0
             await message.answer(
                 localize('admin.users.balance.insufficient',
                          balance=current_balance,
@@ -673,10 +669,6 @@ async def process_deduct_user_balance(message: Message, state: FSMContext):
                 reply_markup=back(f'check-user_{user_id}')
             )
             return
-
-        # Apply deduction (negative amount)
-        await create_operation(user_id, -int(amount), datetime.datetime.now())
-        await update_balance(user_id, -int(amount))
 
         user_info = await message.bot.get_chat(user_id)
         await message.answer(

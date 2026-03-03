@@ -355,7 +355,7 @@ async def successful_payment_handler(message: Message):
 
     # Idempotence
     provider = "telegram" if sp.currency != "XTR" else "stars"
-    external_id = sp.telegram_payment_charge_id or sp.provider_payment_charge_id or f"{provider}:{user_id}:{sp.total_amount}:{datetime.datetime.now().timestamp()}"
+    external_id = sp.telegram_payment_charge_id or sp.provider_payment_charge_id or f"{provider}:{user_id}:{sp.total_amount}:{datetime.datetime.now(datetime.timezone.utc).timestamp()}"
 
     success, error_msg = await process_payment_with_referral(
         user_id=user_id,

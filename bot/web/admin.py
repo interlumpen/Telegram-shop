@@ -1,4 +1,5 @@
 import logging
+import time
 from typing import Any
 
 from sqladmin import Admin, ModelView
@@ -13,6 +14,35 @@ from bot.misc import EnvKeys
 from bot.database.methods.audit import log_audit
 
 logger = logging.getLogger(__name__)
+
+
+class LoginRateLimiter:
+    """In-memory rate limiter for login attempts by IP."""
+
+    def __init__(self, max_attempts: int = 5, lockout_seconds: int = 900):
+        self.max_attempts = max_attempts
+        self.lockout_seconds = lockout_seconds
+        self._attempts: dict[str, list[float]] = {}
+
+    def is_blocked(self, ip: str) -> bool:
+        if ip not in self._attempts:
+            return False
+        now = time.time()
+        # Clean old attempts
+        self._attempts[ip] = [t for t in self._attempts[ip] if now - t < self.lockout_seconds]
+        return len(self._attempts[ip]) >= self.max_attempts
+
+    def record_failure(self, ip: str) -> None:
+        now = time.time()
+        if ip not in self._attempts:
+            self._attempts[ip] = []
+        self._attempts[ip].append(now)
+
+    def reset(self, ip: str) -> None:
+        self._attempts.pop(ip, None)
+
+
+_login_limiter = LoginRateLimiter()
 from bot.database.main import Database
 from bot.database.models.main import (
     User, Role, Categories, Goods, ItemValues,
@@ -26,15 +56,24 @@ from bot.misc.caching import get_cache_manager
 # Authentication
 class AdminAuth(AuthenticationBackend):
     async def login(self, request: Request) -> bool:
+        ip = request.client.host
+
+        if _login_limiter.is_blocked(ip):
+            log_audit("web_login_blocked", level="WARNING", details=f"ip={ip}", ip_address=ip)
+            return False
+
         form = await request.form()
         username = form.get("username")
         password = form.get("password")
 
         if username == EnvKeys.ADMIN_USERNAME and password == EnvKeys.ADMIN_PASSWORD:
             request.session.update({"authenticated": True})
-            log_audit("web_login", user_id=None, details=f"user={username}", ip_address=request.client.host)
+            _login_limiter.reset(ip)
+            log_audit("web_login", user_id=None, details=f"user={username}", ip_address=ip)
             return True
-        log_audit("web_login_failed", level="WARNING", details=f"user={username}", ip_address=request.client.host)
+
+        _login_limiter.record_failure(ip)
+        log_audit("web_login_failed", level="WARNING", details=f"user={username}", ip_address=ip)
         return False
 
     async def logout(self, request: Request) -> bool:

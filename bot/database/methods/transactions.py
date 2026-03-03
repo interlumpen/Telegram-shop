@@ -1,6 +1,8 @@
-from datetime import datetime
+from datetime import datetime, timezone
 from decimal import Decimal
 from uuid import uuid4
+
+from sqlalchemy.exc import IntegrityError
 
 from bot.database.models import User, ItemValues, Goods, BoughtGoods, Payments, Operations
 from bot.database import Database
@@ -68,7 +70,7 @@ def _buy_item_transaction(telegram_id: int, item_name: str) -> tuple[bool, str, 
                 value=item_value.value,
                 price=price,
                 buyer_id=telegram_id,
-                bought_datetime=datetime.now(),
+                bought_datetime=datetime.now(timezone.utc),
                 unique_id=uuid4().int >> 65  # 63-bit positive UUID-derived ID
             )
             s.add(bought_item)
@@ -97,7 +99,7 @@ def _buy_item_transaction(telegram_id: int, item_name: str) -> tuple[bool, str, 
                 resource_id=item_name,
                 details=str(e),
             )
-            return False, f"transaction_error: {str(e)}", None
+            return False, "transaction_error", None
 
 
 def _process_payment_with_referral(
@@ -150,7 +152,7 @@ def _process_payment_with_referral(
             operation = Operations(
                 user_id=user_id,
                 operation_value=amount,
-                operation_time=datetime.now()
+                operation_time=datetime.now(timezone.utc)
             )
             s.add(operation)
 
@@ -195,6 +197,10 @@ def _process_payment_with_referral(
 
             return True, "success"
 
+        except IntegrityError:
+            s.rollback()
+            return False, "already_processed"
+
         except Exception as e:
             s.rollback()
             log_audit(
@@ -204,9 +210,64 @@ def _process_payment_with_referral(
                 resource_type="Payment",
                 details=f"provider={provider}, amount={amount}, error={e}",
             )
-            return False, f"error: {str(e)}"
+            return False, "payment_error"
+
+
+def _admin_balance_change(telegram_id: int, amount: int) -> tuple[bool, str]:
+    """
+    Atomic admin balance change (top-up or deduction) with operation record.
+    amount > 0 for top-up, amount < 0 for deduction.
+    Returns (success, message).
+    Raises ValueError if insufficient funds for deduction.
+    """
+    with Database().session() as s:
+        try:
+            s.begin()
+
+            user = s.query(User).filter(
+                User.telegram_id == telegram_id
+            ).with_for_update().one_or_none()
+
+            if not user:
+                s.rollback()
+                return False, "user_not_found"
+
+            if amount < 0 and user.balance < abs(amount):
+                s.rollback()
+                raise ValueError("insufficient_funds")
+
+            user.balance += amount
+
+            operation = Operations(
+                user_id=telegram_id,
+                operation_value=amount,
+                operation_time=datetime.now(timezone.utc)
+            )
+            s.add(operation)
+
+            s.commit()
+
+            safe_create_task(invalidate_user_cache(telegram_id))
+            safe_create_task(invalidate_stats_cache())
+
+            return True, "success"
+
+        except ValueError:
+            raise
+
+        except Exception as e:
+            s.rollback()
+            log_audit(
+                "admin_balance_change_failed",
+                level="WARNING",
+                user_id=telegram_id,
+                resource_type="User",
+                details=f"amount={amount}, error={e}",
+            )
+            return False, "balance_change_error"
 
 
 # Async public API
 buy_item_transaction = run_sync(_buy_item_transaction)
 process_payment_with_referral = run_sync(_process_payment_with_referral)
+admin_balance_change = run_sync(_admin_balance_change)

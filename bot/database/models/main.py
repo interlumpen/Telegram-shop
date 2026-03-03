@@ -281,15 +281,5 @@ async def register_models():
 
 
 def _register_models_sync():
-    try:
-        Database.BASE.metadata.create_all(Database().engine)
-    except UnicodeDecodeError as e:
-        raise RuntimeError(
-            f"Database encoding error: {e}\n"
-            "Your PostgreSQL cluster likely uses SQL_ASCII or WIN1252 encoding.\n"
-            "Recreate the database with UTF-8:\n"
-            "  CREATE DATABASE your_db ENCODING 'UTF8' TEMPLATE template0 LC_COLLATE='en_US.UTF-8' LC_CTYPE='en_US.UTF-8';\n"
-            "On Windows you may need to reinitialize the cluster:\n"
-            "  pg_dropcluster / initdb -E UTF8 --locale=en_US.UTF-8"
-        ) from e
+    Database.BASE.metadata.create_all(Database().engine)
     Role.insert_roles()

@@ -142,6 +142,7 @@ via the command line (CLI) without the need for a shell and advanced monitoring 
     - Payments: 10 per minute
 - Automatic ban system with configurable duration
 - Admin bypass option
+- Admin panel login rate limiting (5 attempts, 15-minute lockout per IP)
 
 #### 2. **Security Middleware**
 
@@ -160,8 +161,12 @@ via the command line (CLI) without the need for a shell and advanced monitoring 
 #### 4. **Payment Security**
 
 - **Idempotent Payment Processing**: Prevents duplicate charges
+- **Concurrent Payment Protection**: Graceful handling of duplicate payment attempts via IntegrityError catch
 - **Transactional Integrity**: ACID compliance for all financial operations
+- **Atomic Admin Balance Operations**: Top-up and deduction with FOR UPDATE lock in a single transaction
 - **External ID Tracking**: Unique identifiers for payment reconciliation
+- **Error Sanitization**: Internal error details never exposed to users; generic error codes returned, details logged to
+  audit
 
 #### 5. **Data Validation**
 
@@ -308,15 +313,16 @@ The application requires the following environment variables:
 <details>
 <summary><b>📊 Web Admin Panel</b></summary>
 
-| Variable         | Description                       | Default                      |
-|------------------|-----------------------------------|------------------------------|
-| `ADMIN_HOST`     | Admin panel bind address          | `localhost`                  |
-| `ADMIN_PORT`     | Admin panel port                  | `9090`                       |
-| `ADMIN_USERNAME` | Admin panel login                 | `admin`                      |
-| `ADMIN_PASSWORD` | Admin panel password              | `admin`                      |
-| `SECRET_KEY`     | Secret key for session encryption | `change-me-in-production`    |
+| Variable         | Description                       | Default                   |
+|------------------|-----------------------------------|---------------------------|
+| `ADMIN_HOST`     | Admin panel bind address          | `localhost`               |
+| `ADMIN_PORT`     | Admin panel port                  | `9090`                    |
+| `ADMIN_USERNAME` | Admin panel login                 | `admin`                   |
+| `ADMIN_PASSWORD` | Admin panel password              | `admin`                   |
+| `SECRET_KEY`     | Secret key for session encryption | `change-me-in-production` |
 
-**Note**: In Docker, `ADMIN_HOST` is automatically set to `0.0.0.0` and the admin panel is bound to `127.0.0.1:9090` (localhost only). Change `ADMIN_PASSWORD` and `SECRET_KEY` in production.
+**Note**: In Docker, `ADMIN_HOST` is automatically set to `0.0.0.0` and the admin panel is bound to `127.0.0.1:9090` (
+localhost only). Change `ADMIN_PASSWORD` and `SECRET_KEY` in production.
 
 </details>
 
@@ -498,7 +504,8 @@ alembic upgrade head
 The bot includes a web-based admin panel powered by SQLAdmin, accessible at http://localhost:9090/admin
 
 - Login with credentials from your `.env` file (`ADMIN_USERNAME` / `ADMIN_PASSWORD`)
-- Browse all database tables: users, roles, categories, products, purchases, payments, operations, referral earnings, audit logs
+- Browse all database tables: users, roles, categories, products, purchases, payments, operations, referral earnings,
+  audit logs
 - Search, filter, and sort records
 - Read-only access for financial tables (purchases, payments, operations) and audit logs
 - All create/edit/delete operations through the web panel are automatically audit-logged
@@ -646,6 +653,7 @@ await update_balance(telegram_id: int, amount: int) -> None
 await buy_item_transaction(telegram_id: int, item_name: str) -> tuple[bool, str, dict]
 await process_payment_with_referral(
     user_id: int, amount: Decimal, provider: str, external_id: str, referral_percent: int = 0) -> tuple[bool, str]
+await admin_balance_change(telegram_id: int, amount: int) -> tuple[bool, str]
 ```
 
 #### Product Management
@@ -703,13 +711,13 @@ from bot.database.methods.audit import log_audit
 
 # Dual-write: logs to both rotating file and audit_log DB table
 log_audit(
-    "purchase",                              # action name
-    level="INFO",                            # INFO / WARNING / ERROR
-    user_id=123456789,                       # who performed the action
-    resource_type="Item",                    # affected entity type
-    resource_id="Premium Account",           # affected entity ID
-    details="price=100 RUB",                 # free-form context
-    ip_address=None,                         # for web admin actions
+    "purchase",  # action name
+    level="INFO",  # INFO / WARNING / ERROR
+    user_id=123456789,  # who performed the action
+    resource_type="Item",  # affected entity type
+    resource_id="Premium Account",  # affected entity ID
+    details="price=100 RUB",  # free-form context
+    ip_address=None,  # for web admin actions
 )
 ```
 
@@ -744,7 +752,7 @@ engine = create_engine(
 
 ## 🧪 Testing
 
-The project includes a comprehensive test suite with **293 tests** covering all major components, business logic, and
+The project includes a comprehensive test suite with **305 tests** covering all major components, business logic, and
 edge cases. Tests use SQLite in-memory with real SQL queries, and a dict-based FakeCacheManager for realistic cache
 behavior.
 
@@ -765,24 +773,25 @@ pytest tests/ --cov=bot --cov-report=html
 
 ### Test Modules Overview
 
-| Module                       | Tests   | Coverage                                                   |
-|------------------------------|---------|------------------------------------------------------------|
-| `test_database_crud.py`      | 67      | CRUD: users, roles, categories, items, balance, stats      |
-| `test_validators.py`         | 44      | Input validation, control chars, XSS, Pydantic models      |
-| `test_middleware.py`         | 32      | Rate limiting, suspicious patterns, critical actions, auth |
-| `test_keyboards.py`          | 28      | All inline keyboard generators                             |
-| `test_admin_handlers.py`     | 20      | User management, categories, goods (admin)                 |
-| `test_transactions.py`       | 15      | Purchase & payment transactions, idempotency               |
-| `test_metrics.py`            | 14      | MetricsCollector, AnalyticsMiddleware                      |
-| `test_cache_invalidation.py` | 13      | Cache invalidation after DB mutations                      |
-| `test_broadcast.py`          | 11      | BroadcastManager, BroadcastStats                           |
-| `test_paginator.py`          | 10      | LazyPaginator with caching                                 |
-| `test_payment_handlers.py`   | 10      | Balance top-up, payment check, item purchase               |
-| `test_shop_handlers.py`      | 10      | Shop browsing, item info, bought items                     |
-| `test_user_handlers.py`      | 8       | /start, profile, rules, referral registration              |
-| `test_referral_system.py`    | 7       | Referral stats, earnings, view referrals                   |
-| `test_recovery.py`           | 4       | RecoveryManager lifecycle, payment recovery                |
-| **Total**                    | **293** | **Complete system coverage**                               |
+| Module                       | Tests   | Coverage                                                    |
+|------------------------------|---------|-------------------------------------------------------------|
+| `test_database_crud.py`      | 67      | CRUD: users, roles, categories, items, balance, stats       |
+| `test_validators.py`         | 44      | Input validation, control chars, XSS, Pydantic models       |
+| `test_middleware.py`         | 32      | Rate limiting, suspicious patterns, critical actions, auth  |
+| `test_keyboards.py`          | 28      | All inline keyboard generators                              |
+| `test_admin_handlers.py`     | 20      | User management, categories, goods (admin)                  |
+| `test_transactions.py`       | 21      | Purchase & payment transactions, idempotency, admin balance |
+| `test_metrics.py`            | 14      | MetricsCollector, AnalyticsMiddleware                       |
+| `test_cache_invalidation.py` | 13      | Cache invalidation after DB mutations                       |
+| `test_broadcast.py`          | 11      | BroadcastManager, BroadcastStats                            |
+| `test_paginator.py`          | 10      | LazyPaginator with caching                                  |
+| `test_payment_handlers.py`   | 10      | Balance top-up, payment check, item purchase                |
+| `test_shop_handlers.py`      | 10      | Shop browsing, item info, bought items                      |
+| `test_user_handlers.py`      | 8       | /start, profile, rules, referral registration               |
+| `test_referral_system.py`    | 7       | Referral stats, earnings, view referrals                    |
+| `test_login_rate_limiter.py` | 6       | LoginRateLimiter: blocking, reset, expiry, IP isolation     |
+| `test_recovery.py`           | 4       | RecoveryManager lifecycle, payment recovery                 |
+| **Total**                    | **305** | **Complete system coverage**                                |
 
 ### Test Architecture
 
@@ -799,6 +808,7 @@ The test suite validates:
 * ✅ **Transactional purchase safety** — balance deduction, stock removal, rollback on error
 * ✅ **Payment idempotency** — duplicate payment processing prevented via unique constraint
 * ✅ **Referral bonus calculation** — percentage-based bonus, referrer cache invalidation
+* ✅ **Atomic admin balance operations** — top-up, deduction, insufficient funds check in single transaction
 * ✅ **Cache invalidation after mutations** — stale balance/stats prevention
 
 </details>
@@ -810,6 +820,7 @@ The test suite validates:
 * ✅ **Suspicious pattern detection** — XSS/script injection, length-based DoS protection
 * ✅ **Critical action detection** — audit logging for buy/pay/delete/admin operations
 * ✅ **Authentication middleware** — blocked user rejection, bot rejection
+* ✅ **Admin panel login rate limiting** — block after max attempts, lockout expiry, IP isolation
 
 </details>
 

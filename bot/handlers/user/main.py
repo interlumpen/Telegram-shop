@@ -55,7 +55,7 @@ async def start(message: Message, state: FSMContext):
     # registration_date is DateTime
     await create_user(
         telegram_id=int(user_id),
-        registration_date=datetime.datetime.now(),
+        registration_date=datetime.datetime.now(datetime.timezone.utc),
         referral_id=int(referral_id) if referral_id else None,
         role=user_role
     )
@@ -97,7 +97,7 @@ async def back_to_menu_callback_handler(call: CallbackQuery, state: FSMContext):
     if not user:
         await create_user(
             telegram_id=user_id,
-            registration_date=datetime.datetime.now(),
+            registration_date=datetime.datetime.now(datetime.timezone.utc),
             referral_id=None,
             role=1
         )

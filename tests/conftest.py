@@ -222,7 +222,7 @@ def user_factory():
     ):
         _create_user(
             telegram_id=telegram_id,
-            registration_date=datetime.datetime.now(),
+            registration_date=datetime.datetime.now(datetime.timezone.utc),
             referral_id=referral_id,
             role=role_id,
         )

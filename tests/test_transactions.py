@@ -1,8 +1,11 @@
 from decimal import Decimal
 
 from bot.database.main import Database
+import pytest
+
 from bot.database.methods.transactions import _buy_item_transaction as buy_item_transaction, \
-    _process_payment_with_referral as process_payment_with_referral
+    _process_payment_with_referral as process_payment_with_referral, \
+    _admin_balance_change as admin_balance_change
 from bot.database.methods.create import _create_pending_payment as create_pending_payment
 from bot.database.models.main import BoughtGoods, ItemValues, Goods, Payments, Operations, ReferralEarnings, User
 
@@ -366,3 +369,87 @@ class TestProcessPaymentWithReferral:
             ).first()
             assert payment is not None
             assert float(payment.amount) == 99999.0
+
+
+class TestAdminBalanceChange:
+
+    def test_topup_success(self, user_factory):
+        user_factory(telegram_id=300001, balance=100)
+
+        success, msg = admin_balance_change(300001, 500)
+
+        assert success is True
+        assert msg == "success"
+        assert _get_balance(300001) == 600.0
+
+        # Operation record created
+        with Database().session() as s:
+            ops = s.query(Operations).filter(
+                Operations.user_id == 300001
+            ).all()
+            assert len(ops) == 1
+            assert float(ops[0].operation_value) == 500.0
+
+    def test_deduct_success(self, user_factory):
+        user_factory(telegram_id=300002, balance=500)
+
+        success, msg = admin_balance_change(300002, -200)
+
+        assert success is True
+        assert msg == "success"
+        assert _get_balance(300002) == 300.0
+
+        # Operation record created with negative value
+        with Database().session() as s:
+            ops = s.query(Operations).filter(
+                Operations.user_id == 300002
+            ).all()
+            assert len(ops) == 1
+            assert float(ops[0].operation_value) == -200.0
+
+    def test_deduct_insufficient_funds(self, user_factory):
+        user_factory(telegram_id=300003, balance=100)
+
+        with pytest.raises(ValueError, match="insufficient_funds"):
+            admin_balance_change(300003, -200)
+
+        # Balance unchanged
+        assert _get_balance(300003) == 100.0
+
+        # No operation record created
+        with Database().session() as s:
+            ops = s.query(Operations).filter(
+                Operations.user_id == 300003
+            ).all()
+            assert len(ops) == 0
+
+    def test_deduct_exact_balance(self, user_factory):
+        user_factory(telegram_id=300004, balance=500)
+
+        success, msg = admin_balance_change(300004, -500)
+
+        assert success is True
+        assert _get_balance(300004) == 0.0
+
+    def test_user_not_found(self):
+        success, msg = admin_balance_change(999888, 100)
+
+        assert success is False
+        assert msg == "user_not_found"
+
+    def test_topup_and_deduct_atomic(self, user_factory):
+        """Verify that balance and operation are created atomically."""
+        user_factory(telegram_id=300005, balance=1000)
+
+        admin_balance_change(300005, 500)
+        admin_balance_change(300005, -300)
+
+        assert _get_balance(300005) == 1200.0
+
+        with Database().session() as s:
+            ops = s.query(Operations).filter(
+                Operations.user_id == 300005
+            ).order_by(Operations.id).all()
+            assert len(ops) == 2
+            assert float(ops[0].operation_value) == 500.0
+            assert float(ops[1].operation_value) == -300.0
