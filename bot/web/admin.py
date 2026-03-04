@@ -7,6 +7,7 @@ from sqladmin.authentication import AuthenticationBackend
 from starlette.applications import Starlette
 from starlette.requests import Request
 from starlette.responses import JSONResponse, PlainTextResponse
+from starlette.middleware.sessions import SessionMiddleware
 from starlette.routing import Route
 from sqlalchemy import text
 
@@ -283,6 +284,7 @@ def create_admin_app() -> Starlette:
     ]
 
     app = Starlette(routes=routes)
+    app.add_middleware(SessionMiddleware, secret_key=EnvKeys.SECRET_KEY)
 
     auth_backend = AdminAuth(secret_key=EnvKeys.SECRET_KEY)
     admin = Admin(

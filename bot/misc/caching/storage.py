@@ -44,8 +44,12 @@ class CustomRedisStorage(RedisStorage):
 def get_redis_storage() -> Optional[RedisStorage]:
     """
     Create Redis storage with proper configuration.
-    Returns None if Redis is not available.
+    Returns None if Redis is disabled or not available.
     """
+    if EnvKeys.REDIS_ENABLED != "1":
+        logging.info("Redis is disabled via REDIS_ENABLED=0")
+        return None
+
     try:
         redis = Redis(
             host=EnvKeys.REDIS_HOST,

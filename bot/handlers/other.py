@@ -4,6 +4,7 @@ import re
 from aiogram import Router, F
 from aiogram.types import CallbackQuery
 from aiogram.exceptions import TelegramBadRequest, TelegramForbiddenError
+from aiogram.enums import ChatMemberStatus
 
 from bot.misc import EnvKeys
 from bot.logger_mesh import logger
@@ -29,7 +30,7 @@ async def dummy_button(call: CallbackQuery):
 
 async def check_sub_channel(chat_member) -> bool:
     """channel subscription check"""
-    return str(chat_member.status) != 'left'
+    return chat_member.status not in (ChatMemberStatus.LEFT, ChatMemberStatus.KICKED)
 
 
 async def get_bot_info(event) -> str:

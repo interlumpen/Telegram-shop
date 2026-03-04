@@ -10,6 +10,8 @@ services:
       timeout: 3s
       retries: 5
     restart: unless-stopped
+    profiles:
+      - redis
 
   db:
     image: postgres:16
@@ -45,8 +47,6 @@ services:
       - ./logs:/app/logs
     depends_on:
       db:
-        condition: service_healthy
-      redis:
         condition: service_healthy
     restart: unless-stopped
     healthcheck:

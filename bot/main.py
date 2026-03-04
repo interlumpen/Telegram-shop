@@ -91,6 +91,11 @@ async def __on_start_up(dp: Dispatcher, bot: Bot) -> None:
         await warm_up_critical_caches()
 
         logging.info("Cache system initialized and warmed up")
+
+        # Start cache scheduler only when Redis is available
+        global cache_scheduler
+        cache_scheduler = CacheScheduler()
+        await cache_scheduler.start()
     else:
         logging.warning("Redis not available - caching disabled")
 
@@ -171,7 +176,6 @@ async def warm_up_critical_caches():
 
 async def start_bot() -> None:
     """Start the bot with enhanced security and monitoring"""
-    global cache_scheduler
 
     # Logging Configuration
     configure_logging(
@@ -211,9 +215,6 @@ async def start_bot() -> None:
 
     # Store reference to the main event loop for worker threads
     set_main_loop(asyncio.get_running_loop())
-
-    cache_scheduler = CacheScheduler()
-    await cache_scheduler.start()
 
     # Creating a dispatcher
     dp = Dispatcher(storage=storage)

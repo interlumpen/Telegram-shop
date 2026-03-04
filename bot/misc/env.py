@@ -31,6 +31,7 @@ class EnvKeys(ABC):
     POSTGRES_HOST: Final = _get_optional("POSTGRES_HOST", "localhost")
 
     # Redis
+    REDIS_ENABLED: Final = _get_optional("REDIS_ENABLED", "1")
     REDIS_HOST: Final = _get_optional("REDIS_HOST", "localhost")
     REDIS_PORT: Final = int(_get_optional("REDIS_PORT", "6379"))
     REDIS_DB: Final = int(_get_optional("REDIS_DB", "0"))
@@ -48,6 +49,7 @@ class EnvKeys(ABC):
 
     # Links / UI
     CHANNEL_URL: Final = _get_optional("CHANNEL_URL", "")
+    CHANNEL_ID: Final = _get_optional("CHANNEL_ID", "")
     HELPER_ID: Final = _get_optional("HELPER_ID", "")
     RULES: Final = _get_optional("RULES", "")
 

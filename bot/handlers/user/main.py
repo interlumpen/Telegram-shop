@@ -71,7 +71,8 @@ async def start(message: Message, state: FSMContext):
     # Optional subscription check
     try:
         if channel_username:
-            chat_member = await message.bot.get_chat_member(chat_id=f'@{channel_username}', user_id=user_id)
+            chat_id = int(EnvKeys.CHANNEL_ID) if EnvKeys.CHANNEL_ID else f"@{channel_username}"
+            chat_member = await message.bot.get_chat_member(chat_id=chat_id, user_id=user_id)
             if not await check_sub_channel(chat_member):
                 markup = check_sub(channel_username)
                 await message.answer(localize("subscribe.prompt"), reply_markup=markup)
@@ -162,7 +163,8 @@ async def check_sub_to_channel(call: CallbackQuery, state: FSMContext):
     helper = EnvKeys.HELPER_ID
 
     if channel_username:
-        chat_member = await call.bot.get_chat_member(chat_id='@' + channel_username, user_id=user_id)
+        chat_id = int(EnvKeys.CHANNEL_ID) if EnvKeys.CHANNEL_ID else f"@{channel_username}"
+        chat_member = await call.bot.get_chat_member(chat_id=chat_id, user_id=user_id)
         if await check_sub_channel(chat_member):
             user = await check_user_cached(user_id)
             role_id = user.get('role_id')

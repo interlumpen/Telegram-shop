@@ -84,14 +84,15 @@ via the command line (CLI) without the need for a shell and advanced monitoring 
     - 20 persistent connections with up to 40 overflow connections
     - Automatic connection recycling and timeout handling
     - Graceful handling of high-load scenarios
-- **Intelligent Redis Caching**: Multi-layer caching system for optimal performance
+- **Optional Redis Caching**: Multi-layer caching system for optimal performance (enable with `REDIS_ENABLED=1`)
     - User role caching (15-minute TTL)
     - Product catalog caching (5-minute TTL)
     - Statistics caching (1-minute TTL)
     - Smart cache invalidation on data updates
     - Cache warm-up on startup (categories, user/admin counts)
     - Cache scheduler: hourly stats refresh, daily cleanup at 3:00 AM
-- **Performance Optimizations**: Up to 60% reduction in database queries for read operations
+    - When disabled: bot uses in-memory FSM storage and queries the database directly
+- **Performance Optimizations**: Up to 60% reduction in database queries for read operations (with Redis enabled)
 - **Non-Blocking Database Layer**: All synchronous DB operations execute in a thread pool
   via `run_sync()` decorator, keeping the asyncio event loop responsive under load
 
@@ -214,7 +215,7 @@ via the command line (CLI) without the need for a shell and advanced monitoring 
 ### Performance Architecture
 
 - **Connection Pooling**: Advanced PostgreSQL connection management with automatic recycling
-- **Multi-Level Caching**: Redis-based intelligent caching with TTL-based expiration
+- **Multi-Level Caching**: Optional Redis-based intelligent caching with TTL-based expiration
 - **Cache Invalidation**: Smart cache clearing on data modifications
 - **Concurrent Load Handling**: Optimized for high-traffic scenarios with connection queuing
 - **Metrics Pipeline**: Asynchronous metrics collection without performance impact
@@ -226,7 +227,7 @@ via the command line (CLI) without the need for a shell and advanced monitoring 
 - **Language**: Python 3.11+
 - **Framework**: Aiogram 3.22+ (async Telegram Bot API)
 - **Database**: PostgreSQL 16+ with SQLAlchemy 2.0
-- **Cache/Storage**: Redis 7+ (FSM states, intelligent data caching)
+- **Cache/Storage**: Redis 7+ (optional — FSM states, intelligent data caching)
 - **Migrations**: Alembic
 
 ### Security & Validation
@@ -288,11 +289,12 @@ The application requires the following environment variables:
 <details>
 <summary><b>🔗 Links / UI</b></summary>
 
-| Variable      | Description                              | Default |
-|---------------|------------------------------------------|---------|
-| `CHANNEL_URL` | News channel link (public channels only) | -       |
-| `HELPER_ID`   | Support user Telegram ID                 | -       |
-| `RULES`       | Bot usage rules text                     | -       |
+| Variable      | Description                            | Default |
+|---------------|----------------------------------------|---------|
+| `CHANNEL_URL` | News channel link                      | -       |
+| `CHANNEL_ID`  | News channel ID (get from @get_id_bot) | -       |
+| `HELPER_ID`   | Support user Telegram ID               | -       |
+| `RULES`       | Bot usage rules text                   | -       |
 
 </details>
 
@@ -327,14 +329,18 @@ localhost only). Change `ADMIN_PASSWORD` and `SECRET_KEY` in production.
 </details>
 
 <details>
-<summary><b>📦 Redis Storage</b></summary>
+<summary><b>📦 Redis Storage (Optional)</b></summary>
 
-| Variable         | Description                             | Default     |
-|------------------|-----------------------------------------|-------------|
-| `REDIS_HOST`     | Redis server address                    | `localhost` |
-| `REDIS_PORT`     | Redis server port                       | `6379`      |
-| `REDIS_DB`       | Redis database number                   | `0`         |
-| `REDIS_PASSWORD` | Redis password (leave empty for Docker) | -           |
+| Variable         | Description                                                    | Default     |
+|------------------|----------------------------------------------------------------|-------------|
+| `REDIS_ENABLED`  | Enable Redis for caching and FSM storage (`1` = on, `0` = off) | `1`         |
+| `REDIS_HOST`     | Redis server address                                           | `localhost` |
+| `REDIS_PORT`     | Redis server port                                              | `6379`      |
+| `REDIS_DB`       | Redis database number                                          | `0`         |
+| `REDIS_PASSWORD` | Redis password (leave empty for Docker)                        | -           |
+
+**Note**: When `REDIS_ENABLED=0`, the bot uses in-memory storage for FSM states (lost on restart) and all caching is
+disabled. The bot remains fully functional but without caching optimizations.
 
 </details>
 
@@ -358,6 +364,7 @@ localhost only). Change `ADMIN_PASSWORD` and `SECRET_KEY` in production.
 
 - Docker and Docker Compose (recommended)
 - OR Python 3.11+ and PostgreSQL 16+
+- Redis 7+ (optional — for caching and persistent FSM storage)
 
 ### 🐳 Deploy with Docker (Recommended)
 
@@ -379,6 +386,11 @@ nano .env  # or use any text editor
 3. **Start the bot**
 
 ```bash
+# With Redis (caching enabled):
+docker compose --profile redis up -d --build
+
+# Without Redis (simpler setup, no caching):
+# Set REDIS_ENABLED=0 in .env first
 docker compose up -d --build
 ```
 
@@ -456,6 +468,7 @@ export OWNER_ID="your_telegram_id"
 export POSTGRES_DB="telegram_shop"
 export POSTGRES_USER="shop_user"
 export POSTGRES_PASSWORD="your_password"
+export REDIS_ENABLED="0"  # Set to "1" if Redis is installed and running
 # Set other required variables
 ```
 
@@ -512,7 +525,7 @@ The bot includes a web-based admin panel powered by SQLAdmin, accessible at http
 
 #### Monitoring Endpoints
 
-- /health - Health check endpoint (database, Redis status)
+- /health - Health check endpoint (database, Redis status if enabled)
 - /metrics - Raw metrics in JSON format
 - /metrics/prometheus - Prometheus-compatible metrics export
 
@@ -529,7 +542,7 @@ The bot includes a recovery system for stuck payments:
 
 #### Health Monitoring
 
-- Periodic checks of database, Redis, and Telegram API (every 60 seconds)
+- Periodic checks of database, Redis (when enabled), and Telegram API (every 60 seconds)
 - Logs failures for observability
 
 ## 📱 Usage
