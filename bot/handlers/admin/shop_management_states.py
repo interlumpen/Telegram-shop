@@ -254,6 +254,7 @@ async def show_user_info(call: CallbackQuery):
     """
     query = call.data[10:]
     origin, user_id = query.split("-")  # origin: 'user' | 'admin'
+    user_id = int(user_id)
     back_target = "users_list" if origin == "user" else "admins_list"
 
     user = await check_user_cached(user_id)

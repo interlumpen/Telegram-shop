@@ -122,6 +122,7 @@ class UserAdmin(AuditModelView, model=User):
 
 class RoleAdmin(AuditModelView, model=Role):
     column_list = [Role.id, Role.name, Role.default, Role.permissions]
+    column_details_exclude_list = ["users"]
     column_sortable_list = [Role.id, Role.name]
     name = "Role"
     name_plural = "Roles"

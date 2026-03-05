@@ -172,7 +172,7 @@ async def check_item_name_for_update(message: Message, state):
         )
         return
 
-    await state.update_data(item_old_name=item_name, item_category=item['category_name'])
+    await state.update_data(item_old_name=item_name, item_category=item['category_id'])
     await message.answer(localize('admin.goods.update.prompt.new_name'), reply_markup=back('goods_management'))
     await state.set_state(UpdateItemFSM.waiting_item_new_name)
 

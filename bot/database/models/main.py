@@ -25,7 +25,7 @@ class Role(Database.BASE):
     name = Column(String(64), unique=True)
     default = Column(Boolean, default=False, index=True)
     permissions = Column(Integer)
-    users = relationship('User', backref='role', lazy='dynamic')
+    users = relationship('User', backref='role', lazy='select')
 
     def __init__(self, name: str, permissions=None, **kwargs):
         super(Role, self).__init__(**kwargs)
