@@ -289,12 +289,12 @@ The application requires the following environment variables:
 <details>
 <summary><b>🔗 Links / UI</b></summary>
 
-| Variable      | Description                            | Default |
-|---------------|----------------------------------------|---------|
-| `CHANNEL_URL` | News channel link                      | -       |
-| `CHANNEL_ID`  | News channel ID (get from @get_id_bot) | -       |
-| `HELPER_ID`   | Support user Telegram ID               | -       |
-| `RULES`       | Bot usage rules text                   | -       |
+| Variable      | Description                                       | Default |
+|---------------|---------------------------------------------------|---------|
+| `CHANNEL_URL` | News channel link                                 | -       |
+| `CHANNEL_ID`  | [News channel ID](https://telegram.me/get_id_bot) | -       |
+| `HELPER_ID`   | Support user Telegram ID                          | -       |
+| `RULES`       | Bot usage rules text                              | -       |
 
 </details>
 
@@ -380,7 +380,6 @@ cd Telegram-shop
 ```bash
 cp .env.example .env
 # Edit .env with your configuration
-nano .env  # or use any text editor
 ```
 
 3. **Start the bot**
@@ -458,18 +457,11 @@ createdb telegram_shop
 createuser shop_user -P
 ```
 
-5. **Configure environment**
-    - [Set environment variables in PyCharm](https://stackoverflow.com/questions/42708389/how-to-set-environment-variables-in-pycharm)
-    - Or export them in terminal:
+5. **Create environment file**
 
 ```bash
-export TOKEN="your_bot_token"
-export OWNER_ID="your_telegram_id"
-export POSTGRES_DB="telegram_shop"
-export POSTGRES_USER="shop_user"
-export POSTGRES_PASSWORD="your_password"
-export REDIS_ENABLED="0"  # Set to "1" if Redis is installed and running
-# Set other required variables
+cp .env.example .env
+# Edit .env with your configuration
 ```
 
 6. **Run migrations**
@@ -491,7 +483,7 @@ Open in browser: http://localhost:9090/admin
 ### 📝 Post-Installation
 
 1. **Add bot to channel** (if using news channel feature):
-    - Add your bot to the channel specified in `CHANNEL_URL`
+    - Add your bot to the channel specified in `CHANNEL_URL` and `CHANNEL_ID`
     - Grant administrator rights with "Post Messages" permission
 
 2. **Apply latest migrations** (if updating):
