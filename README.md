@@ -61,12 +61,14 @@ via the command line (CLI) without the need for a shell and advanced monitoring 
 ### Admin Features
 
 - **Role-Based Access Control** (RBAC):
-    - USER: Basic shop access
-    - ADMIN: Shop management + user management
-    - OWNER: Full control including admin management
+    - Built-in roles: USER, ADMIN, OWNER
+    - Custom roles: Create roles with granular permission bitmasks via admin panel
+    - Role management: Create, edit, delete roles; assign roles to users
+    - Permission-safe: Cannot create/assign roles exceeding own permissions
 - **Comprehensive Admin Panel**:
     - Real-time statistics dashboard
     - User management with balance control
+    - Role management: create custom roles, assign roles to users
     - Product and category management
     - Broadcast messaging system
     - Dual-write audit logging (rotating file + database table with web UI)
@@ -604,9 +606,15 @@ Available for users with ADMIN/OWNER role:
 
 #### User Management
 
-- View profiles, adjust balances, change roles
+- View profiles, adjust balances, assign roles from inline keyboard
 
 ![User Management](assets/user_menu_picture.png)
+
+#### Role Management
+
+- Create custom roles with granular permission bitmasks (USE, BROADCAST, SETTINGS, USERS, SHOP, ADMINS, OWNER)
+- Edit and delete custom roles (built-in USER/ADMIN/OWNER cannot be deleted)
+- Permission-safe: cannot create or assign roles with permissions exceeding your own
 
 #### Broadcasting & Analytics
 
@@ -667,6 +675,18 @@ await admin_balance_change(telegram_id: int, amount: int) -> tuple[bool, str]
 await create_item(item_name: str, item_description: str, item_price: int, category_name: str) -> None
 await add_values_to_item(item_name: str, value: str, is_infinity: bool) -> bool
 await delete_item(item_name: str) -> None
+```
+
+#### Role Management
+
+```python
+await create_role(name: str, permissions: int) -> int | None
+await update_role(role_id: int, name: str, permissions: int) -> tuple[bool, str | None]
+await delete_role(role_id: int) -> tuple[bool, str | None]
+await get_all_roles() -> list[dict]
+await get_roles_with_max_perms(max_perms: int) -> list[dict]
+await get_role_by_id(role_id: int) -> dict | None
+await count_users_with_role(role_id: int) -> int
 ```
 
 ### Middleware Configuration
@@ -757,7 +777,7 @@ engine = create_engine(
 
 ## 🧪 Testing
 
-The project includes a comprehensive test suite with **305 tests** covering all major components, business logic, and
+The project includes a comprehensive test suite with **359 tests** covering all major components, business logic, and
 edge cases. Tests use SQLite in-memory with real SQL queries, and a dict-based FakeCacheManager for realistic cache
 behavior.
 
@@ -780,11 +800,12 @@ pytest tests/ --cov=bot --cov-report=html
 
 | Module                       | Tests   | Coverage                                                    |
 |------------------------------|---------|-------------------------------------------------------------|
-| `test_database_crud.py`      | 67      | CRUD: users, roles, categories, items, balance, stats       |
+| `test_database_crud.py`      | 71      | CRUD: users, roles, categories, items, balance, stats       |
 | `test_validators.py`         | 44      | Input validation, control chars, XSS, Pydantic models       |
-| `test_middleware.py`         | 32      | Rate limiting, suspicious patterns, critical actions, auth  |
-| `test_keyboards.py`          | 28      | All inline keyboard generators                              |
-| `test_admin_handlers.py`     | 20      | User management, categories, goods (admin)                  |
+| `test_role_management.py`    | 43      | Role CRUD methods, role management handlers, helpers        |
+| `test_middleware.py`         | 36      | Rate limiting, suspicious patterns, critical actions, auth  |
+| `test_keyboards.py`          | 31      | All inline keyboard generators incl. admin console          |
+| `test_admin_handlers.py`     | 20      | User management, assign role, categories, goods (admin)     |
 | `test_transactions.py`       | 21      | Purchase & payment transactions, idempotency, admin balance |
 | `test_metrics.py`            | 14      | MetricsCollector, AnalyticsMiddleware                       |
 | `test_cache_invalidation.py` | 13      | Cache invalidation after DB mutations                       |
@@ -796,7 +817,7 @@ pytest tests/ --cov=bot --cov-report=html
 | `test_referral_system.py`    | 7       | Referral stats, earnings, view referrals                    |
 | `test_login_rate_limiter.py` | 6       | LoginRateLimiter: blocking, reset, expiry, IP isolation     |
 | `test_recovery.py`           | 4       | RecoveryManager lifecycle, payment recovery                 |
-| **Total**                    | **305** | **Complete system coverage**                                |
+| **Total**                    | **359** | **Complete system coverage**                                |
 
 ### Test Architecture
 
@@ -832,7 +853,7 @@ The test suite validates:
 <details>
 <summary>Database Operations</summary>
 
-* ✅ **Full CRUD** — users, roles, categories, items, item values, payments, operations, referral earnings
+* ✅ **Full CRUD** — users, roles (incl. custom role create/update/delete), categories, items, item values, payments, operations, referral earnings
 * ✅ **Balance operations** — positive/negative updates, insufficient funds check
 * ✅ **Duplicate handling** — duplicate users ignored, duplicate categories/items rejected
 * ✅ **Blocking** — set_user_blocked, is_user_blocked
@@ -846,8 +867,9 @@ The test suite validates:
 * ✅ **User handlers** — /start (new user, referral, self-referral, owner role, non-private chat), profile, rules
 * ✅ **Payment handlers** — replenish balance flow, CryptoPay paid/active/expired, duplicate prevention, item purchase
 * ✅ **Shop handlers** — category browsing, item list, item info (limited/unlimited), bought items
-* ✅ **Admin handlers** — check user, set/remove admin, replenish/deduct balance, block/unblock, category CRUD, item
+* ✅ **Admin handlers** — check user, assign role, replenish/deduct balance, block/unblock, category CRUD, item
   delete
+* ✅ **Role management** — create/edit/delete roles, permission toggles, assign role to users, permission escalation prevention
 * ✅ **Referral handlers** — referral page, view referrals list, earnings, earning detail
 
 </details>

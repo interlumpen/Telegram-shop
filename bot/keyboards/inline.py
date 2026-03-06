@@ -47,6 +47,7 @@ def admin_console_keyboard(maintenance_mode: bool = False) -> InlineKeyboardMark
     kb.button(text=localize("admin.menu.goods"), callback_data="goods_management")
     kb.button(text=localize("admin.menu.categories"), callback_data="categories_management")
     kb.button(text=localize("admin.menu.users"), callback_data="user_management")
+    kb.button(text=localize("admin.menu.roles"), callback_data="role_mgmt")
     kb.button(text=localize("admin.menu.broadcast"), callback_data="send_message")
     maintenance_key = "admin.menu.maintenance_on" if maintenance_mode else "admin.menu.maintenance_off"
     kb.button(text=localize(maintenance_key), callback_data="toggle_maintenance")

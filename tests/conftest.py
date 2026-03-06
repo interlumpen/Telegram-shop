@@ -121,7 +121,7 @@ def db_cleanup(setup_test_database):
     from bot.database.main import Database
     from bot.database.models.main import (
         ReferralEarnings, BoughtGoods, Operations, Payments,
-        ItemValues, Goods, Categories, User
+        ItemValues, Goods, Categories, User, Role
     )
 
     db = Database()
@@ -135,6 +135,8 @@ def db_cleanup(setup_test_database):
         s.query(Goods).delete()
         s.query(Categories).delete()
         s.query(User).delete()
+        # Delete custom roles (keep built-in)
+        s.query(Role).filter(Role.name.notin_(['USER', 'ADMIN', 'OWNER'])).delete(synchronize_session=False)
 
 
 @pytest.fixture(autouse=True)
@@ -204,7 +206,8 @@ def mock_localize():
             patch('bot.handlers.user.referral_system.localize', side_effect=fake_localize), \
             patch('bot.handlers.admin.user_management_states.localize', side_effect=fake_localize), \
             patch('bot.handlers.admin.categories_management_states.localize', side_effect=fake_localize), \
-            patch('bot.handlers.admin.goods_management_states.localize', side_effect=fake_localize):
+            patch('bot.handlers.admin.goods_management_states.localize', side_effect=fake_localize), \
+            patch('bot.handlers.admin.role_management_states.localize', side_effect=fake_localize):
         yield m
 
 
@@ -325,3 +328,14 @@ def make_message(mock_bot):
 def fsm_context():
     """Provide a FakeFSMContext instance."""
     return FakeFSMContext()
+
+
+@pytest.fixture
+def role_factory():
+    """Factory to create custom roles."""
+    from bot.database.methods.create import _create_role
+
+    def _create(name: str = "CUSTOM", permissions: int = 3):
+        return _create_role(name, permissions)
+
+    return _create

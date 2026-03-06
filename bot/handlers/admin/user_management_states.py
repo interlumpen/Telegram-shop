@@ -9,8 +9,8 @@ from aiogram.exceptions import TelegramBadRequest, TelegramForbiddenError
 from bot.i18n import localize
 from bot.database.models import Permission
 from bot.database.methods import (
-    select_user_operations, select_user_items, check_role_name_by_id, check_user_referrals, set_role, check_user_cached,
-    get_role_id_by_name, get_referral_earnings_stats, get_one_referral_earning,
+    select_user_operations, select_user_items, check_role_name_by_id, check_user_referrals, check_user_cached,
+    get_referral_earnings_stats, get_one_referral_earning,
     query_user_bought_items, query_user_referrals, query_referral_earnings_from_user, query_all_referral_earnings,
     is_user_blocked, admin_balance_change
 )
@@ -49,10 +49,8 @@ async def _build_user_profile(bot, target_id: int):
     actions: list[tuple[str, str]] = []
     role_name = role
 
-    if role_name == 'ADMIN':
-        actions.append((localize('btn.admin.demote'), f"remove-admin_{target_id}"))
-    elif role_name != 'OWNER':
-        actions.append((localize('btn.admin.promote'), f"set-admin_{target_id}"))
+    if role_name != 'OWNER':
+        actions.append((localize('btn.admin.assign_role'), f"asr_list_{target_id}"))
 
     actions.append((localize('btn.admin.replenish_user'), f"fill-user-balance_{target_id}"))
     actions.append((localize('btn.admin.deduct_user'), f"deduct-user-balance_{target_id}"))
@@ -454,92 +452,6 @@ async def user_items_callback_handler(call: CallbackQuery, state: FSMContext):
 
     # Save state for admin viewing user's items
     await state.update_data(admin_user_items_paginator=paginator.get_state())
-
-
-@router.callback_query(F.data.startswith('set-admin_'), HasPermissionFilter(Permission.ADMINS_MANAGE))
-async def process_admin_for_purpose(call: CallbackQuery):
-    """
-    Assigns ADMIN role to the user.
-    """
-    user_data = call.data[len('set-admin_'):]
-    try:
-        user_id = int(user_data)
-    except (ValueError, TypeError):
-        await call.answer(localize('errors.invalid_data'), show_alert=True)
-        return
-
-    db_user = await check_user_cached(user_id)
-    if not db_user:
-        await call.answer(localize('admin.users.not_found'), show_alert=True)
-        return
-
-    role_name = await check_role_name_by_id(db_user.get('role_id'))
-    if role_name == 'OWNER':
-        await call.answer(localize('admin.users.cannot_change_owner'), show_alert=True)
-        return
-
-    admin_role_id = await get_role_id_by_name('ADMIN')
-    await set_role(user_id, admin_role_id)
-
-    user_info = await call.message.bot.get_chat(user_id)
-    await call.message.edit_text(
-        localize('admin.users.set_admin.success', name=user_info.first_name),
-        reply_markup=back(f'check-user_{user_id}')
-    )
-    try:
-        await call.message.bot.send_message(
-            chat_id=user_id,
-            text=localize('admin.users.set_admin.notify'),
-            reply_markup=close()
-        )
-    except (TelegramBadRequest, TelegramForbiddenError) as e:
-        log_audit("set_admin_notify_fail", level="ERROR", user_id=user_id, details=str(e))
-
-    admin_info = await call.message.bot.get_chat(call.from_user.id)
-    log_audit("set_admin", user_id=call.from_user.id, resource_type="User", resource_id=str(user_id), details=f"admin={admin_info.first_name}, target={user_info.first_name}")
-
-
-@router.callback_query(F.data.startswith('remove-admin_'), HasPermissionFilter(Permission.ADMINS_MANAGE))
-async def process_admin_for_remove(call: CallbackQuery):
-    """
-    Revokes ADMIN role from the user (sets USER).
-    """
-    user_data = call.data[len('remove-admin_'):]
-    try:
-        user_id = int(user_data)
-    except (ValueError, TypeError):
-        await call.answer(localize('errors.invalid_data'), show_alert=True)
-        return
-
-    db_user = await check_user_cached(user_id)
-    if not db_user:
-        await call.answer(localize('admin.users.not_found'), show_alert=True)
-        return
-
-    role_name = await check_role_name_by_id(db_user.get('role_id'))
-    if role_name == 'OWNER':
-        await call.answer(localize('admin.users.cannot_change_owner'), show_alert=True)
-        return
-
-    user_role_id = await get_role_id_by_name('USER')
-    await set_role(user_id, user_role_id)
-
-    user_info = await call.message.bot.get_chat(user_id)
-    await call.message.edit_text(
-        localize('admin.users.remove_admin.success', name=user_info.first_name),
-        reply_markup=back(f'check-user_{user_id}')
-    )
-    try:
-        await call.message.bot.send_message(
-            chat_id=user_id,
-            text=localize('admin.users.remove_admin.notify'),
-            reply_markup=close()
-        )
-    except (TelegramBadRequest, TelegramForbiddenError) as e:
-        log_audit("remove_admin_notify_fail", level="ERROR", user_id=user_id, details=str(e))
-
-    admin_info = await call.message.bot.get_chat(call.from_user.id)
-    log_audit("remove_admin", user_id=call.from_user.id, resource_type="User", resource_id=str(user_id), details=f"admin={admin_info.first_name}, target={user_info.first_name}")
 
 
 @router.callback_query(F.data.startswith('fill-user-balance_'), HasPermissionFilter(Permission.USERS_MANAGE))

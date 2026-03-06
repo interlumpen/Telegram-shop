@@ -122,6 +122,29 @@ class TestRoleCRUD:
         # ADMIN has BROADCAST=2 permission
         assert perms & 2 == 2
 
+    def test_get_all_roles(self):
+        from bot.database.methods.read import _get_all_roles
+        roles = _get_all_roles()
+        assert len(roles) >= 3
+        assert all(k in roles[0] for k in ('id', 'name', 'permissions', 'default'))
+
+    def test_get_role_by_id(self):
+        from bot.database.methods.read import _get_role_by_id
+        role_id = get_role_id_by_name('ADMIN')
+        role = _get_role_by_id(role_id)
+        assert role['name'] == 'ADMIN'
+
+    def test_get_roles_with_max_perms(self):
+        from bot.database.methods.read import _get_roles_with_max_perms
+        roles = _get_roles_with_max_perms(1)
+        assert all(r['permissions'] <= 1 for r in roles)
+
+    def test_count_users_with_role(self, user_factory):
+        from bot.database.methods.read import _count_users_with_role
+        user_factory(telegram_id=7003, role_id=1)
+        user_role = get_role_id_by_name('USER')
+        assert _count_users_with_role(user_role) >= 1
+
 
 class TestCategoryCRUD:
     def test_create_and_check_category(self, category_factory):

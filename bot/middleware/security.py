@@ -34,8 +34,9 @@ class SecurityMiddleware(BaseMiddleware):
 
     def __init__(self):
         self.critical_actions = {
-            'buy_', 'pay_', 'delete_', 'admin', 'remove-admin',
-            'fill-user-balance', 'set-admin', 'deduct-user-balance'
+            'buy_', 'pay_', 'delete_', 'admin',
+            'fill-user-balance', 'deduct-user-balance',
+            'role_mgmt', 'role_new', 'role_d', 'asr_'
         }
 
     def is_critical_action(self, callback_data: str) -> bool:

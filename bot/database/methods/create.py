@@ -4,7 +4,7 @@ from decimal import Decimal
 from sqlalchemy import exists
 from sqlalchemy.exc import IntegrityError
 
-from bot.database.models import User, ItemValues, Goods, Categories, Operations, Payments, ReferralEarnings
+from bot.database.models import User, ItemValues, Goods, Categories, Operations, Payments, ReferralEarnings, Role
 from bot.database import Database
 from bot.database.main import run_sync
 from bot.database.methods.cache_utils import safe_create_task
@@ -114,6 +114,17 @@ def _create_referral_earning(referrer_id: int, referral_id: int, amount: int, or
         )
 
 
+def _create_role(name: str, permissions: int) -> int | None:
+    """Create a new role. Returns the new role ID, or None if name conflict."""
+    with Database().session() as s:
+        if s.query(exists().where(Role.name == name)).scalar():
+            return None
+        role = Role(name=name, permissions=permissions)
+        s.add(role)
+        s.flush()
+        return role.id
+
+
 # Async public API
 create_user = run_sync(_create_user)
 create_item = run_sync(_create_item)
@@ -122,3 +133,4 @@ create_category = run_sync(_create_category)
 create_operation = run_sync(_create_operation)
 create_pending_payment = run_sync(_create_pending_payment)
 create_referral_earning = run_sync(_create_referral_earning)
+create_role = run_sync(_create_role)

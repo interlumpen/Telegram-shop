@@ -1,6 +1,7 @@
 from bot.keyboards.inline import (
     main_menu, profile_keyboard, simple_buttons, back, close, item_info, payment_menu,
     get_payment_choice, question_buttons, check_sub, referral_system_keyboard,
+    admin_console_keyboard,
 )
 
 
@@ -217,3 +218,29 @@ class TestCheckSub:
         markup = check_sub("test_channel")
         cbs = _all_callback_data(markup)
         assert "sub_channel_done" in cbs
+
+
+class TestAdminConsoleKeyboard:
+
+    def test_has_roles_button(self):
+        markup = admin_console_keyboard()
+        cbs = _all_callback_data(markup)
+        assert "role_mgmt" in cbs
+
+    def test_has_all_admin_buttons(self):
+        markup = admin_console_keyboard()
+        cbs = _all_callback_data(markup)
+        assert "shop_management" in cbs
+        assert "goods_management" in cbs
+        assert "categories_management" in cbs
+        assert "user_management" in cbs
+        assert "send_message" in cbs
+        assert "role_mgmt" in cbs
+
+    def test_maintenance_toggle(self):
+        markup_on = admin_console_keyboard(maintenance_mode=True)
+        markup_off = admin_console_keyboard(maintenance_mode=False)
+        texts_on = _all_button_texts(markup_on)
+        texts_off = _all_button_texts(markup_off)
+        # The maintenance button text should differ between states
+        assert texts_on != texts_off

@@ -2,7 +2,7 @@ import pytest
 from decimal import Decimal
 from unittest.mock import patch, MagicMock, AsyncMock
 
-from bot.database.methods.read import _check_user as check_user, _get_role_id_by_name as get_role_id_by_name
+from bot.database.methods.read import _check_user as check_user, _get_role_id_by_name as get_role_id_by_name, _check_role_name_by_id as check_role_name_by_id
 
 class TestCheckUserData:
 
@@ -46,51 +46,54 @@ class TestCheckUserData:
         assert "unavailable" in text
 
 
-class TestSetAdmin:
+class TestAssignRole:
 
     @pytest.mark.asyncio
-    async def test_set_admin_role(self, make_callback_query, user_factory):
-        from bot.handlers.admin.user_management_states import process_admin_for_purpose
+    async def test_assign_role(self, make_callback_query, user_factory):
+        from bot.handlers.admin.role_management_states import assign_role_confirm
 
         user_factory(telegram_id=800010, role_id=1)
+        admin_role = get_role_id_by_name('ADMIN')
 
-        call = make_callback_query(data="set-admin_800010", user_id=900010)
+        call = make_callback_query(data=f"asr_{admin_role}_800010", user_id=900010)
 
-        await process_admin_for_purpose(call)
+        with patch('bot.handlers.admin.role_management_states.check_role_cached', new_callable=AsyncMock, return_value=127):
+            await assign_role_confirm(call)
 
         call.message.edit_text.assert_called_once()
-        # Verify role changed
         user = check_user(800010)
-        admin_role = get_role_id_by_name('ADMIN')
         assert user['role_id'] == admin_role
 
     @pytest.mark.asyncio
-    async def test_remove_admin_role(self, make_callback_query, user_factory):
-        from bot.handlers.admin.user_management_states import process_admin_for_remove
+    async def test_assign_user_role(self, make_callback_query, user_factory):
+        from bot.handlers.admin.role_management_states import assign_role_confirm
 
         admin_role = get_role_id_by_name('ADMIN')
+        user_role = get_role_id_by_name('USER')
         user_factory(telegram_id=800011, role_id=admin_role)
 
-        call = make_callback_query(data="remove-admin_800011", user_id=900011)
+        call = make_callback_query(data=f"asr_{user_role}_800011", user_id=900011)
 
-        await process_admin_for_remove(call)
+        with patch('bot.handlers.admin.role_management_states.check_role_cached', new_callable=AsyncMock, return_value=127):
+            await assign_role_confirm(call)
 
         call.message.edit_text.assert_called_once()
         user = check_user(800011)
-        user_role = get_role_id_by_name('USER')
         assert user['role_id'] == user_role
 
     @pytest.mark.asyncio
     async def test_cannot_change_owner_role(self, make_callback_query, user_factory):
-        from bot.handlers.admin.user_management_states import process_admin_for_purpose
+        from bot.handlers.admin.role_management_states import assign_role_confirm
         from bot.database.methods.read import _select_max_role_id as select_max_role_id
 
         max_role = select_max_role_id()
         user_factory(telegram_id=800012, role_id=max_role)
+        admin_role = get_role_id_by_name('ADMIN')
 
-        call = make_callback_query(data="set-admin_800012", user_id=900012)
+        call = make_callback_query(data=f"asr_{admin_role}_800012", user_id=900012)
 
-        await process_admin_for_purpose(call)
+        with patch('bot.handlers.admin.role_management_states.check_role_cached', new_callable=AsyncMock, return_value=127):
+            await assign_role_confirm(call)
 
         call.answer.assert_called_once()
         # Role should not change

@@ -83,9 +83,37 @@ def _check_role_name_by_id(role_id: int) -> str:
 
 
 def _select_max_role_id() -> Optional[int]:
-    """Return max role id (or None if no roles)."""
+    """Return role_id with the highest permissions value."""
     with Database().session() as s:
-        return s.query(func.max(Role.id)).scalar()
+        result = s.query(Role.id).order_by(Role.permissions.desc()).first()
+        return result[0] if result else None
+
+
+def _get_all_roles() -> list[dict]:
+    """Return all roles as list of dicts ordered by permissions asc."""
+    with Database().session() as s:
+        roles = s.query(Role).order_by(Role.permissions.asc()).all()
+        return [{'id': r.id, 'name': r.name, 'permissions': r.permissions, 'default': r.default} for r in roles]
+
+
+def _get_role_by_id(role_id: int) -> dict | None:
+    """Return single role as dict or None."""
+    with Database().session() as s:
+        r = s.query(Role).filter(Role.id == role_id).first()
+        return {'id': r.id, 'name': r.name, 'permissions': r.permissions, 'default': r.default} if r else None
+
+
+def _get_roles_with_max_perms(max_perms: int) -> list[dict]:
+    """Return roles where permissions <= max_perms, ordered by permissions ascending."""
+    with Database().session() as s:
+        roles = s.query(Role).filter(Role.permissions <= max_perms).order_by(Role.permissions.asc()).all()
+        return [{'id': r.id, 'name': r.name, 'permissions': r.permissions, 'default': r.default} for r in roles]
+
+
+def _count_users_with_role(role_id: int) -> int:
+    """Return count of users assigned to a given role."""
+    with Database().session() as s:
+        return s.query(func.count(User.telegram_id)).filter(User.role_id == role_id).scalar() or 0
 
 
 def _select_today_users(date: str) -> int:
@@ -311,6 +339,10 @@ check_role = run_sync(_check_role)
 get_role_id_by_name = run_sync(_get_role_id_by_name)
 check_role_name_by_id = run_sync(_check_role_name_by_id)
 select_max_role_id = run_sync(_select_max_role_id)
+get_all_roles = run_sync(_get_all_roles)
+get_role_by_id = run_sync(_get_role_by_id)
+get_roles_with_max_perms = run_sync(_get_roles_with_max_perms)
+count_users_with_role = run_sync(_count_users_with_role)
 select_today_users = run_sync(_select_today_users)
 get_user_count = run_sync(_get_user_count)
 select_admins = run_sync(_select_admins)

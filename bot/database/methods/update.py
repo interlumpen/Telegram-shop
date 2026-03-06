@@ -3,7 +3,7 @@ from sqlalchemy import exc
 from bot.database.methods.read import invalidate_user_cache, invalidate_stats_cache, invalidate_item_cache, \
     invalidate_category_cache
 from bot.database.methods.cache_utils import safe_create_task
-from bot.database.models import User, ItemValues, Goods, Categories, BoughtGoods
+from bot.database.models import User, ItemValues, Goods, Categories, BoughtGoods, Role
 from bot.database import Database
 from bot.database.main import run_sync
 from bot.i18n import localize
@@ -115,6 +115,21 @@ def _update_category(category_name: str, new_name: str) -> None:
         safe_create_task(invalidate_category_cache(new_name))
 
 
+def _update_role(role_id: int, name: str, permissions: int) -> tuple[bool, str | None]:
+    """Update role name and permissions. Returns (success, error_message)."""
+    with Database().session() as s:
+        role = s.query(Role).filter(Role.id == role_id).with_for_update().first()
+        if not role:
+            return False, "Role not found"
+        if role.name != name:
+            existing = s.query(Role).filter(Role.name == name).first()
+            if existing:
+                return False, "Role name already exists"
+        role.name = name
+        role.permissions = permissions
+        return True, None
+
+
 # Async public API
 set_role = run_sync(_set_role)
 update_balance = run_sync(_update_balance)
@@ -122,3 +137,4 @@ update_item = run_sync(_update_item)
 set_user_blocked = run_sync(_set_user_blocked)
 is_user_blocked = run_sync(_is_user_blocked)
 update_category = run_sync(_update_category)
+update_role = run_sync(_update_role)

@@ -66,6 +66,18 @@ class TestSecurityMiddlewareCriticalActions:
     def test_profile_is_not_critical(self):
         assert self.middleware.is_critical_action("profile") is False
 
+    def test_role_mgmt_is_critical(self):
+        assert self.middleware.is_critical_action("role_mgmt") is True
+
+    def test_role_new_is_critical(self):
+        assert self.middleware.is_critical_action("role_new") is True
+
+    def test_role_delete_is_critical(self):
+        assert self.middleware.is_critical_action("role_d_5") is True
+
+    def test_asr_is_critical(self):
+        assert self.middleware.is_critical_action("asr_2_123456") is True
+
     def test_empty_string(self):
         assert self.middleware.is_critical_action("") is False
 
