@@ -24,9 +24,21 @@ def find_fk_name_sa(conn, table, local_col, ref_table=None):
     return None
 
 
+def _column_exists(conn, table_name: str, column_name: str) -> bool:
+    insp = inspect(conn)
+    if table_name not in insp.get_table_names():
+        return False
+    columns = [c['name'] for c in insp.get_columns(table_name)]
+    return column_name in columns
+
+
 def upgrade():
     bind = op.get_bind()
     if bind.dialect.name not in ("postgresql", "mysql"):
+        return
+
+    # Skip if already migrated to integer PKs (category_name no longer exists)
+    if not _column_exists(bind, "goods", "category_name"):
         return
 
     # goods.category_name → categories.name

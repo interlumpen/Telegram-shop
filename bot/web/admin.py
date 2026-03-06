@@ -24,6 +24,7 @@ class LoginRateLimiter:
         self.max_attempts = max_attempts
         self.lockout_seconds = lockout_seconds
         self._attempts: dict[str, list[float]] = {}
+        self._last_cleanup: float = time.time()
 
     def is_blocked(self, ip: str) -> bool:
         if ip not in self._attempts:
@@ -35,6 +36,14 @@ class LoginRateLimiter:
 
     def record_failure(self, ip: str) -> None:
         now = time.time()
+        # Periodic cleanup of stale entries (every 10 minutes)
+        if now - self._last_cleanup > 600:
+            self._attempts = {
+                k: [t for t in v if now - t < self.lockout_seconds]
+                for k, v in self._attempts.items()
+                if any(now - t < self.lockout_seconds for t in v)
+            }
+            self._last_cleanup = now
         if ip not in self._attempts:
             self._attempts[ip] = []
         self._attempts[ip].append(now)
@@ -68,6 +77,12 @@ class AdminAuth(AuthenticationBackend):
         password = form.get("password")
 
         if username == EnvKeys.ADMIN_USERNAME and password == EnvKeys.ADMIN_PASSWORD:
+            if (
+                username == "admin" and password == "admin"
+                and ip not in ("127.0.0.1", "::1", "localhost")
+            ):
+                log_audit("web_login_blocked_default_creds", level="WARNING", details=f"ip={ip}", ip_address=ip)
+                return False
             request.session.update({"authenticated": True})
             _login_limiter.reset(ip)
             log_audit("web_login", user_id=None, details=f"user={username}", ip_address=ip)
@@ -277,6 +292,12 @@ async def metrics_json(request: Request) -> JSONResponse:
 def create_admin_app() -> Starlette:
     if "change-me" in EnvKeys.SECRET_KEY.lower():
         logger.warning("SECRET_KEY is using default value! Change it in .env for production")
+
+    if EnvKeys.ADMIN_USERNAME == "admin" and EnvKeys.ADMIN_PASSWORD == "admin":
+        logger.warning(
+            "ADMIN_USERNAME and ADMIN_PASSWORD are using default values (admin/admin)! "
+            "Change them in .env for production"
+        )
 
     routes = [
         Route("/health", health_check),

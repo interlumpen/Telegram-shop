@@ -121,17 +121,19 @@ class CryptoPayAPI:
         self.token = EnvKeys.CRYPTO_PAY_TOKEN
         self.base_url = "https://pay.crypt.bot/api"
 
+    _timeout = aiohttp.ClientTimeout(total=30)
+
     async def _request(self, method: str, params: dict) -> dict:
         headers = {"Crypto-Pay-API-Token": self.token}
         url = f"{self.base_url}/{method}"
 
         if method.startswith("get"):
-            async with aiohttp.ClientSession() as session:
+            async with aiohttp.ClientSession(timeout=self._timeout) as session:
                 async with session.get(url, params=params, headers=headers) as resp:
                     resp.raise_for_status()
                     data = await resp.json()
         else:
-            async with aiohttp.ClientSession() as session:
+            async with aiohttp.ClientSession(timeout=self._timeout) as session:
                 async with session.post(url, json=params, headers=headers) as resp:
                     resp.raise_for_status()
                     data = await resp.json()

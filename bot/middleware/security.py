@@ -5,6 +5,7 @@ from aiogram.types import TelegramObject, CallbackQuery, Message
 
 from bot.i18n import localize
 from bot.database.methods.audit import log_audit
+from bot.database.models import Permission
 
 
 def check_suspicious_patterns(text: str) -> bool:
@@ -151,7 +152,7 @@ class AuthenticationMiddleware(BaseMiddleware):
         # Maintenance mode: block regular users
         if self.maintenance_mode:
             role = await self.get_user_role_cached(user.id)
-            if role <= 1:
+            if role <= Permission.USE:
                 if isinstance(event, Message):
                     await event.answer(localize("maintenance.active"))
                 elif isinstance(event, CallbackQuery):
@@ -166,7 +167,7 @@ class AuthenticationMiddleware(BaseMiddleware):
         if isinstance(event, CallbackQuery):
             if event.data and any(event.data.startswith(x) for x in ['admin', 'console', 'send_message']):
                 role = await self.get_user_role_cached(user.id)
-                if role <= 1:  # Not admin
+                if role <= Permission.USE:  # Not admin
                     await event.answer(localize("middleware.security.not_admin"), show_alert=True)
                     log_audit("unauthorized_admin_access", level="WARNING", user_id=user.id)
                     return None
@@ -190,6 +191,10 @@ class AuthenticationMiddleware(BaseMiddleware):
         self.admin_cache[user_id] = (role, time.time())
 
         return role
+
+    def invalidate_admin_cache(self, user_id: int) -> None:
+        """Remove cached role for a user so permissions are re-fetched."""
+        self.admin_cache.pop(user_id, None)
 
     async def block_user(self, user_id: int) -> bool:
         """Block a user (saves to DB and memory cache)"""

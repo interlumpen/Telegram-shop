@@ -61,9 +61,29 @@ def clean_datetime_data():
                             """))
 
 
+def _column_exists(conn, table_name: str, column_name: str) -> bool:
+    insp = inspect(conn)
+    if table_name not in insp.get_table_names():
+        return False
+    columns = [c['name'] for c in insp.get_columns(table_name)]
+    return column_name in columns
+
+
+def _col_is_numeric(conn, table_name: str, column_name: str) -> bool:
+    insp = inspect(conn)
+    for col in insp.get_columns(table_name):
+        if col['name'] == column_name:
+            return isinstance(col['type'], sa.Numeric)
+    return False
+
+
 def upgrade():
     bind = op.get_bind()
     inspector = inspect(bind)
+
+    # Skip if already migrated (balance is already Numeric or table structure changed)
+    if _col_is_numeric(bind, "users", "balance"):
+        return
 
     clean_datetime_data()
 
@@ -109,25 +129,29 @@ def upgrade():
                 ondelete="RESTRICT",
             )
 
-    # GOODS
-    with op.batch_alter_table("goods", schema=None) as batch:
-        batch.alter_column(
-            "price",
-            existing_type=sa.BigInteger(),
-            type_=sa.Numeric(12, 2),
-            existing_nullable=False,
-        )
+    # GOODS (direct ops — batch mode can recreate the table via model metadata and lose columns)
+    op.alter_column(
+        "goods", "price",
+        existing_type=sa.BigInteger(),
+        type_=sa.Numeric(12, 2),
+        existing_nullable=False,
+        postgresql_using="price::numeric(12,2)",
+    )
 
-        if not index_exists(inspector, "goods", "ix_goods_category_name"):
-            batch.create_index("ix_goods_category_name", ["category_name"], unique=False)
+    if not index_exists(inspector, "goods", "ix_goods_category_name"):
+        columns = [c['name'] for c in inspector.get_columns("goods")]
+        if "category_name" in columns:
+            op.create_index("ix_goods_category_name", "goods", ["category_name"], unique=False)
 
-    # ITEM_VALUES
-    with op.batch_alter_table("item_values", schema=None) as batch:
-        if not constraint_exists(inspector, "item_values", "uq_item_value_per_item"):
-            batch.create_unique_constraint("uq_item_value_per_item", ["item_name", "value"])
+    # ITEM_VALUES (direct ops — batch mode can lose columns renamed in later migrations)
+    columns = [c['name'] for c in inspector.get_columns("item_values")]
+    item_col = "item_name" if "item_name" in columns else "item_id"
 
-        if not index_exists(inspector, "item_values", "ix_item_values_item_inf"):
-            batch.create_index("ix_item_values_item_inf", ["item_name", "is_infinity"], unique=False)
+    if not constraint_exists(inspector, "item_values", "uq_item_value_per_item"):
+        op.create_unique_constraint("uq_item_value_per_item", "item_values", [item_col, "value"])
+
+    if not index_exists(inspector, "item_values", "ix_item_values_item_inf"):
+        op.create_index("ix_item_values_item_inf", "item_values", [item_col, "is_infinity"], unique=False)
 
     # BOUGHT_GOODS
     with op.batch_alter_table("bought_goods", schema=None) as batch:
@@ -294,23 +318,22 @@ def downgrade():
             existing_nullable=False,
         )
 
-    # ITEM_VALUES
-    with op.batch_alter_table("item_values", schema=None) as batch:
-        if index_exists(inspector, "item_values", "ix_item_values_item_inf"):
-            batch.drop_index("ix_item_values_item_inf")
-        if constraint_exists(inspector, "item_values", "uq_item_value_per_item"):
-            batch.drop_constraint("uq_item_value_per_item", type_="unique")
+    # ITEM_VALUES (direct ops)
+    if index_exists(inspector, "item_values", "ix_item_values_item_inf"):
+        op.drop_index("ix_item_values_item_inf", table_name="item_values")
+    if constraint_exists(inspector, "item_values", "uq_item_value_per_item"):
+        op.drop_constraint("uq_item_value_per_item", "item_values", type_="unique")
 
-    # GOODS
-    with op.batch_alter_table("goods", schema=None) as batch:
-        if index_exists(inspector, "goods", "ix_goods_category_name"):
-            batch.drop_index("ix_goods_category_name")
-        batch.alter_column(
-            "price",
-            existing_type=sa.Numeric(12, 2),
-            type_=sa.BigInteger(),
-            existing_nullable=False,
-        )
+    # GOODS (direct ops)
+    if index_exists(inspector, "goods", "ix_goods_category_name"):
+        op.drop_index("ix_goods_category_name", table_name="goods")
+    op.alter_column(
+        "goods", "price",
+        existing_type=sa.Numeric(12, 2),
+        type_=sa.BigInteger(),
+        existing_nullable=False,
+        postgresql_using="price::bigint",
+    )
 
     # USERS
     if constraint_exists(inspector, "users", "fk_users_role_id_roles"):

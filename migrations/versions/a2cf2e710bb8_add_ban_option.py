@@ -19,13 +19,22 @@ branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 
 
+def _index_exists(inspector, table_name, index_name):
+    try:
+        return any(idx['name'] == index_name for idx in inspector.get_indexes(table_name))
+    except Exception:
+        return False
+
+
 def upgrade() -> None:
     bind = op.get_bind()
     inspector = inspect(bind)
     columns = [col['name'] for col in inspector.get_columns('users')]
 
-    op.drop_index(op.f('ix_bought_goods_buyer_time'), table_name='bought_goods')
-    op.drop_index(op.f('ix_operations_user_time'), table_name='operations')
+    if _index_exists(inspector, 'bought_goods', 'ix_bought_goods_buyer_time'):
+        op.drop_index(op.f('ix_bought_goods_buyer_time'), table_name='bought_goods')
+    if _index_exists(inspector, 'operations', 'ix_operations_user_time'):
+        op.drop_index(op.f('ix_operations_user_time'), table_name='operations')
 
     if 'is_blocked' not in columns:
         op.add_column('users', sa.Column('is_blocked', sa.Boolean(), nullable=True))

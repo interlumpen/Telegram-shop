@@ -9,6 +9,7 @@ from aiogram.types import Message, CallbackQuery, TelegramObject
 from aiogram.exceptions import TelegramBadRequest
 
 from bot.i18n import localize
+from bot.database.models import Permission
 
 logger = logging.getLogger(__name__)
 
@@ -155,6 +156,10 @@ class RateLimitMiddleware(BaseMiddleware):
         self.admin_cache: dict[int, tuple[int, float]] = {}
         self.cache_ttl = 300  # 5 minutes
 
+    def invalidate_admin_cache(self, user_id: int) -> None:
+        """Remove cached role for a user so permissions are re-fetched."""
+        self.admin_cache.pop(user_id, None)
+
     def _get_action_from_event(self, event: TelegramObject) -> str:
         """Determines the action from the event"""
         if isinstance(event, CallbackQuery):
@@ -181,7 +186,7 @@ class RateLimitMiddleware(BaseMiddleware):
         if user_id in self.admin_cache:
             role, timestamp = self.admin_cache[user_id]
             if time.time() - timestamp < self.cache_ttl:
-                return role > 1
+                return role > Permission.USE
 
         try:
             from bot.database.methods import check_role

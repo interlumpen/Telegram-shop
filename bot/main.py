@@ -31,6 +31,7 @@ cache_scheduler = None
 # Global middleware instances for access from handlers
 security_middleware: SecurityMiddleware = None
 auth_middleware: AuthenticationMiddleware = None
+rate_limit_middleware = None
 
 
 async def __on_start_up(dp: Dispatcher, bot: Bot) -> None:
@@ -54,7 +55,8 @@ async def __on_start_up(dp: Dispatcher, bot: Bot) -> None:
             'top_up': (5, 300),  # 5 top-ups in 5 minutes
         }
     )
-    setup_rate_limiting(dp, rate_config)
+    global rate_limit_middleware
+    rate_limit_middleware = setup_rate_limiting(dp, rate_config)
 
     # Initializing metrics
     metrics = init_metrics()

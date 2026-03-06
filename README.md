@@ -145,7 +145,8 @@ via the command line (CLI) without the need for a shell and advanced monitoring 
     - Payments: 10 per minute
 - Automatic ban system with configurable duration
 - Admin bypass option
-- Admin panel login rate limiting (5 attempts, 15-minute lockout per IP)
+- Admin panel login rate limiting (5 attempts, 15-minute lockout per IP, periodic stale entry cleanup)
+- Default credentials protection: remote login blocked when using default `admin`/`admin`
 
 #### 2. **Security Middleware**
 
@@ -167,6 +168,7 @@ via the command line (CLI) without the need for a shell and advanced monitoring 
 - **Concurrent Payment Protection**: Graceful handling of duplicate payment attempts via IntegrityError catch
 - **Transactional Integrity**: ACID compliance for all financial operations
 - **Atomic Admin Balance Operations**: Top-up and deduction with FOR UPDATE lock in a single transaction
+- **Self-Referral Prevention**: Database CHECK constraint and transaction-level guard against self-referral bonus abuse
 - **External ID Tracking**: Unique identifiers for payment reconciliation
 - **Error Sanitization**: Internal error details never exposed to users; generic error codes returned, details logged to
   audit
@@ -326,7 +328,7 @@ The application requires the following environment variables:
 | `SECRET_KEY`     | Secret key for session encryption | `change-me-in-production` |
 
 **Note**: In Docker, `ADMIN_HOST` is automatically set to `0.0.0.0` and the admin panel is bound to `127.0.0.1:9090` (
-localhost only). Change `ADMIN_PASSWORD` and `SECRET_KEY` in production.
+localhost only). Change `ADMIN_USERNAME`, `ADMIN_PASSWORD`, and `SECRET_KEY` in production. Remote login with default credentials (`admin`/`admin`) is automatically blocked.
 
 </details>
 
@@ -426,7 +428,9 @@ docker compose logs -f bot
 
 5. **Access admin panel**
 
-Open in browser: http://localhost:9090/admin (login: admin/admin)
+Open in browser: http://localhost:9090/admin
+
+> **Important**: Default credentials are `admin`/`admin`. Remote login with default credentials is blocked — change `ADMIN_USERNAME`, `ADMIN_PASSWORD`, and `SECRET_KEY` in `.env` before exposing the admin panel.
 
 ### 🔧 Manual Deployment
 

@@ -1,5 +1,5 @@
 import json
-import datetime
+import uuid
 from decimal import Decimal, ROUND_HALF_UP
 
 from aiogram import Router, F
@@ -16,6 +16,7 @@ from bot.misc import EnvKeys, ItemPurchaseRequest, validate_telegram_id, validat
 from bot.handlers.other import _any_payment_method_enabled, is_safe_item_name
 from bot.misc.metrics import get_metrics
 from bot.misc.services import CryptoPayAPI, CryptoPayAPIError, send_stars_invoice, send_fiat_invoice
+from bot.misc.services.payment import _minor_units_for
 from bot.filters import ValidAmountFilter
 from bot.i18n import localize
 from bot.states import BalanceStates
@@ -346,7 +347,7 @@ async def successful_payment_handler(message: Message):
     else:
         # Fiat
         currency = sp.currency.upper()
-        multiplier = 1 if currency in {"JPY", "KRW"} else 100
+        multiplier = _minor_units_for(currency)
         amount = int(Decimal(sp.total_amount) / Decimal(multiplier))
 
     if amount <= 0:
@@ -355,7 +356,7 @@ async def successful_payment_handler(message: Message):
 
     # Idempotence
     provider = "telegram" if sp.currency != "XTR" else "stars"
-    external_id = sp.telegram_payment_charge_id or sp.provider_payment_charge_id or f"{provider}:{user_id}:{sp.total_amount}:{datetime.datetime.now(datetime.timezone.utc).timestamp()}"
+    external_id = sp.telegram_payment_charge_id or sp.provider_payment_charge_id or f"{provider}:{user_id}:{uuid.uuid4().hex}"
 
     success, error_msg = await process_payment_with_referral(
         user_id=user_id,

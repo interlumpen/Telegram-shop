@@ -3,7 +3,7 @@ from typing import Any
 
 from sqlalchemy import (
     Column, Integer, String, BigInteger, ForeignKey, Text, Boolean,
-    DateTime, Numeric, Index, UniqueConstraint, func
+    DateTime, Numeric, Index, UniqueConstraint, CheckConstraint, func
 )
 from bot.database.main import Database
 from sqlalchemy.orm import relationship
@@ -84,6 +84,10 @@ class User(Database.BASE):
     is_blocked = Column(Boolean, default=False, index=True)
     user_operations = relationship("Operations", back_populates="user_telegram_id")
     user_goods = relationship("BoughtGoods", back_populates="user_telegram_id")
+
+    __table_args__ = (
+        CheckConstraint('referral_id != telegram_id', name='ck_users_no_self_referral'),
+    )
 
     referral_earnings_received = relationship(
         "ReferralEarnings",

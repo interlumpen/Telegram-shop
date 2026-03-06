@@ -157,7 +157,7 @@ def _process_payment_with_referral(
             s.add(operation)
 
             # 4. Process the referral bonus
-            if referral_percent > 0 and user.referral_id:
+            if referral_percent > 0 and user.referral_id and user.referral_id != user_id:
                 referral_amount = (Decimal(referral_percent) / Decimal(100)) * amount
 
                 if referral_amount > 0:
