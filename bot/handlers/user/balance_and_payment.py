@@ -305,14 +305,22 @@ async def checking_payment(call: CallbackQuery, state: FSMContext):
 
 @router.pre_checkout_query()
 async def pre_checkout_handler(query: PreCheckoutQuery):
-    """Telegram requires answering ok=True before payment proceeds."""
+    """Validate the payment before Telegram processes it."""
     try:
         payload = json.loads(query.invoice_payload or "{}")
     except Exception:
-        payload = {}
-    amount = int(payload.get("amount", 0))
-    if amount > 0:
-        pass
+        await query.answer(ok=False, error_message="Invalid payload")
+        return
+
+    amount = int(payload.get("amount", 0) or payload.get("amount_rub", 0))
+    if amount <= 0:
+        await query.answer(ok=False, error_message="Invalid amount")
+        return
+
+    if amount > int(EnvKeys.MAX_AMOUNT):
+        await query.answer(ok=False, error_message="Amount exceeds maximum")
+        return
+
     await query.answer(ok=True)
 
 

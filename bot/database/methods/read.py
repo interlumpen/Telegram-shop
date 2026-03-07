@@ -160,13 +160,16 @@ def _get_item_info(item_name: str) -> dict | None:
 def _get_goods_info(item_id: int) -> dict | None:
     """Return item_value row as dict by id, including item_name from Goods."""
     with Database().session() as s:
-        result = s.query(ItemValues).filter(ItemValues.id == int(item_id)).first()
-        if not result:
+        row = (
+            s.query(ItemValues, Goods.name.label('item_name'))
+            .join(Goods, Goods.id == ItemValues.item_id)
+            .filter(ItemValues.id == int(item_id))
+            .first()
+        )
+        if not row:
             return None
-        d = result.__dict__.copy()
-        # Resolve item_name from Goods for display
-        item = s.query(Goods.name).filter(Goods.id == result.item_id).scalar()
-        d['item_name'] = item
+        d = row.ItemValues.__dict__.copy()
+        d['item_name'] = row.item_name
         return d
 
 
@@ -180,21 +183,21 @@ def _check_category(category_name: str) -> dict | None:
 def _select_item_values_amount(item_name: str) -> int:
     """Return count of item_values for an item (by item name)."""
     with Database().session() as s:
-        item = s.query(Goods.id).filter(Goods.name == item_name).scalar()
-        if not item:
-            return 0
-        return s.query(func.count()).filter(ItemValues.item_id == item).scalar() or 0
+        return (
+            s.query(func.count(ItemValues.id))
+            .join(Goods, Goods.id == ItemValues.item_id)
+            .filter(Goods.name == item_name)
+            .scalar()
+        ) or 0
 
 
 def _check_value(item_name: str) -> bool:
     """Return True if item has any infinite value (is_infinity=True)."""
     with Database().session() as s:
-        item = s.query(Goods.id).filter(Goods.name == item_name).scalar()
-        if not item:
-            return False
         return s.query(
             exists().where(
-                ItemValues.item_id == item,
+                ItemValues.item_id == Goods.id,
+                Goods.name == item_name,
                 ItemValues.is_infinity.is_(True),
             )
         ).scalar()

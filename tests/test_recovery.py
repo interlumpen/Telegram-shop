@@ -91,3 +91,86 @@ class TestRecoveryManager:
 
         # Should not raise
         await self.manager._safe_run(failing_coro())
+
+    @pytest.mark.asyncio
+    async def test_check_and_process_api_timeout(self, user_factory):
+        """API timeout should not crash the recovery manager."""
+        user_factory(telegram_id=500003, balance=0)
+        create_pending_payment("cryptopay", "rec_inv_timeout", 500003, 300, "RUB")
+
+        with Database().session() as s:
+            payment = s.query(Payments).filter(
+                Payments.external_id == "rec_inv_timeout"
+            ).first()
+            payment_copy = MagicMock()
+            payment_copy.id = payment.id
+            payment_copy.provider = payment.provider
+            payment_copy.external_id = payment.external_id
+            payment_copy.user_id = payment.user_id
+            payment_copy.amount = payment.amount
+            payment_copy.currency = payment.currency
+
+        mock_crypto = AsyncMock()
+        mock_crypto.get_invoice = AsyncMock(side_effect=Exception("Connection timeout"))
+
+        with patch('bot.misc.services.payment.CryptoPayAPI', return_value=mock_crypto):
+            # Should not raise
+            await self.manager._check_and_process_payment(payment_copy)
+
+        # Payment status should remain unchanged (pending)
+        with Database().session() as s:
+            p = s.query(Payments).filter(Payments.external_id == "rec_inv_timeout").first()
+            assert p.status == "pending"
+
+    @pytest.mark.asyncio
+    async def test_check_and_process_active_payment_no_change(self, user_factory):
+        """Active (not yet paid/expired) payment should stay pending."""
+        user_factory(telegram_id=500004, balance=0)
+        create_pending_payment("cryptopay", "rec_inv_active", 500004, 150, "RUB")
+
+        with Database().session() as s:
+            payment = s.query(Payments).filter(
+                Payments.external_id == "rec_inv_active"
+            ).first()
+            payment_copy = MagicMock()
+            payment_copy.id = payment.id
+            payment_copy.provider = payment.provider
+            payment_copy.external_id = payment.external_id
+            payment_copy.user_id = payment.user_id
+            payment_copy.amount = payment.amount
+            payment_copy.currency = payment.currency
+
+        mock_crypto = AsyncMock()
+        mock_crypto.get_invoice = AsyncMock(return_value={"status": "active"})
+
+        with patch('bot.misc.services.payment.CryptoPayAPI', return_value=mock_crypto):
+            await self.manager._check_and_process_payment(payment_copy)
+
+        with Database().session() as s:
+            p = s.query(Payments).filter(Payments.external_id == "rec_inv_active").first()
+            assert p.status == "pending"
+
+    @pytest.mark.asyncio
+    async def test_check_non_cryptopay_provider_skipped(self, user_factory):
+        """Non-cryptopay payments should be skipped."""
+        user_factory(telegram_id=500005, balance=0)
+        create_pending_payment("stars", "stars_ext_1", 500005, 100, "XTR")
+
+        with Database().session() as s:
+            payment = s.query(Payments).filter(
+                Payments.external_id == "stars_ext_1"
+            ).first()
+            payment_copy = MagicMock()
+            payment_copy.id = payment.id
+            payment_copy.provider = payment.provider
+            payment_copy.external_id = payment.external_id
+            payment_copy.user_id = payment.user_id
+            payment_copy.amount = payment.amount
+            payment_copy.currency = payment.currency
+
+        # Should not attempt API call for non-cryptopay
+        await self.manager._check_and_process_payment(payment_copy)
+
+        with Database().session() as s:
+            p = s.query(Payments).filter(Payments.external_id == "stars_ext_1").first()
+            assert p.status == "pending"

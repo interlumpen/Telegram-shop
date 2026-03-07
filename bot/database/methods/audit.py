@@ -57,4 +57,4 @@ def log_audit(
         with Database().session() as s:
             s.add(entry)
     except Exception:
-        audit_logger.debug("Failed to write audit entry to DB", exc_info=True)
+        audit_logger.warning("Failed to write audit entry to DB", exc_info=True)

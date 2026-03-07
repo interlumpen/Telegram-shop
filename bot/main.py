@@ -42,7 +42,12 @@ async def __on_start_up(dp: Dispatcher, bot: Bot) -> None:
     register_all_handlers(dp)
     await register_models()
 
-    # Setting Rate Limiting
+    # Add security middleware (using global instances for handler access)
+    global security_middleware, auth_middleware
+    security_middleware = SecurityMiddleware()
+    auth_middleware = AuthenticationMiddleware()
+
+    # Setting Rate Limiting (shares auth_middleware's role cache)
     rate_config = RateLimitConfig(
         global_limit=30,
         global_window=60,
@@ -56,20 +61,11 @@ async def __on_start_up(dp: Dispatcher, bot: Bot) -> None:
         }
     )
     global rate_limit_middleware
-    rate_limit_middleware = setup_rate_limiting(dp, rate_config)
+    rate_limit_middleware = setup_rate_limiting(dp, rate_config, auth_middleware=auth_middleware)
 
     # Initializing metrics
     metrics = init_metrics()
     analytics_middleware = AnalyticsMiddleware(metrics)
-
-    # Adding middleware for analytics (first in the chain)
-    dp.message.middleware(analytics_middleware)
-    dp.callback_query.middleware(analytics_middleware)
-
-    # Add security middleware (using global instances for handler access)
-    global security_middleware, auth_middleware
-    security_middleware = SecurityMiddleware()
-    auth_middleware = AuthenticationMiddleware()
 
     # Middleware execution order (last registered executes first):
     # SecurityMiddleware -> AuthenticationMiddleware -> AnalyticsMiddleware -> RateLimitMiddleware -> Handler

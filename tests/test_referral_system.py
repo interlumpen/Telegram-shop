@@ -68,6 +68,8 @@ class TestViewReferrals:
         await view_referrals_handler(call, fsm_context)
 
         call.message.edit_text.assert_called_once()
+        text = call.message.edit_text.call_args[0][0]
+        assert isinstance(text, str)
 
     @pytest.mark.asyncio
     async def test_view_referrals_with_data(self, make_callback_query, fsm_context, user_factory):
@@ -88,6 +90,10 @@ class TestViewReferrals:
             await view_referrals_handler(call, fsm_context)
 
         call.message.edit_text.assert_called_once()
+        text = call.message.edit_text.call_args[0][0]
+        assert isinstance(text, str)
+        # Check that reply_markup is passed
+        assert call.message.edit_text.call_args[1].get('reply_markup') is not None
 
 
 class TestViewAllEarnings:

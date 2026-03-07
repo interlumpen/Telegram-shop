@@ -95,6 +95,7 @@ via the command line (CLI) without the need for a shell and advanced monitoring 
     - Cache scheduler: hourly stats refresh, daily cleanup at 3:00 AM
     - When disabled: bot uses in-memory FSM storage and queries the database directly
 - **Performance Optimizations**: Up to 60% reduction in database queries for read operations (with Redis enabled)
+- **Optimized Queries**: JOIN-based queries instead of N+1 patterns, SQL-level sorting for paginated results
 - **Non-Blocking Database Layer**: All synchronous DB operations execute in a thread pool
   via `run_sync()` decorator, keeping the asyncio event loop responsive under load
 
@@ -124,6 +125,7 @@ via the command line (CLI) without the need for a shell and advanced monitoring 
 - **Payment Recovery**:
     - Automatic check for stuck CryptoPay payments (every 5 minutes)
     - Verifies payment status via CryptoPay API
+    - Deadlock-safe: collects payment data, closes DB session, then processes asynchronously
     - Idempotent payment processing
     - User notification on recovery
 - **Health Monitoring**:
@@ -146,6 +148,7 @@ via the command line (CLI) without the need for a shell and advanced monitoring 
 - Automatic ban system with configurable duration
 - Admin bypass option
 - Admin panel login rate limiting (5 attempts, 15-minute lockout per IP, periodic stale entry cleanup)
+- Admin panel session timeout (30-minute max age)
 - Default credentials protection: remote login blocked when using default `admin`/`admin`
 
 #### 2. **Security Middleware**
@@ -164,11 +167,14 @@ via the command line (CLI) without the need for a shell and advanced monitoring 
 
 #### 4. **Payment Security**
 
+- **Pre-Checkout Validation**: Server-side amount validation against allowed range before accepting payment
 - **Idempotent Payment Processing**: Prevents duplicate charges
 - **Concurrent Payment Protection**: Graceful handling of duplicate payment attempts via IntegrityError catch
 - **Transactional Integrity**: ACID compliance for all financial operations
 - **Atomic Admin Balance Operations**: Top-up and deduction with FOR UPDATE lock in a single transaction
-- **Self-Referral Prevention**: Database CHECK constraint and transaction-level guard against self-referral bonus abuse
+- **Self-Referral Prevention**: Database CHECK constraints on both `users` and `referral_earnings` tables, plus
+  transaction-level guard against self-referral bonus abuse
+- **Circuit Breaker for CryptoPay API**: Stops calling after 5 consecutive failures, auto-recovers after 60 seconds
 - **External ID Tracking**: Unique identifiers for payment reconciliation
 - **Error Sanitization**: Internal error details never exposed to users; generic error codes returned, details logged to
   audit
@@ -242,7 +248,7 @@ via the command line (CLI) without the need for a shell and advanced monitoring 
 
 ### Payment Integrations
 
-- **CryptoPay API**: Cryptocurrency payments
+- **CryptoPay API**: Cryptocurrency payments (with circuit breaker)
 - **Telegram Stars API**: Native digital currency
 - **Telegram Payments API**: Traditional payment providers
 
@@ -328,7 +334,8 @@ The application requires the following environment variables:
 | `SECRET_KEY`     | Secret key for session encryption | `change-me-in-production` |
 
 **Note**: In Docker, `ADMIN_HOST` is automatically set to `0.0.0.0` and the admin panel is bound to `127.0.0.1:9090` (
-localhost only). Change `ADMIN_USERNAME`, `ADMIN_PASSWORD`, and `SECRET_KEY` in production. Remote login with default credentials (`admin`/`admin`) is automatically blocked.
+localhost only). Change `ADMIN_USERNAME`, `ADMIN_PASSWORD`, and `SECRET_KEY` in production. Remote login with default
+credentials (`admin`/`admin`) is automatically blocked.
 
 </details>
 
@@ -430,7 +437,8 @@ docker compose logs -f bot
 
 Open in browser: http://localhost:9090/admin
 
-> **Important**: Default credentials are `admin`/`admin`. Remote login with default credentials is blocked — change `ADMIN_USERNAME`, `ADMIN_PASSWORD`, and `SECRET_KEY` in `.env` before exposing the admin panel.
+> **Important**: Default credentials are `admin`/`admin`. Remote login with default credentials is blocked — change
+`ADMIN_USERNAME`, `ADMIN_PASSWORD`, and `SECRET_KEY` in `.env` before exposing the admin panel.
 
 ### 🔧 Manual Deployment
 
@@ -781,47 +789,52 @@ engine = create_engine(
 
 ## 🧪 Testing
 
-The project includes a comprehensive test suite with **359 tests** covering all major components, business logic, and
+The project includes a comprehensive test suite with **429 tests** covering all major components, business logic, and
 edge cases. Tests use SQLite in-memory with real SQL queries, and a dict-based FakeCacheManager for realistic cache
-behavior.
+behavior. Coverage is measured automatically on every run via `pytest-cov`.
 
 ### Running Tests
 
 ```bash
-# Run all tests with verbose output
+# Run all tests with verbose output (coverage report included by default)
 pytest tests/ -v
 
 # Run specific test modules
 pytest tests/test_transactions.py -v
-pytest tests/test_cache_invalidation.py -v
-pytest tests/test_admin_handlers.py -v
+pytest tests/test_filters.py -v
+pytest tests/test_payment_service.py -v
 
-# Run with coverage report
-pytest tests/ --cov=bot --cov-report=html
+# Run with HTML coverage report
+pytest tests/ --cov-report=html
 ```
 
 ### Test Modules Overview
 
-| Module                       | Tests   | Coverage                                                    |
-|------------------------------|---------|-------------------------------------------------------------|
-| `test_database_crud.py`      | 71      | CRUD: users, roles, categories, items, balance, stats       |
-| `test_validators.py`         | 44      | Input validation, control chars, XSS, Pydantic models       |
-| `test_role_management.py`    | 43      | Role CRUD methods, role management handlers, helpers        |
-| `test_middleware.py`         | 36      | Rate limiting, suspicious patterns, critical actions, auth  |
-| `test_keyboards.py`          | 31      | All inline keyboard generators incl. admin console          |
-| `test_admin_handlers.py`     | 20      | User management, assign role, categories, goods (admin)     |
-| `test_transactions.py`       | 21      | Purchase & payment transactions, idempotency, admin balance |
-| `test_metrics.py`            | 14      | MetricsCollector, AnalyticsMiddleware                       |
-| `test_cache_invalidation.py` | 13      | Cache invalidation after DB mutations                       |
-| `test_broadcast.py`          | 11      | BroadcastManager, BroadcastStats                            |
-| `test_paginator.py`          | 10      | LazyPaginator with caching                                  |
-| `test_payment_handlers.py`   | 10      | Balance top-up, payment check, item purchase                |
-| `test_shop_handlers.py`      | 10      | Shop browsing, item info, bought items                      |
-| `test_user_handlers.py`      | 8       | /start, profile, rules, referral registration               |
-| `test_referral_system.py`    | 7       | Referral stats, earnings, view referrals                    |
-| `test_login_rate_limiter.py` | 6       | LoginRateLimiter: blocking, reset, expiry, IP isolation     |
-| `test_recovery.py`           | 4       | RecoveryManager lifecycle, payment recovery                 |
-| **Total**                    | **359** | **Complete system coverage**                                |
+| Module                       | Tests   | Coverage                                                          |
+|------------------------------|---------|-------------------------------------------------------------------|
+| `test_database_crud.py`      | 71      | CRUD: users, roles, categories, items, balance, stats             |
+| `test_role_management.py`    | 43      | Role CRUD methods, role management handlers, helpers              |
+| `test_validators.py`         | 44      | Input validation, control chars, XSS, Pydantic models             |
+| `test_middleware.py`         | 36      | Rate limiting, suspicious patterns, critical actions, auth        |
+| `test_keyboards.py`          | 31      | All inline keyboard generators incl. admin console                |
+| `test_admin_handlers.py`     | 27      | User management, assign role, balance edge cases, categories      |
+| `test_transactions.py`       | 21      | Purchase & payment transactions, idempotency, admin balance       |
+| `test_other_handlers.py`     | 16      | check_sub_channel, payment methods, hash, item name safety        |
+| `test_filters.py`            | 15      | ValidAmountFilter, HasPermissionFilter (boundaries, permissions)  |
+| `test_payment_service.py`    | 14      | currency_to_stars, minor units, Stars/Fiat invoices, CryptoPayAPI |
+| `test_metrics.py`            | 14      | MetricsCollector, AnalyticsMiddleware                             |
+| `test_cache_invalidation.py` | 13      | Cache invalidation after DB mutations                             |
+| `test_broadcast.py`          | 11      | BroadcastManager, BroadcastStats                                  |
+| `test_payment_handlers.py`   | 10      | Balance top-up, payment check, item purchase                      |
+| `test_shop_handlers.py`      | 10      | Shop browsing, item info, bought items                            |
+| `test_paginator.py`          | 10      | LazyPaginator with caching                                        |
+| `test_user_handlers.py`      | 8       | /start, profile, rules, referral registration                     |
+| `test_i18n.py`               | 8       | get_locale, localize: fallback, formatting, error handling        |
+| `test_referral_system.py`    | 7       | Referral stats, earnings, view referrals                          |
+| `test_recovery.py`           | 7       | RecoveryManager lifecycle, payment recovery, timeout, skip        |
+| `test_login_rate_limiter.py` | 6       | LoginRateLimiter: blocking, reset, expiry, IP isolation           |
+| `test_audit.py`              | 4       | log_audit: DB record creation, levels, optional fields            |
+| **Total**                    | **429** | **Complete system coverage**                                      |
 
 ### Test Architecture
 
@@ -857,7 +870,8 @@ The test suite validates:
 <details>
 <summary>Database Operations</summary>
 
-* ✅ **Full CRUD** — users, roles (incl. custom role create/update/delete), categories, items, item values, payments, operations, referral earnings
+* ✅ **Full CRUD** — users, roles (incl. custom role create/update/delete), categories, items, item values, payments,
+  operations, referral earnings
 * ✅ **Balance operations** — positive/negative updates, insufficient funds check
 * ✅ **Duplicate handling** — duplicate users ignored, duplicate categories/items rejected
 * ✅ **Blocking** — set_user_blocked, is_user_blocked
@@ -873,7 +887,8 @@ The test suite validates:
 * ✅ **Shop handlers** — category browsing, item list, item info (limited/unlimited), bought items
 * ✅ **Admin handlers** — check user, assign role, replenish/deduct balance, block/unblock, category CRUD, item
   delete
-* ✅ **Role management** — create/edit/delete roles, permission toggles, assign role to users, permission escalation prevention
+* ✅ **Role management** — create/edit/delete roles, permission toggles, assign role to users, permission escalation
+  prevention
 * ✅ **Referral handlers** — referral page, view referrals list, earnings, earning detail
 
 </details>
@@ -892,10 +907,16 @@ The test suite validates:
 <summary>Infrastructure</summary>
 
 * ✅ **Broadcast system** — all success, partial failure, forbidden user, cancel mid-batch, progress callback
-* ✅ **Recovery manager** — paid/expired payment recovery, start/stop lifecycle, safe error handling
+* ✅ **Recovery manager** — paid/expired/active payment recovery, API timeout handling, provider filtering, start/stop
+  lifecycle
 * ✅ **Metrics** — event/timing/error tracking, conversion funnels, Prometheus export
 * ✅ **Pagination** — page loading, caching, cache eviction, state serialization, empty results
 * ✅ **Keyboards** — main menu, profile, payment, item info, referral, admin buttons
+* ✅ **Filters** — ValidAmountFilter (boundaries, non-digit, empty), HasPermissionFilter (bitmask, no role)
+* ✅ **Payment service** — currency_to_stars rounding, minor units (JPY/KRW), invoice generation, CryptoPayAPI errors
+* ✅ **i18n** — locale detection, fallback to default, key formatting, missing key passthrough
+* ✅ **Utility handlers** — channel subscription check, payment method detection, hash generation, item name safety
+* ✅ **Audit logging** — dual-write to file and DB, all log levels, optional fields
 
 </details>
 
@@ -907,6 +928,8 @@ The test suite validates:
 - **Per-test isolation**: Automatic data cleanup between tests (FK-ordered delete)
 - **Factory pattern**: Reusable `user_factory`, `category_factory`, `item_factory` fixtures
 - **Security Validation**: XSS detection, critical action audit, and input sanitization testing
+- **Automatic Coverage**: `pytest-cov` runs on every test invocation (`--cov=bot --cov-report=term-missing`)
+- **Pytest Markers**: `unit`, `integration`, `slow` for selective test runs
 
 ## 🤝 Contributing
 

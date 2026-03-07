@@ -112,6 +112,43 @@ class CryptoPayAPIError(Exception):
         super().__init__(f"CryptoPay API Error [{code}]: {name}")
 
 
+class CircuitBreaker:
+    """Simple circuit breaker for external API calls."""
+
+    def __init__(self, failure_threshold: int = 5, recovery_timeout: int = 60):
+        self.failure_threshold = failure_threshold
+        self.recovery_timeout = recovery_timeout
+        self._failure_count = 0
+        self._last_failure_time: float = 0
+        self._state = "closed"  # closed, open
+
+    @property
+    def is_open(self) -> bool:
+        if self._state == "open":
+            import time
+            if time.time() - self._last_failure_time > self.recovery_timeout:
+                self._state = "closed"
+                self._failure_count = 0
+                return False
+            return True
+        return False
+
+    def record_success(self):
+        self._failure_count = 0
+        self._state = "closed"
+
+    def record_failure(self):
+        import time
+        self._failure_count += 1
+        self._last_failure_time = time.time()
+        if self._failure_count >= self.failure_threshold:
+            self._state = "open"
+
+
+# Shared circuit breaker instance for CryptoPay API
+_crypto_circuit_breaker = CircuitBreaker(failure_threshold=5, recovery_timeout=60)
+
+
 class CryptoPayAPI:
     """
     Minimal async client for Crypto Bot API used to create and fetch invoices.
@@ -120,23 +157,37 @@ class CryptoPayAPI:
     def __init__(self):
         self.token = EnvKeys.CRYPTO_PAY_TOKEN
         self.base_url = "https://pay.crypt.bot/api"
+        self.circuit_breaker = _crypto_circuit_breaker
 
     _timeout = aiohttp.ClientTimeout(total=30)
 
     async def _request(self, method: str, params: dict) -> dict:
+        if self.circuit_breaker.is_open:
+            raise CryptoPayAPIError(
+                code=503,
+                name="SERVICE_UNAVAILABLE",
+                message="CryptoPay API temporarily unavailable, please try again later"
+            )
+
         headers = {"Crypto-Pay-API-Token": self.token}
         url = f"{self.base_url}/{method}"
 
-        if method.startswith("get"):
-            async with aiohttp.ClientSession(timeout=self._timeout) as session:
-                async with session.get(url, params=params, headers=headers) as resp:
-                    resp.raise_for_status()
-                    data = await resp.json()
-        else:
-            async with aiohttp.ClientSession(timeout=self._timeout) as session:
-                async with session.post(url, json=params, headers=headers) as resp:
-                    resp.raise_for_status()
-                    data = await resp.json()
+        try:
+            if method.startswith("get"):
+                async with aiohttp.ClientSession(timeout=self._timeout) as session:
+                    async with session.get(url, params=params, headers=headers) as resp:
+                        resp.raise_for_status()
+                        data = await resp.json()
+            else:
+                async with aiohttp.ClientSession(timeout=self._timeout) as session:
+                    async with session.post(url, json=params, headers=headers) as resp:
+                        resp.raise_for_status()
+                        data = await resp.json()
+        except CryptoPayAPIError:
+            raise
+        except Exception:
+            self.circuit_breaker.record_failure()
+            raise
 
         # Check for API-level errors (HTTP 200 but ok=false)
         if not data.get("ok", False):
@@ -146,6 +197,7 @@ class CryptoPayAPI:
                 name=error.get("name", "UNKNOWN_ERROR")
             )
 
+        self.circuit_breaker.record_success()
         return data
 
     async def create_invoice(

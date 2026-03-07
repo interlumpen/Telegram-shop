@@ -20,7 +20,7 @@ def _set_role(telegram_id: int, role: int) -> None:
     safe_create_task(invalidate_user_cache(telegram_id))
 
 
-def _update_balance(telegram_id: int | str, summ: int) -> None:
+def _update_balance(telegram_id: int, summ: int) -> None:
     """Increase user's balance by `summ` and commit."""
     with Database().session() as s:
         s.query(User).filter(User.telegram_id == telegram_id).update(
@@ -28,7 +28,7 @@ def _update_balance(telegram_id: int | str, summ: int) -> None:
         )
 
     # Invalidate the cache
-    safe_create_task(invalidate_user_cache(int(telegram_id)))
+    safe_create_task(invalidate_user_cache(telegram_id))
     safe_create_task(invalidate_stats_cache())
 
 

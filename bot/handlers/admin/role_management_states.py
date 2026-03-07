@@ -398,12 +398,10 @@ async def assign_role_confirm(call: CallbackQuery):
 
     await set_role(target_id, role_id)
 
-    # Invalidate middleware admin caches so new permissions take effect immediately
-    from bot.main import auth_middleware, rate_limit_middleware
+    # Invalidate middleware admin cache so new permissions take effect immediately
+    from bot.main import auth_middleware
     if auth_middleware:
         auth_middleware.invalidate_admin_cache(target_id)
-    if rate_limit_middleware:
-        rate_limit_middleware.invalidate_admin_cache(target_id)
 
     user_info = await call.message.bot.get_chat(target_id)
     await call.message.edit_text(

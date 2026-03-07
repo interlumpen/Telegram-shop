@@ -18,6 +18,8 @@ class TestShopCategories:
             await shop_callback_handler(call, fsm_context)
 
         call.message.edit_text.assert_called_once()
+        text = call.message.edit_text.call_args[0][0]
+        assert "shop" in text.lower() or "categories" in text.lower() or "shop.categories" in text
         state = await fsm_context.get_state()
         from bot.states import ShopStates
         assert state == ShopStates.viewing_categories
@@ -57,6 +59,7 @@ class TestItemsList:
             await items_list_callback_handler(call, fsm_context)
 
         call.message.edit_text.assert_called_once()
+        assert call.message.edit_text.call_args is not None
         data = await fsm_context.get_data()
         assert data['current_category'] == 'Widgets'
 
@@ -151,6 +154,8 @@ class TestBoughtItems:
             await bought_items_callback_handler(call, fsm_context)
 
         call.message.edit_text.assert_called_once()
+        text = call.message.edit_text.call_args[0][0]
+        assert isinstance(text, str)
 
     @pytest.mark.asyncio
     async def test_bought_item_info_not_found(self, make_callback_query):

@@ -140,9 +140,10 @@ class RateLimiter:
 class RateLimitMiddleware(BaseMiddleware):
     """Middleware to limit the frequency of requests"""
 
-    def __init__(self, config: RateLimitConfig = None):
+    def __init__(self, config: RateLimitConfig = None, auth_middleware=None):
         self.config = config or RateLimitConfig()
         self.limiter = RateLimiter(self.config)
+        self.auth_middleware = auth_middleware
         self.action_mapping = {
             # Callback data -> action name
             'replenish_balance': 'top_up',
@@ -152,13 +153,6 @@ class RateLimitMiddleware(BaseMiddleware):
             'category_': 'shop_view',
             'item_': 'shop_view',
         }
-        # Cache for admin role checks
-        self.admin_cache: dict[int, tuple[int, float]] = {}
-        self.cache_ttl = 300  # 5 minutes
-
-    def invalidate_admin_cache(self, user_id: int) -> None:
-        """Remove cached role for a user so permissions are re-fetched."""
-        self.admin_cache.pop(user_id, None)
 
     def _get_action_from_event(self, event: TelegramObject) -> str:
         """Determines the action from the event"""
@@ -178,22 +172,17 @@ class RateLimitMiddleware(BaseMiddleware):
         return 'default'
 
     async def _check_admin_bypass(self, user_id: int) -> bool:
-        """Checks if the user is an admin (with caching)"""
+        """Checks if the user is an admin (delegates to AuthenticationMiddleware cache)"""
         if not self.config.admin_bypass:
             return False
 
-        # Check cache first
-        if user_id in self.admin_cache:
-            role, timestamp = self.admin_cache[user_id]
-            if time.time() - timestamp < self.cache_ttl:
-                return role > Permission.USE
-
         try:
-            from bot.database.methods import check_role
-            role = await check_role(user_id) or 0
-            # Update cache
-            self.admin_cache[user_id] = (role, time.time())
-            return role > 1  # ADMIN or OWNER
+            if self.auth_middleware:
+                role = await self.auth_middleware.get_user_role_cached(user_id)
+            else:
+                from bot.database.methods import check_role
+                role = await check_role(user_id) or 0
+            return role > Permission.USE
         except Exception:
             return False
 
@@ -273,9 +262,9 @@ class RateLimitMiddleware(BaseMiddleware):
 
 
 # Function for quick setup
-def setup_rate_limiting(dp, config: RateLimitConfig = None):
+def setup_rate_limiting(dp, config: RateLimitConfig = None, auth_middleware=None):
     """Connects rate limiting to the dispatcher"""
-    middleware = RateLimitMiddleware(config)
+    middleware = RateLimitMiddleware(config, auth_middleware=auth_middleware)
     dp.message.middleware(middleware)
     dp.callback_query.middleware(middleware)
     return middleware

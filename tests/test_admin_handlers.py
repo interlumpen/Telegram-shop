@@ -201,6 +201,53 @@ class TestBlockUser:
         call.answer.assert_called_once()
 
 
+class TestReplenishBalanceEdgeCases:
+
+    @pytest.mark.asyncio
+    async def test_replenish_non_numeric_input(self, make_message, fsm_context, user_factory):
+        from bot.handlers.admin.user_management_states import process_replenish_user_balance
+
+        user_factory(telegram_id=800040, balance=100)
+        await fsm_context.update_data(target_user=800040)
+
+        msg = make_message(text="abc", user_id=900060)
+
+        await process_replenish_user_balance(msg, fsm_context)
+
+        msg.answer.assert_called_once()
+        # Balance should not change
+        user = check_user(800040)
+        assert user['balance'] == Decimal("100")
+
+    @pytest.mark.asyncio
+    async def test_replenish_negative_amount(self, make_message, fsm_context, user_factory):
+        from bot.handlers.admin.user_management_states import process_replenish_user_balance
+
+        user_factory(telegram_id=800041, balance=100)
+        await fsm_context.update_data(target_user=800041)
+
+        msg = make_message(text="-500", user_id=900061)
+
+        await process_replenish_user_balance(msg, fsm_context)
+
+        msg.answer.assert_called_once()
+        user = check_user(800041)
+        assert user['balance'] == Decimal("100")
+
+    @pytest.mark.asyncio
+    async def test_replenish_zero_amount(self, make_message, fsm_context, user_factory):
+        from bot.handlers.admin.user_management_states import process_replenish_user_balance
+
+        user_factory(telegram_id=800042, balance=100)
+        await fsm_context.update_data(target_user=800042)
+
+        msg = make_message(text="0", user_id=900062)
+
+        await process_replenish_user_balance(msg, fsm_context)
+
+        msg.answer.assert_called_once()
+
+
 class TestCategoryManagement:
 
     @pytest.mark.asyncio

@@ -50,6 +50,8 @@ class RecoveryManager:
 
         while self.running:
             try:
+                # Collect payment data synchronously, then close session
+                payment_copies = []
                 with Database().session() as s:
                     cutoff = datetime.now() - timedelta(hours=1)
                     pending_payments = s.query(Payments).filter(
@@ -58,8 +60,19 @@ class RecoveryManager:
                         Payments.provider == "cryptopay"
                     ).all()
 
-                    for payment in pending_payments:
-                        await self._check_and_process_payment(payment)
+                    for p in pending_payments:
+                        payment_copies.append({
+                            'id': p.id,
+                            'provider': p.provider,
+                            'external_id': p.external_id,
+                            'user_id': p.user_id,
+                            'amount': p.amount,
+                            'currency': p.currency,
+                        })
+
+                # Process outside DB session to avoid deadlock
+                for pc in payment_copies:
+                    await self._check_and_process_payment(pc)
 
             except Exception as e:
                 logger.error(f"Error recovering payments: {e}")
@@ -67,46 +80,66 @@ class RecoveryManager:
             await asyncio.sleep(300)
 
     async def _check_and_process_payment(self, payment):
-        """Verification and processing of a specific payment"""
-        from bot.database import Database
-        from bot.database.models import Payments
+        """Verification and processing of a specific payment.
+
+        Args:
+            payment: dict with keys id, provider, external_id, user_id, amount, currency
+        """
         from bot.database.methods.transactions import process_payment_with_referral
         from bot.misc import EnvKeys
         from bot.misc.services.payment import CryptoPayAPI
         from bot.i18n import localize
 
+        p_id = payment['id'] if isinstance(payment, dict) else payment.id
+        p_provider = payment['provider'] if isinstance(payment, dict) else payment.provider
+        p_external_id = payment['external_id'] if isinstance(payment, dict) else payment.external_id
+        p_user_id = payment['user_id'] if isinstance(payment, dict) else payment.user_id
+        p_amount = payment['amount'] if isinstance(payment, dict) else payment.amount
+        p_currency = payment['currency'] if isinstance(payment, dict) else payment.currency
+
         try:
-            if payment.provider == "cryptopay" and EnvKeys.CRYPTO_PAY_TOKEN:
+            if p_provider == "cryptopay" and EnvKeys.CRYPTO_PAY_TOKEN:
                 crypto = CryptoPayAPI()
-                info = await crypto.get_invoice(payment.external_id)
+                info = await crypto.get_invoice(p_external_id)
 
                 if info.get("status") == "paid":
                     success, _ = await process_payment_with_referral(
-                        user_id=payment.user_id,
-                        amount=payment.amount,
-                        provider=payment.provider,
-                        external_id=payment.external_id,
+                        user_id=p_user_id,
+                        amount=p_amount,
+                        provider=p_provider,
+                        external_id=p_external_id,
                         referral_percent=EnvKeys.REFERRAL_PERCENT
                     )
 
                     if success:
-                        logger.info(f"Recovered payment {payment.external_id}")
+                        logger.info(f"Recovered payment {p_external_id}")
                         try:
                             await self.bot.send_message(
-                                payment.user_id,
-                                localize("payments.topped_simple", amount=payment.amount, currency=payment.currency)
+                                p_user_id,
+                                localize("payments.topped_simple", amount=p_amount, currency=p_currency)
                             )
                         except Exception as e:
-                            logger.error(f"Failed to notify user {payment.user_id}: {e}")
+                            logger.error(f"Failed to notify user {p_user_id}: {e}")
 
                 elif info.get("status") in ["expired", "failed"]:
-                    with Database().session() as s:
-                        s.query(Payments).filter(
-                            Payments.id == payment.id
-                        ).update({"status": "failed"})
+                    await self._mark_payment_failed(p_id)
 
         except Exception as e:
-            logger.error(f"Error processing payment {payment.id}: {e}")
+            logger.error(f"Error processing payment {p_id}: {e}")
+
+    async def _mark_payment_failed(self, payment_id: int):
+        """Mark payment as failed using executor to avoid blocking event loop."""
+        from bot.database import Database
+        from bot.database.models import Payments
+
+        def _update():
+            with Database().session() as s:
+                s.query(Payments).filter(
+                    Payments.id == payment_id
+                ).update({"status": "failed"})
+
+        loop = asyncio.get_running_loop()
+        await loop.run_in_executor(None, _update)
 
     async def periodic_health_check(self):
         """Periodic system health checks"""

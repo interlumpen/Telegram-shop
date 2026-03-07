@@ -87,6 +87,7 @@ class User(Database.BASE):
 
     __table_args__ = (
         CheckConstraint('referral_id != telegram_id', name='ck_users_no_self_referral'),
+        Index('ix_users_registration_date', 'registration_date'),
     )
 
     referral_earnings_received = relationship(
@@ -244,6 +245,7 @@ class ReferralEarnings(Database.BASE):
     )
 
     __table_args__ = (
+        CheckConstraint('referrer_id != referral_id', name='ck_referral_earnings_no_self_referral'),
         Index('ix_referral_earnings_referrer_created', 'referrer_id', 'created_at'),
         Index('ix_referral_earnings_referral_created', 'referral_id', 'created_at'),
     )

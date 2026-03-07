@@ -114,12 +114,13 @@ def _query_user_referrals_sync(user_id: int, offset: int = 0, limit: int = 10, c
             )
             .outerjoin(earnings_subq, User.telegram_id == earnings_subq.c.referral_id)
             .filter(User.referral_id == user_id)
+            .order_by(desc(func.coalesce(earnings_subq.c.total_earned, 0)))
             .offset(offset)
             .limit(limit)
             .all()
         )
 
-        result = [
+        return [
             {
                 'telegram_id': row.telegram_id,
                 'registration_date': row.registration_date,
@@ -127,8 +128,6 @@ def _query_user_referrals_sync(user_id: int, offset: int = 0, limit: int = 10, c
             }
             for row in rows
         ]
-
-        return sorted(result, key=lambda x: x['total_earned'], reverse=True)
 
 
 def _query_referral_earnings_from_user_sync(referrer_id: int, referral_id: int, offset: int = 0, limit: int = 10,
