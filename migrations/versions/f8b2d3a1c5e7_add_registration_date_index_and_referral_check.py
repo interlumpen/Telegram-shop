@@ -1,7 +1,7 @@
 """add registration_date index and referral_earnings self-referral check
 
 Revision ID: f8b2d3a1c5e7
-Revises: 5ec59540ad4f
+Revises: d4a7f2e1b3c5
 Create Date: 2026-03-07 08:23:56.948532
 
 """
@@ -12,7 +12,7 @@ from sqlalchemy import inspect
 
 # revision identifiers, used by Alembic.
 revision: str = 'f8b2d3a1c5e7'
-down_revision: Union[str, None] = '5ec59540ad4f'
+down_revision: Union[str, None] = 'd4a7f2e1b3c5'
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 

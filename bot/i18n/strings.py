@@ -153,7 +153,6 @@ TRANSLATIONS: dict[str, dict[str, str]] = {
         "admin.shop.menu.title": "⛩️ Меню управления магазином",
         "admin.shop.menu.statistics": "📊 Статистика",
         "admin.shop.menu.logs": "📁 Показать логи",
-        "admin.shop.menu.admins": "👮 Администраторы",
         "admin.shop.menu.users": "👤 Пользователи",
         "admin.shop.menu.search_bought": "🔎 Поиск купленного товара",
 
@@ -254,26 +253,28 @@ TRANSLATIONS: dict[str, dict[str, str]] = {
             "Статистика магазина:\n"
             "➖➖➖➖➖➖➖➖➖➖➖➖➖\n"
             "<b>◽ПОЛЬЗОВАТЕЛИ</b>\n"
-            "◾️Пользователей за 24 часа: {today_users}\n"
-            "◾️Всего администраторов: {admins}\n"
-            "◾️Всего пользователей: {users}\n"
+            "◾️Новых за 24 часа: {today_users}\n"
+            "◾️Всего: {users}\n"
+            "◾️Покупателей: {buyers}\n"
+            "◾️Заблокировано: {blocked}\n"
             "➖➖➖➖➖➖➖➖➖➖➖➖➖\n"
             "◽<b>СРЕДСТВА</b>\n"
-            "◾Продаж за 24 часа на: {today_orders} {currency}\n"
-            "◾Продано товаров на: {all_orders} {currency}\n"
+            "◾Продаж за 24 часа: {today_orders} {currency} ({today_sold_count} шт.)\n"
+            "◾Продано всего на: {all_orders} {currency}\n"
+            "◾Средний чек: {avg_order} {currency}\n"
             "◾Пополнений за 24 часа: {today_topups} {currency}\n"
             "◾Средств в системе: {system_balance} {currency}\n"
-            "◾Пополнено: {all_topups} {currency}\n"
+            "◾Пополнено всего: {all_topups} {currency}\n"
             "➖➖➖➖➖➖➖➖➖➖➖➖➖\n"
-            "◽<b>ПРОЧЕЕ</b>\n"
-            "◾Товаров: {items} шт.\n"
+            "◽<b>КАТАЛОГ</b>\n"
+            "◾В наличии: {items} шт.\n"
             "◾Позиций: {goods} шт.\n"
             "◾Категорий: {categories} шт.\n"
-            "◾Продано товаров: {sold_count} шт."
+            "◾Продано: {sold_count} шт."
         ),
+        "admin.shop.stats.roles_header": "\n➖➖➖➖➖➖➖➖➖➖➖➖➖\n◽<b>РОЛИ</b>",
 
         # === Admin: Lists & Broadcast ===
-        "admin.shop.admins.title": "👮 Администраторы бота:",
         "admin.shop.users.title": "Пользователи бота:",
         "admin.shop.bought.prompt_id": "Введите уникальный ID купленного товара",
         "admin.shop.bought.not_found": "❌ Товар с указанным уникальным ID не найден",
@@ -541,7 +542,6 @@ TRANSLATIONS: dict[str, dict[str, str]] = {
         "admin.shop.menu.title": "⛩️ Shop management",
         "admin.shop.menu.statistics": "📊 Statistics",
         "admin.shop.menu.logs": "📁 Show logs",
-        "admin.shop.menu.admins": "👮 Admins",
         "admin.shop.menu.users": "👤 Users",
         "admin.shop.menu.search_bought": "🔎 Search purchased item",
 
@@ -642,26 +642,28 @@ TRANSLATIONS: dict[str, dict[str, str]] = {
             "Shop statistics:\n"
             "➖➖➖➖➖➖➖➖➖➖➖➖➖\n"
             "<b>◽USERS</b>\n"
-            "◾️Users in last 24h: {today_users}\n"
-            "◾️Total admins: {admins}\n"
-            "◾️Total users: {users}\n"
+            "◾️New in last 24h: {today_users}\n"
+            "◾️Total: {users}\n"
+            "◾️Buyers: {buyers}\n"
+            "◾️Blocked: {blocked}\n"
             "➖➖➖➖➖➖➖➖➖➖➖➖➖\n"
             "◽<b>FUNDS</b>\n"
-            "◾Sales in last 24h: {today_orders} {currency}\n"
+            "◾Sales in last 24h: {today_orders} {currency} ({today_sold_count} pcs)\n"
             "◾Total sold: {all_orders} {currency}\n"
+            "◾Avg order: {avg_order} {currency}\n"
             "◾Top-ups in last 24h: {today_topups} {currency}\n"
             "◾Funds in system: {system_balance} {currency}\n"
             "◾Total top-ups: {all_topups} {currency}\n"
             "➖➖➖➖➖➖➖➖➖➖➖➖➖\n"
-            "◽<b>MISC</b>\n"
-            "◾Items: {items} pcs\n"
+            "◽<b>CATALOG</b>\n"
+            "◾In stock: {items} pcs\n"
             "◾Positions: {goods} pcs\n"
             "◾Categories: {categories} pcs\n"
-            "◾Sold items: {sold_count} pcs"
+            "◾Sold: {sold_count} pcs"
         ),
+        "admin.shop.stats.roles_header": "\n➖➖➖➖➖➖➖➖➖➖➖➖➖\n◽<b>ROLES</b>",
 
         # === Admin: Lists & Broadcast ===
-        "admin.shop.admins.title": "👮 Bot admins:",
         "admin.shop.users.title": "Bot users:",
         "admin.shop.bought.prompt_id": "Enter purchased item unique ID",
         "admin.shop.bought.not_found": "❌ Item with given unique ID not found",

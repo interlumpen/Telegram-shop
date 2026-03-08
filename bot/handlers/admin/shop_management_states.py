@@ -11,11 +11,15 @@ import datetime
 
 from bot.database.models import Permission
 from bot.database.methods import (
-    select_today_users, select_admins, get_user_count, select_today_orders,
+    select_today_users, get_user_count, select_today_orders,
     select_all_orders, select_today_operations, select_users_balance, select_all_operations,
     select_count_items, select_count_goods, select_count_categories, select_count_bought_items,
     select_bought_item, check_user_referrals, check_role_name_by_id, select_user_items,
-    select_user_operations, query_admins, query_all_users, check_user_cached
+    select_user_operations, query_all_users, check_user_cached
+)
+from bot.database.methods.read import (
+    get_roles_with_user_counts, select_unique_buyers, select_avg_order,
+    select_today_orders_count, select_blocked_users_count,
 )
 from bot.keyboards import back, simple_buttons, lazy_paginated_keyboard
 from bot.filters import HasPermissionFilter
@@ -47,7 +51,6 @@ async def shop_callback_handler(call: CallbackQuery):
     actions = [
         (localize("admin.shop.menu.statistics"), "statistics"),
         (localize("admin.shop.menu.logs"), "show_logs"),
-        (localize("admin.shop.menu.admins"), "admins_list"),
         (localize("admin.shop.menu.users"), "users_list"),
         (localize("admin.shop.menu.search_bought"), "show_bought_item"),
         (localize("btn.back"), "console"),
@@ -93,6 +96,12 @@ async def statistics_callback_handler(call: CallbackQuery):
     """
     today_str = datetime.date.today().isoformat()
 
+    # Collect new metrics (not cached — lightweight queries)
+    unique_buyers = await select_unique_buyers()
+    avg_order = await select_avg_order()
+    today_sold_count = await select_today_orders_count(today_str)
+    blocked_count = await select_blocked_users_count()
+
     # Use cached statistics
     if stats_cache:
         daily_stats = await stats_cache.get_daily_stats(today_str)
@@ -101,10 +110,13 @@ async def statistics_callback_handler(call: CallbackQuery):
         text = localize(
             "admin.shop.stats.template",
             today_users=daily_stats['users'],
-            admins=global_stats['total_admins'],
             users=global_stats['total_users'],
+            buyers=unique_buyers,
+            blocked=blocked_count,
             today_orders=daily_stats['orders'],
+            today_sold_count=today_sold_count,
             all_orders=global_stats['total_revenue'],
+            avg_order=f"{avg_order:.2f}",
             today_topups=daily_stats['operations'],
             system_balance=await select_users_balance(),
             all_topups=await select_all_operations(),
@@ -120,10 +132,13 @@ async def statistics_callback_handler(call: CallbackQuery):
         text = localize(
             "admin.shop.stats.template",
             today_users=await select_today_users(today_str),
-            admins=await select_admins(),
             users=await get_user_count(),
+            buyers=unique_buyers,
+            blocked=blocked_count,
             today_orders=await select_today_orders(today_str),
+            today_sold_count=today_sold_count,
             all_orders=await select_all_orders(),
+            avg_order=f"{avg_order:.2f}",
             today_topups=await select_today_operations(today_str),
             system_balance=await select_users_balance(),
             all_topups=await select_all_operations(),
@@ -134,62 +149,27 @@ async def statistics_callback_handler(call: CallbackQuery):
             currency=EnvKeys.PAY_CURRENCY
         )
 
+    # Append role breakdown
+    roles = await get_roles_with_user_counts()
+    if roles:
+        text += "\n" + localize("admin.shop.stats.roles_header")
+        for r in roles:
+            perms_list = [label for bit, label in _PERM_LABELS.items() if r['permissions'] & bit]
+            perms_str = ", ".join(perms_list) if perms_list else "—"
+            text += f"\n◾<b>{r['name']}</b> ({perms_str}): {r['user_count']}"
+
     await call.message.edit_text(text, reply_markup=back("shop_management"), parse_mode="HTML")
 
 
-@router.callback_query(F.data == "admins_list", HasPermissionFilter(Permission.USERS_MANAGE))
-async def admins_callback_handler(call: CallbackQuery, state: FSMContext):
-    """
-    Show list of admins with lazy loading pagination.
-    """
-    # Create paginator
-    paginator = LazyPaginator(query_admins, per_page=10)
-
-    markup = await lazy_paginated_keyboard(
-        paginator=paginator,
-        item_text=lambda user_id: str(user_id),
-        item_callback=lambda user_id: f"show-user_admin-{user_id}",
-        page=0,
-        back_cb="shop_management",
-        nav_cb_prefix="admins-page_",
-    )
-
-    await call.message.edit_text(localize("admin.shop.admins.title"), reply_markup=markup)
-
-    # Save state
-    await state.update_data(admins_paginator=paginator.get_state())
-
-
-@router.callback_query(F.data.startswith("admins-page_"), HasPermissionFilter(Permission.USERS_MANAGE))
-async def navigate_admins(call: CallbackQuery, state: FSMContext):
-    """
-    Pagination for admins list with lazy loading.
-    """
-    try:
-        current_index = int(call.data.split("_")[1])
-    except Exception:
-        current_index = 0
-
-    # Get saved state
-    data = await state.get_data()
-    paginator_state = data.get('admins_paginator')
-
-    # Create paginator with cached state
-    paginator = LazyPaginator(query_admins, per_page=10, state=paginator_state)
-
-    markup = await lazy_paginated_keyboard(
-        paginator=paginator,
-        item_text=lambda user_id: str(user_id),
-        item_callback=lambda user_id: f"show-user_admin-{user_id}",
-        page=current_index,
-        back_cb="shop_management",
-        nav_cb_prefix="admins-page_",
-    )
-
-    await call.message.edit_text(localize("admin.shop.admins.title"), reply_markup=markup)
-
-    # Update state
-    await state.update_data(admins_paginator=paginator.get_state())
+_PERM_LABELS = {
+    Permission.USE: "USE",
+    Permission.BROADCAST: "BROADCAST",
+    Permission.SETTINGS_MANAGE: "SETTINGS",
+    Permission.USERS_MANAGE: "USERS",
+    Permission.SHOP_MANAGE: "SHOP",
+    Permission.ADMINS_MANAGE: "ADMINS",
+    Permission.OWN: "OWNER",
+}
 
 
 @router.callback_query(F.data == "users_list", HasPermissionFilter(Permission.USERS_MANAGE))
@@ -253,9 +233,8 @@ async def show_user_info(call: CallbackQuery):
     Show detailed info for selected user.
     """
     query = call.data[10:]
-    origin, user_id = query.split("-")  # origin: 'user' | 'admin'
+    _, user_id = query.split("-")
     user_id = int(user_id)
-    back_target = "users_list" if origin == "user" else "admins_list"
 
     user = await check_user_cached(user_id)
     user_info = await call.message.bot.get_chat(user_id)
@@ -277,7 +256,7 @@ async def show_user_info(call: CallbackQuery):
         f"{localize('profile.registration_date', dt=user.get('registration_date'))}\n"
     )
 
-    await call.message.edit_text(text, parse_mode="HTML", reply_markup=back(back_target))
+    await call.message.edit_text(text, parse_mode="HTML", reply_markup=back("users_list"))
 
 
 @router.callback_query(F.data == "show_bought_item", HasPermissionFilter(Permission.SHOP_MANAGE))

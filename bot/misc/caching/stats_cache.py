@@ -29,13 +29,12 @@ class StatsCache:
     async def get_global_stats(self) -> Dict[str, Any]:
         """Cached global statistics"""
         from bot.database.methods import (
-            get_user_count, select_admins, select_all_orders,
+            get_user_count, select_all_orders,
             select_count_items, select_count_goods
         )
 
         return {
             "total_users": await get_user_count(),
-            "total_admins": await select_admins(),
             "total_revenue": await select_all_orders(),
             "total_items": await select_count_items(),
             "total_goods": await select_count_goods()

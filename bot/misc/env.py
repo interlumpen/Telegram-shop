@@ -68,4 +68,4 @@ class EnvKeys(ABC):
     ADMIN_PASSWORD: Final = _get_optional("ADMIN_PASSWORD", "admin")
     SECRET_KEY: Final = _get_optional("SECRET_KEY", "change-me-in-production")
 
-    DATABASE_URL: Final = f"{DB_DRIVER}://{POSTGRES_USER}:{quote_plus(POSTGRES_PASSWORD)}@{POSTGRES_HOST}:{DB_PORT}/{POSTGRES_DB}"
+    DATABASE_URL: Final = f"postgresql+asyncpg://{POSTGRES_USER}:{quote_plus(POSTGRES_PASSWORD)}@{POSTGRES_HOST}:{DB_PORT}/{POSTGRES_DB}"

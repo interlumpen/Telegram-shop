@@ -364,7 +364,6 @@ disabled. The bot remains fully functional but without caching optimizations.
 | `POSTGRES_PASSWORD` | PostgreSQL password                                     | **Required**                             |
 | `POSTGRES_HOST`     | PostgreSQL host (configure this only for manual deploy) | localhost (for manual) / db (for docker) |
 | `DB_PORT`           | PostgreSQL port                                         | `5432`                                   |
-| `DB_DRIVER`         | Database driver                                         | `postgresql+asyncpg`                     |
 
 </details>
 

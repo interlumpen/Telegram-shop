@@ -125,6 +125,23 @@ async def count_users_with_role(role_id: int) -> int:
         )).scalar() or 0
 
 
+async def get_roles_with_user_counts() -> list[dict]:
+    """Return all non-default roles that have at least 1 user, with user count."""
+    async with Database().session() as s:
+        result = await s.execute(
+            select(Role.name, Role.permissions, func.count(User.telegram_id))
+            .join(User, User.role_id == Role.id)
+            .where(Role.default == False)  # noqa: E712
+            .group_by(Role.id, Role.name, Role.permissions)
+            .having(func.count(User.telegram_id) > 0)
+            .order_by(Role.permissions.asc())
+        )
+        return [
+            {'name': name, 'permissions': perms, 'user_count': count}
+            for name, perms, count in result.all()
+        ]
+
+
 async def select_today_users(date: str) -> int:
     """Return count of users registered on given date (YYYY-MM-DD)."""
     start_of_day, end_of_day = _day_window(date)
@@ -258,6 +275,42 @@ async def select_count_bought_items() -> int:
     """Return total count of bought items."""
     async with Database().session() as s:
         return (await s.execute(select(func.count()).select_from(BoughtGoods))).scalar() or 0
+
+
+async def select_unique_buyers() -> int:
+    """Return count of unique users who made at least one purchase."""
+    async with Database().session() as s:
+        return (await s.execute(
+            select(func.count(func.distinct(BoughtGoods.buyer_id)))
+        )).scalar() or 0
+
+
+async def select_avg_order() -> Decimal:
+    """Return average purchase price."""
+    async with Database().session() as s:
+        return (await s.execute(
+            select(func.avg(BoughtGoods.price))
+        )).scalar() or Decimal(0)
+
+
+async def select_today_orders_count(date: str) -> int:
+    """Return number of purchases for given date."""
+    start_of_day, end_of_day = _day_window(date)
+    async with Database().session() as s:
+        return (await s.execute(
+            select(func.count()).select_from(BoughtGoods).where(
+                BoughtGoods.bought_datetime >= start_of_day,
+                BoughtGoods.bought_datetime < end_of_day
+            )
+        )).scalar() or 0
+
+
+async def select_blocked_users_count() -> int:
+    """Return count of blocked users."""
+    async with Database().session() as s:
+        return (await s.execute(
+            select(func.count()).select_from(User).where(User.is_blocked == True)  # noqa: E712
+        )).scalar() or 0
 
 
 async def select_today_orders(date: str) -> Decimal:

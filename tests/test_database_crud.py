@@ -36,7 +36,7 @@ from bot.database.methods.delete import (
 )
 
 
-NOW = datetime.datetime.now()
+NOW = datetime.datetime.now(datetime.timezone.utc)
 TODAY_STR = NOW.strftime("%Y-%m-%d")
 
 

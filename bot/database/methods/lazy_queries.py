@@ -72,19 +72,6 @@ async def query_all_users(offset: int = 0, limit: int = 10, count_only: bool = F
         return [row[0] for row in result.all()]
 
 
-async def query_admins(offset: int = 0, limit: int = 10, count_only: bool = False) -> Any:
-    """Query admin users with pagination"""
-    async with Database().session() as s:
-        query = select(User.telegram_id).join(Role).where(Role.name == 'ADMIN')
-        if count_only:
-            count_result = await s.execute(select(func.count()).select_from(query.subquery()))
-            return count_result.scalar() or 0
-        result = await s.execute(
-            query.order_by(User.telegram_id.asc()).offset(offset).limit(limit)
-        )
-        return [row[0] for row in result.all()]
-
-
 async def query_items_in_position(item_name: str, offset: int = 0, limit: int = 10, count_only: bool = False) -> Any:
     """Query items in position with pagination"""
     async with Database().session() as s:
