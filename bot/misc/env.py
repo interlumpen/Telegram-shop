@@ -27,7 +27,7 @@ class EnvKeys(ABC):
     POSTGRES_USER: Final = _get_required("POSTGRES_USER")
     POSTGRES_PASSWORD: Final = _get_required("POSTGRES_PASSWORD")
     DB_PORT: Final = int(_get_optional("DB_PORT", "5432"))
-    DB_DRIVER: Final = _get_optional("DB_DRIVER", "postgresql+psycopg")
+    DB_DRIVER: Final = _get_optional("DB_DRIVER", "postgresql+asyncpg")
     POSTGRES_HOST: Final = _get_optional("POSTGRES_HOST", "localhost")
 
     # Redis

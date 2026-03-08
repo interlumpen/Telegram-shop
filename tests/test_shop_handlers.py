@@ -4,12 +4,11 @@ from unittest.mock import patch, AsyncMock, MagicMock
 
 class TestShopCategories:
 
-    @pytest.mark.asyncio
     async def test_shop_shows_categories(self, make_callback_query, fsm_context, category_factory):
         from bot.handlers.user.shop_and_goods import shop_callback_handler
 
-        category_factory("Electronics")
-        category_factory("Clothing")
+        await category_factory("Electronics")
+        await category_factory("Clothing")
 
         call = make_callback_query(data="shop", user_id=600001)
 
@@ -24,12 +23,11 @@ class TestShopCategories:
         from bot.states import ShopStates
         assert state == ShopStates.viewing_categories
 
-    @pytest.mark.asyncio
     async def test_navigate_categories_page(self, make_callback_query, fsm_context, category_factory):
         from bot.handlers.user.shop_and_goods import navigate_categories
 
         for i in range(15):
-            category_factory(f"Cat_{i}")
+            await category_factory(f"Cat_{i}")
 
         call = make_callback_query(data="categories-page_1", user_id=600002)
 
@@ -45,11 +43,10 @@ class TestShopCategories:
 
 class TestItemsList:
 
-    @pytest.mark.asyncio
     async def test_items_list_valid_category(self, make_callback_query, fsm_context, item_factory):
         from bot.handlers.user.shop_and_goods import items_list_callback_handler
 
-        item_factory(name="Widget", price=100, category="Widgets", values=[("w1", False)])
+        await item_factory(name="Widget", price=100, category="Widgets", values=[("w1", False)])
 
         call = make_callback_query(data="cat:0:0", user_id=600010)
         await fsm_context.update_data(category_page_items=["Widgets"])
@@ -63,7 +60,6 @@ class TestItemsList:
         data = await fsm_context.get_data()
         assert data['current_category'] == 'Widgets'
 
-    @pytest.mark.asyncio
     async def test_items_list_invalid_index(self, make_callback_query, fsm_context):
         from bot.handlers.user.shop_and_goods import items_list_callback_handler
 
@@ -77,11 +73,10 @@ class TestItemsList:
 
 class TestItemInfo:
 
-    @pytest.mark.asyncio
     async def test_item_info_display(self, make_callback_query, fsm_context, item_factory):
         from bot.handlers.user.shop_and_goods import item_info_callback_handler
 
-        item_factory(name="InfoItem", price=250, category="TestCat", values=[("val1", False)])
+        await item_factory(name="InfoItem", price=250, category="TestCat", values=[("val1", False)])
 
         call = make_callback_query(data="itm:0:0", user_id=600020)
         await fsm_context.update_data(
@@ -94,7 +89,6 @@ class TestItemInfo:
 
         call.message.edit_text.assert_called_once()
 
-    @pytest.mark.asyncio
     async def test_item_info_invalid_index(self, make_callback_query, fsm_context):
         from bot.handlers.user.shop_and_goods import item_info_callback_handler
 
@@ -105,7 +99,6 @@ class TestItemInfo:
 
         call.answer.assert_called_once()
 
-    @pytest.mark.asyncio
     async def test_item_info_not_found_in_db(self, make_callback_query, fsm_context):
         from bot.handlers.user.shop_and_goods import item_info_callback_handler
 
@@ -119,11 +112,10 @@ class TestItemInfo:
 
         call.answer.assert_called_once()
 
-    @pytest.mark.asyncio
     async def test_item_info_unlimited_quantity(self, make_callback_query, fsm_context, item_factory):
         from bot.handlers.user.shop_and_goods import item_info_callback_handler
 
-        item_factory(name="InfItem", price=50, category="InfCat", values=[("unlimited_val", True)])
+        await item_factory(name="InfItem", price=50, category="InfCat", values=[("unlimited_val", True)])
 
         call = make_callback_query(data="itm:0:0", user_id=600023)
         await fsm_context.update_data(
@@ -141,11 +133,10 @@ class TestItemInfo:
 
 class TestBoughtItems:
 
-    @pytest.mark.asyncio
     async def test_bought_items_empty(self, make_callback_query, fsm_context, user_factory):
         from bot.handlers.user.shop_and_goods import bought_items_callback_handler
 
-        user_factory(telegram_id=600030)
+        await user_factory(telegram_id=600030)
 
         call = make_callback_query(data="bought_items", user_id=600030)
 
@@ -157,7 +148,6 @@ class TestBoughtItems:
         text = call.message.edit_text.call_args[0][0]
         assert isinstance(text, str)
 
-    @pytest.mark.asyncio
     async def test_bought_item_info_not_found(self, make_callback_query):
         from bot.handlers.user.shop_and_goods import bought_item_info_callback_handler
 

@@ -8,6 +8,7 @@ from bot.database.models import Permission
 from bot.database.methods import (
     check_category_cached, get_item_info_cached, create_item, add_values_to_item
 )
+from bot.handlers.other import _parse_channel_username
 from bot.keyboards.inline import back, question_buttons, simple_buttons
 from bot.database.methods.audit import log_audit
 from bot.filters import HasPermissionFilter
@@ -192,16 +193,12 @@ async def finish_adding_items_callback_handler(call: CallbackQuery, state):
     await call.message.edit_text("\n".join(text_lines), parse_mode="HTML", reply_markup=back("goods_management"))
 
     # Optionally notify a channel
-    channel_url = EnvKeys.CHANNEL_URL or ""
-    parsed = urlparse(channel_url)
-    channel_username = (
-                           parsed.path.lstrip('/')
-                           if parsed.path else channel_url.replace("https://t.me/", "").replace("t.me/", "").lstrip('@')
-                       ) or None
+    channel_username = _parse_channel_username()
     if channel_username:
         try:
+            chat_id = int(EnvKeys.CHANNEL_ID) if EnvKeys.CHANNEL_ID else f"@{channel_username}"
             await call.bot.send_message(
-                chat_id=f"@{channel_username}",
+                chat_id=chat_id,
                 text=(
                     f"🎁 {localize('shop.group.new_upload')}\n"
                     f"🏷️ {localize('shop.group.item')}: <b>{item_name}</b>\n"
@@ -217,7 +214,7 @@ async def finish_adding_items_callback_handler(call: CallbackQuery, state):
             await call.answer(localize("errors.channel.telegram_bad_request", e=e))
 
     admin_info = await call.message.bot.get_chat(call.from_user.id)
-    log_audit("create_item", user_id=call.from_user.id, resource_type="Item", resource_id=item_name, details=f"admin={admin_info.first_name}")
+    await log_audit("create_item", user_id=call.from_user.id, resource_type="Item", resource_id=item_name, details=f"admin={admin_info.first_name}")
     await state.clear()
 
 
@@ -243,16 +240,12 @@ async def finish_adding_item_callback_handler(message: Message, state):
     await add_values_to_item(item_name, single_value, True)
 
     # 3) Optionally notify a channel
-    channel_url = EnvKeys.CHANNEL_URL or ""
-    parsed = urlparse(channel_url)
-    channel_username = (
-                           parsed.path.lstrip('/')
-                           if parsed.path else channel_url.replace("https://t.me/", "").replace("t.me/", "").lstrip('@')
-                       ) or None
+    channel_username = _parse_channel_username()
     if channel_username:
         try:
+            chat_id = int(EnvKeys.CHANNEL_ID) if EnvKeys.CHANNEL_ID else f"@{channel_username}"
             await message.bot.send_message(
-                chat_id=f"@{channel_username}",
+                chat_id=chat_id,
                 text=(
                     f"🎁 {localize('shop.group.new_upload')}\n"
                     f"🏷️ {localize('shop.group.item')}: <b>{item_name}</b>\n"
@@ -269,5 +262,5 @@ async def finish_adding_item_callback_handler(message: Message, state):
 
     await message.answer(localize('admin.goods.add.single.created'), reply_markup=back('goods_management'))
     admin_info = await message.bot.get_chat(message.from_user.id)
-    log_audit("create_item", user_id=message.from_user.id, resource_type="Item", resource_id=item_name, details=f"admin={admin_info.first_name}, infinite=true")
+    await log_audit("create_item", user_id=message.from_user.id, resource_type="Item", resource_id=item_name, details=f"admin={admin_info.first_name}, infinite=true")
     await state.clear()

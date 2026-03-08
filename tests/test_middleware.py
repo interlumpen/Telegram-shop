@@ -84,6 +84,21 @@ class TestSecurityMiddlewareCriticalActions:
     def test_none(self):
         assert self.middleware.is_critical_action(None) is False
 
+    def test_buy_is_replay_protected(self):
+        assert self.middleware.is_replay_protected("buy_item") is True
+
+    def test_pay_is_replay_protected(self):
+        assert self.middleware.is_replay_protected("pay_cryptopay") is True
+
+    def test_role_mgmt_not_replay_protected(self):
+        assert self.middleware.is_replay_protected("role_mgmt") is False
+
+    def test_admin_not_replay_protected(self):
+        assert self.middleware.is_replay_protected("admin_panel") is False
+
+    def test_asr_not_replay_protected(self):
+        assert self.middleware.is_replay_protected("asr_2_123") is False
+
 
 class TestRateLimiter:
 
@@ -151,22 +166,38 @@ class TestAuthenticationMiddleware:
     def setup_method(self):
         self.auth = AuthenticationMiddleware()
 
-    @pytest.mark.asyncio
     async def test_block_user(self, user_factory):
-        user_factory(telegram_id=200001)
+        await user_factory(telegram_id=200001)
         result = await self.auth.block_user(200001)
         assert result is True
         assert 200001 in self.auth.blocked_users
 
-    @pytest.mark.asyncio
     async def test_unblock_user(self, user_factory):
-        user_factory(telegram_id=200002)
+        await user_factory(telegram_id=200002)
         await self.auth.block_user(200002)
         result = await self.auth.unblock_user(200002)
         assert result is True
         assert 200002 not in self.auth.blocked_users
 
-    @pytest.mark.asyncio
     async def test_block_nonexistent_user(self):
         result = await self.auth.block_user(999999999)
         assert result is False
+
+
+class TestPermissionHasAnyAdminPerm:
+
+    def test_use_only_is_not_admin(self):
+        from bot.database.models import Permission
+        assert Permission.has_any_admin_perm(1) is False
+
+    def test_admin_perms_is_admin(self):
+        from bot.database.models import Permission
+        assert Permission.has_any_admin_perm(31) is True
+
+    def test_single_admin_bit_is_admin(self):
+        from bot.database.models import Permission
+        assert Permission.has_any_admin_perm(2) is True  # BROADCAST only
+
+    def test_zero_is_not_admin(self):
+        from bot.database.models import Permission
+        assert Permission.has_any_admin_perm(0) is False

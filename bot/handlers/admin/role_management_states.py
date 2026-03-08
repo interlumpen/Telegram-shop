@@ -57,7 +57,7 @@ async def role_management_handler(call: CallbackQuery, state: FSMContext):
 
     buttons = []
     for role in roles:
-        if role['permissions'] <= caller_perms:
+        if Permission.is_subset(role['permissions'], caller_perms):
             buttons.append((f"{role['name']} ({_format_permissions(role['permissions'])})", f"role_v_{role['id']}"))
 
     buttons.append((localize('admin.roles.create'), 'role_new'))
@@ -82,7 +82,7 @@ async def role_view_handler(call: CallbackQuery):
     caller_perms = await check_role_cached(call.from_user.id) or 0
     role = await get_role_by_id(role_id)
 
-    if not role or role['permissions'] > caller_perms:
+    if not role or not Permission.is_subset(role['permissions'], caller_perms):
         await call.answer(localize('admin.roles.perm_denied'), show_alert=True)
         return
 
@@ -141,7 +141,7 @@ async def role_edit_start(call: CallbackQuery, state: FSMContext):
     caller_perms = await check_role_cached(call.from_user.id) or 0
     role = await get_role_by_id(role_id)
 
-    if not role or role['permissions'] > caller_perms:
+    if not role or not Permission.is_subset(role['permissions'], caller_perms):
         await call.answer(localize('admin.roles.perm_denied'), show_alert=True)
         return
 
@@ -237,7 +237,7 @@ async def _perms_done(call: CallbackQuery, state: FSMContext):
     perms = data.get('role_perms', 0)
     caller_perms = data.get('caller_perms', 0)
 
-    if perms > caller_perms:
+    if not Permission.is_subset(perms, caller_perms):
         await call.answer(localize('admin.roles.perm_denied'), show_alert=True)
         return
 
@@ -251,7 +251,7 @@ async def _perms_done(call: CallbackQuery, state: FSMContext):
                 reply_markup=back('role_mgmt')
             )
         else:
-            log_audit("create_role", user_id=call.from_user.id,
+            await log_audit("create_role", user_id=call.from_user.id,
                       resource_type="Role", resource_id=str(role_id),
                       details=f"name={name}, perms={perms}")
             await call.message.edit_text(
@@ -262,7 +262,7 @@ async def _perms_done(call: CallbackQuery, state: FSMContext):
         role_id = data.get('role_id')
         success, err = await update_role(role_id, name, perms)
         if success:
-            log_audit("update_role", user_id=call.from_user.id,
+            await log_audit("update_role", user_id=call.from_user.id,
                       resource_type="Role", resource_id=str(role_id),
                       details=f"name={name}, perms={perms}")
             await call.message.edit_text(
@@ -289,7 +289,7 @@ async def role_delete_prompt(call: CallbackQuery):
     caller_perms = await check_role_cached(call.from_user.id) or 0
     role = await get_role_by_id(role_id)
 
-    if not role or role['permissions'] > caller_perms:
+    if not role or not Permission.is_subset(role['permissions'], caller_perms):
         await call.answer(localize('admin.roles.perm_denied'), show_alert=True)
         return
 
@@ -314,13 +314,13 @@ async def role_delete_confirm(call: CallbackQuery):
     caller_perms = await check_role_cached(call.from_user.id) or 0
     role = await get_role_by_id(role_id)
 
-    if not role or role['permissions'] > caller_perms:
+    if not role or not Permission.is_subset(role['permissions'], caller_perms):
         await call.answer(localize('admin.roles.perm_denied'), show_alert=True)
         return
 
     success, err = await delete_role(role_id)
     if success:
-        log_audit("delete_role", user_id=call.from_user.id,
+        await log_audit("delete_role", user_id=call.from_user.id,
                   resource_type="Role", resource_id=str(role_id),
                   details=f"name={role['name']}")
         await call.message.edit_text(
@@ -382,7 +382,7 @@ async def assign_role_confirm(call: CallbackQuery):
     caller_perms = await check_role_cached(call.from_user.id) or 0
     role = await get_role_by_id(role_id)
 
-    if not role or role['permissions'] > caller_perms:
+    if not role or not Permission.is_subset(role['permissions'], caller_perms):
         await call.answer(localize('admin.roles.perm_denied'), show_alert=True)
         return
 
@@ -416,9 +416,9 @@ async def assign_role_confirm(call: CallbackQuery):
             reply_markup=close()
         )
     except (TelegramBadRequest, TelegramForbiddenError) as e:
-        log_audit("assign_role_notify_fail", level="ERROR", user_id=target_id, details=str(e))
+        await log_audit("assign_role_notify_fail", level="ERROR", user_id=target_id, details=str(e))
 
     admin_info = await call.message.bot.get_chat(call.from_user.id)
-    log_audit("assign_role", user_id=call.from_user.id,
+    await log_audit("assign_role", user_id=call.from_user.id,
               resource_type="User", resource_id=str(target_id),
               details=f"admin={admin_info.first_name}, role={role['name']}")

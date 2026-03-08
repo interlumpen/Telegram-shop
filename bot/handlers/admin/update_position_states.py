@@ -6,6 +6,7 @@ from aiogram.types import CallbackQuery, Message
 
 from bot.database.models import Permission
 from bot.database.methods import get_item_info_cached, add_values_to_item, update_item, check_value, delete_only_items
+from bot.handlers.other import _parse_channel_username
 
 from bot.keyboards.inline import back, question_buttons, simple_buttons
 from bot.database.methods.audit import log_audit
@@ -124,16 +125,12 @@ async def updating_item_amount(call: CallbackQuery, state):
     await call.message.edit_text("\n".join(text_lines), parse_mode="HTML", reply_markup=back('goods_management'))
 
     # Optional: channel notification (if configured)
-    channel_url = EnvKeys.CHANNEL_URL or ""
-    parsed = urlparse(channel_url)
-    channel_username = (
-                           parsed.path.lstrip('/')
-                           if parsed.path else channel_url.replace("https://t.me/", "").replace("t.me/", "").lstrip('@')
-                       ) or None
+    channel_username = _parse_channel_username()
     if channel_username:
         try:
+            chat_id = int(EnvKeys.CHANNEL_ID) if EnvKeys.CHANNEL_ID else f"@{channel_username}"
             await call.bot.send_message(
-                chat_id=f"@{channel_username}",
+                chat_id=chat_id,
                 text=(
                     f'🎁 {localize("shop.group.new_upload")}\n'
                     f'🏷️ {localize("shop.group.item")}: <b>{item_name}</b>\n'
@@ -149,7 +146,8 @@ async def updating_item_amount(call: CallbackQuery, state):
             await call.answer(localize("errors.channel.telegram_bad_request", e=e))
 
     admin_info = await call.message.bot.get_chat(call.from_user.id)
-    log_audit("add_item_values", user_id=call.from_user.id, resource_type="Item", resource_id=item_name, details=f"admin={admin_info.first_name}, added={added}")
+    await log_audit("add_item_values", user_id=call.from_user.id, resource_type="Item", resource_id=item_name,
+                    details=f"admin={admin_info.first_name}, added={added}")
     await state.clear()
 
 
@@ -246,7 +244,8 @@ async def update_item_process(call: CallbackQuery, state):
         await update_item(item_old_name, item_new_name, item_description, price, category)
         await call.message.edit_text(localize('admin.goods.update.success'), reply_markup=back('goods_management'))
         admin_info = await call.message.bot.get_chat(call.from_user.id)
-        log_audit("update_item", user_id=call.from_user.id, resource_type="Item", resource_id=item_new_name, details=f"admin={admin_info.first_name}, old_name={item_old_name}")
+        await log_audit("update_item", user_id=call.from_user.id, resource_type="Item", resource_id=item_new_name,
+                        details=f"admin={admin_info.first_name}, old_name={item_old_name}")
         await state.clear()
         return
 
@@ -289,7 +288,8 @@ async def update_item_infinity(message: Message, state):
 
     await message.answer(localize('admin.goods.update.success'), reply_markup=back('goods_management'))
     admin_info = await message.bot.get_chat(message.from_user.id)
-    log_audit("update_item", user_id=message.from_user.id, resource_type="Item", resource_id=item_new_name, details=f"admin={admin_info.first_name}, old_name={item_old_name}")
+    await log_audit("update_item", user_id=message.from_user.id, resource_type="Item", resource_id=item_new_name,
+                    details=f"admin={admin_info.first_name}, old_name={item_old_name}")
     await state.clear()
 
 
@@ -369,16 +369,12 @@ async def update_item_no_infinity(call: CallbackQuery, state):
         text_lines.append(localize('admin.goods.add.result.skipped_invalid', n=skipped_invalid))
 
     # Optional: channel notification (if configured)
-    channel_url = EnvKeys.CHANNEL_URL or ""
-    parsed = urlparse(channel_url)
-    channel_username = (
-                           parsed.path.lstrip('/')
-                           if parsed.path else channel_url.replace("https://t.me/", "").replace("t.me/", "").lstrip('@')
-                       ) or None
+    channel_username = _parse_channel_username()
     if channel_username:
         try:
+            chat_id = int(EnvKeys.CHANNEL_ID) if EnvKeys.CHANNEL_ID else f"@{channel_username}"
             await call.bot.send_message(
-                chat_id=f"@{channel_username}",
+                chat_id=chat_id,
                 text=(
                     f'🎁 {localize("shop.group.new_upload")}\n'
                     f'🏷️ {localize("shop.group.item")}: <b>{item_new_name}</b>\n'
@@ -395,5 +391,6 @@ async def update_item_no_infinity(call: CallbackQuery, state):
 
     await call.message.edit_text("\n".join(text_lines), parse_mode="HTML", reply_markup=back('goods_management'))
     admin_info = await call.message.bot.get_chat(call.from_user.id)
-    log_audit("update_item", user_id=call.from_user.id, resource_type="Item", resource_id=item_new_name, details=f"admin={admin_info.first_name}, old_name={item_old_name}")
+    await log_audit("update_item", user_id=call.from_user.id, resource_type="Item", resource_id=item_new_name,
+                    details=f"admin={admin_info.first_name}, old_name={item_old_name}")
     await state.clear()

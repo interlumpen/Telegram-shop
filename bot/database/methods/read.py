@@ -1,39 +1,32 @@
-import asyncio
 import datetime
 from decimal import Decimal
 from functools import wraps
 from typing import Optional, Dict, TypeVar, Callable, Any, Coroutine
 
-from sqlalchemy import func, exists
+from sqlalchemy import func, exists, select
 
 from bot.database.models import Database, User, ItemValues, Goods, Categories, Role, BoughtGoods, \
     Operations, ReferralEarnings
-from bot.database.main import run_sync
 from bot.misc.caching import get_cache_manager
 
-F = TypeVar('F', bound=Callable[..., Any])
+F = TypeVar('F', bound=Callable[..., Coroutine[Any, Any, Any]])
 
 
-# Wrapper for synchronous functions to asynchronous functions with caching
-def async_cached(ttl: int = 300, key_prefix: str = "") -> Callable[[F], Callable[..., Coroutine[Any, Any, Any]]]:
-    def decorator(sync_func: F) -> Callable[..., Coroutine[Any, Any, Any]]:
-        @wraps(sync_func)
+def async_cached(ttl: int = 300, key_prefix: str = "") -> Callable[[F], F]:
+    """Decorator for async functions with caching."""
+    def decorator(async_func: F) -> F:
+        @wraps(async_func)
         async def async_wrapper(*args, **kwargs):
-            # Generate the cache key
-            cache_key = f"{key_prefix or sync_func.__name__}:{':'.join(str(arg) for arg in args)}"
+            cache_key = f"{key_prefix or async_func.__name__}:{':'.join(str(arg) for arg in args)}"
 
             cache = get_cache_manager()
             if cache:
-                # Trying to get it from the cache
                 cached_value = await cache.get(cache_key)
                 if cached_value is not None:
                     return cached_value
 
-            # Execute synchronous function in executor
-            loop = asyncio.get_running_loop()
-            result = await loop.run_in_executor(None, sync_func, *args)
+            result = await async_func(*args, **kwargs)
 
-            # Save to cache
             if cache and result is not None:
                 await cache.set(cache_key, result, ttl)
 
@@ -51,273 +44,303 @@ def _day_window(date_str: str) -> tuple[datetime.datetime, datetime.datetime]:
     return start, end
 
 
-# --- Sync implementations (private) ---
+def _obj_to_dict(obj, model) -> dict:
+    """Convert an ORM object to a dict of column values."""
+    return {c.key: getattr(obj, c.key) for c in model.__table__.columns}
 
-def _check_user(telegram_id: int | str) -> Optional[dict]:
+
+# --- Async implementations ---
+
+async def check_user(telegram_id: int | str) -> Optional[dict]:
     """Return user by Telegram ID or None if not found."""
-    with Database().session() as s:
-        result = s.query(User).filter(User.telegram_id == telegram_id).one_or_none()
-        return result.__dict__ if result else None
+    async with Database().session() as s:
+        result = await s.execute(select(User).where(User.telegram_id == telegram_id))
+        user = result.scalars().one_or_none()
+        return _obj_to_dict(user, User) if user else None
 
 
-def _check_role(telegram_id: int) -> int:
+async def check_role(telegram_id: int) -> int:
     """Return permission bitmask for user (0 if none)."""
-    with Database().session() as s:
-        result = s.query(Role.permissions).join(
-            User, User.role_id == Role.id
-        ).filter(User.telegram_id == telegram_id).scalar()
-        return result or 0
+    async with Database().session() as s:
+        result = await s.execute(
+            select(Role.permissions).join(User, User.role_id == Role.id).where(User.telegram_id == telegram_id)
+        )
+        return result.scalar() or 0
 
 
-def _get_role_id_by_name(role_name: str) -> Optional[int]:
+async def get_role_id_by_name(role_name: str) -> Optional[int]:
     """Return role id by name or None."""
-    with Database().session() as s:
-        return s.query(Role.id).filter(Role.name == role_name).scalar()
+    async with Database().session() as s:
+        return (await s.execute(select(Role.id).where(Role.name == role_name))).scalar()
 
 
-def _check_role_name_by_id(role_id: int) -> str:
+async def check_role_name_by_id(role_id: int) -> str:
     """Return role name by id (raises if not found)."""
-    with Database().session() as s:
-        return s.query(Role.name).filter(Role.id == role_id).one()[0]
+    async with Database().session() as s:
+        result = await s.execute(select(Role.name).where(Role.id == role_id))
+        return result.scalar_one()
 
 
-def _select_max_role_id() -> Optional[int]:
-    """Return role_id with the highest permissions value."""
-    with Database().session() as s:
-        result = s.query(Role.id).order_by(Role.permissions.desc()).first()
-        return result[0] if result else None
+async def select_max_role_id() -> Optional[int]:
+    """Return role_id with the highest numeric permissions value (OWNER=127)."""
+    async with Database().session() as s:
+        result = await s.execute(select(Role.id).order_by(Role.permissions.desc()).limit(1))
+        row = result.first()
+        return row[0] if row else None
 
 
-def _get_all_roles() -> list[dict]:
+async def get_all_roles() -> list[dict]:
     """Return all roles as list of dicts ordered by permissions asc."""
-    with Database().session() as s:
-        roles = s.query(Role).order_by(Role.permissions.asc()).all()
+    async with Database().session() as s:
+        result = await s.execute(select(Role).order_by(Role.permissions.asc()))
+        roles = result.scalars().all()
         return [{'id': r.id, 'name': r.name, 'permissions': r.permissions, 'default': r.default} for r in roles]
 
 
-def _get_role_by_id(role_id: int) -> dict | None:
+async def get_role_by_id(role_id: int) -> dict | None:
     """Return single role as dict or None."""
-    with Database().session() as s:
-        r = s.query(Role).filter(Role.id == role_id).first()
+    async with Database().session() as s:
+        result = await s.execute(select(Role).where(Role.id == role_id))
+        r = result.scalars().first()
         return {'id': r.id, 'name': r.name, 'permissions': r.permissions, 'default': r.default} if r else None
 
 
-def _get_roles_with_max_perms(max_perms: int) -> list[dict]:
-    """Return roles where permissions <= max_perms, ordered by permissions ascending."""
-    with Database().session() as s:
-        roles = s.query(Role).filter(Role.permissions <= max_perms).order_by(Role.permissions.asc()).all()
-        return [{'id': r.id, 'name': r.name, 'permissions': r.permissions, 'default': r.default} for r in roles]
+async def get_roles_with_max_perms(max_perms: int) -> list[dict]:
+    """Return roles whose permissions are a subset of max_perms (bitwise)."""
+    async with Database().session() as s:
+        result = await s.execute(select(Role).order_by(Role.permissions.asc()))
+        roles = result.scalars().all()
+        return [
+            {'id': r.id, 'name': r.name, 'permissions': r.permissions, 'default': r.default}
+            for r in roles
+            if (r.permissions & ~max_perms) == 0
+        ]
 
 
-def _count_users_with_role(role_id: int) -> int:
+async def count_users_with_role(role_id: int) -> int:
     """Return count of users assigned to a given role."""
-    with Database().session() as s:
-        return s.query(func.count(User.telegram_id)).filter(User.role_id == role_id).scalar() or 0
+    async with Database().session() as s:
+        return (await s.execute(
+            select(func.count(User.telegram_id)).where(User.role_id == role_id)
+        )).scalar() or 0
 
 
-def _select_today_users(date: str) -> int:
+async def select_today_users(date: str) -> int:
     """Return count of users registered on given date (YYYY-MM-DD)."""
     start_of_day, end_of_day = _day_window(date)
-    with Database().session() as s:
-        return s.query(User).filter(
-            User.registration_date >= start_of_day,
-            User.registration_date < end_of_day
-        ).count()
+    async with Database().session() as s:
+        return (await s.execute(
+            select(func.count()).select_from(User).where(
+                User.registration_date >= start_of_day,
+                User.registration_date < end_of_day
+            )
+        )).scalar() or 0
 
 
-def _get_user_count() -> int:
+async def get_user_count() -> int:
     """Return total users count."""
-    with Database().session() as s:
-        return s.query(User).count()
+    async with Database().session() as s:
+        return (await s.execute(select(func.count()).select_from(User))).scalar() or 0
 
 
-def _select_admins() -> int:
+async def select_admins() -> int:
     """Return count of users with role_id > 1."""
-    with Database().session() as s:
-        return s.query(func.count(User.telegram_id)).filter(User.role_id > 1).scalar() or 0
+    async with Database().session() as s:
+        return (await s.execute(
+            select(func.count(User.telegram_id)).where(User.role_id > 1)
+        )).scalar() or 0
 
 
-def _get_all_users() -> list[tuple[int]]:
+async def get_all_users() -> list[tuple[int]]:
     """Return list of all user telegram_ids (as tuples)."""
-    with Database().session() as s:
-        return s.query(User.telegram_id).all()
+    async with Database().session() as s:
+        result = await s.execute(select(User.telegram_id))
+        return result.all()
 
 
-def _get_bought_item_info(item_id: str) -> dict | None:
+async def get_bought_item_info(item_id: str) -> dict | None:
     """Return bought item row as dict by row id, or None."""
-    with Database().session() as s:
-        result = s.query(BoughtGoods).filter(BoughtGoods.id == item_id).first()
-        return result.__dict__ if result else None
+    async with Database().session() as s:
+        result = await s.execute(select(BoughtGoods).where(BoughtGoods.id == item_id))
+        obj = result.scalars().first()
+        return _obj_to_dict(obj, BoughtGoods) if obj else None
 
 
-def _get_item_info(item_name: str) -> dict | None:
+async def get_item_info(item_name: str) -> dict | None:
     """Return item (position) row as dict by name, or None."""
-    with Database().session() as s:
-        result = s.query(Goods).filter(Goods.name == item_name).first()
-        return result.__dict__ if result else None
+    async with Database().session() as s:
+        result = await s.execute(select(Goods).where(Goods.name == item_name))
+        obj = result.scalars().first()
+        return _obj_to_dict(obj, Goods) if obj else None
 
 
-def _get_goods_info(item_id: int) -> dict | None:
+async def get_goods_info(item_id: int) -> dict | None:
     """Return item_value row as dict by id, including item_name from Goods."""
-    with Database().session() as s:
-        row = (
-            s.query(ItemValues, Goods.name.label('item_name'))
+    async with Database().session() as s:
+        result = await s.execute(
+            select(ItemValues, Goods.name.label('item_name'))
             .join(Goods, Goods.id == ItemValues.item_id)
-            .filter(ItemValues.id == int(item_id))
-            .first()
+            .where(ItemValues.id == int(item_id))
         )
+        row = result.first()
         if not row:
             return None
-        d = row.ItemValues.__dict__.copy()
+        d = _obj_to_dict(row.ItemValues, ItemValues)
         d['item_name'] = row.item_name
         return d
 
 
-def _check_category(category_name: str) -> dict | None:
+async def check_category(category_name: str) -> dict | None:
     """Return category as dict by name, or None."""
-    with Database().session() as s:
-        result = s.query(Categories).filter(Categories.name == category_name).first()
-        return result.__dict__ if result else None
+    async with Database().session() as s:
+        result = await s.execute(select(Categories).where(Categories.name == category_name))
+        obj = result.scalars().first()
+        return _obj_to_dict(obj, Categories) if obj else None
 
 
-def _select_item_values_amount(item_name: str) -> int:
+async def select_item_values_amount(item_name: str) -> int:
     """Return count of item_values for an item (by item name)."""
-    with Database().session() as s:
-        return (
-            s.query(func.count(ItemValues.id))
+    async with Database().session() as s:
+        return (await s.execute(
+            select(func.count(ItemValues.id))
             .join(Goods, Goods.id == ItemValues.item_id)
-            .filter(Goods.name == item_name)
-            .scalar()
-        ) or 0
+            .where(Goods.name == item_name)
+        )).scalar() or 0
 
 
-def _check_value(item_name: str) -> bool:
+async def check_value(item_name: str) -> bool:
     """Return True if item has any infinite value (is_infinity=True)."""
-    with Database().session() as s:
-        return s.query(
-            exists().where(
+    async with Database().session() as s:
+        return (await s.execute(
+            select(exists().where(
                 ItemValues.item_id == Goods.id,
                 Goods.name == item_name,
                 ItemValues.is_infinity.is_(True),
-            )
-        ).scalar()
+            ))
+        )).scalar()
 
 
-def _select_user_items(buyer_id: int | str) -> int:
+async def select_user_items(buyer_id: int | str) -> int:
     """Return count of bought items for user."""
-    with Database().session() as s:
-        return s.query(func.count()).filter(BoughtGoods.buyer_id == buyer_id).scalar() or 0
+    async with Database().session() as s:
+        return (await s.execute(
+            select(func.count()).select_from(BoughtGoods).where(BoughtGoods.buyer_id == buyer_id)
+        )).scalar() or 0
 
 
-def _select_bought_item(unique_id: int) -> dict | None:
+async def select_bought_item(unique_id: int) -> dict | None:
     """Return one bought item by unique_id as dict, or None."""
-    with Database().session() as s:
-        result = s.query(BoughtGoods).filter(BoughtGoods.unique_id == unique_id).first()
-        return result.__dict__ if result else None
+    async with Database().session() as s:
+        result = await s.execute(select(BoughtGoods).where(BoughtGoods.unique_id == unique_id))
+        obj = result.scalars().first()
+        return _obj_to_dict(obj, BoughtGoods) if obj else None
 
 
-def _select_count_items() -> int:
+async def select_count_items() -> int:
     """Return total count of item_values."""
-    with Database().session() as s:
-        return s.query(ItemValues).count()
+    async with Database().session() as s:
+        return (await s.execute(select(func.count()).select_from(ItemValues))).scalar() or 0
 
 
-def _select_count_goods() -> int:
+async def select_count_goods() -> int:
     """Return total count of goods (positions)."""
-    with Database().session() as s:
-        return s.query(Goods).count()
+    async with Database().session() as s:
+        return (await s.execute(select(func.count()).select_from(Goods))).scalar() or 0
 
 
-def _select_count_categories() -> int:
+async def select_count_categories() -> int:
     """Return total count of categories."""
-    with Database().session() as s:
-        return s.query(Categories).count()
+    async with Database().session() as s:
+        return (await s.execute(select(func.count()).select_from(Categories))).scalar() or 0
 
 
-def _select_count_bought_items() -> int:
+async def select_count_bought_items() -> int:
     """Return total count of bought items."""
-    with Database().session() as s:
-        return s.query(BoughtGoods).count()
+    async with Database().session() as s:
+        return (await s.execute(select(func.count()).select_from(BoughtGoods))).scalar() or 0
 
 
-def _select_today_orders(date: str) -> Decimal:
+async def select_today_orders(date: str) -> Decimal:
     """Return total revenue for given date (YYYY-MM-DD)."""
     start_of_day, end_of_day = _day_window(date)
-    with Database().session() as s:
-        res = (
-            s.query(func.sum(BoughtGoods.price))
-            .filter(
+    async with Database().session() as s:
+        res = (await s.execute(
+            select(func.sum(BoughtGoods.price)).where(
                 BoughtGoods.bought_datetime >= start_of_day,
                 BoughtGoods.bought_datetime < end_of_day
             )
-            .scalar()
-        )
+        )).scalar()
         return res or Decimal(0)
 
 
-def _select_all_orders() -> Decimal:
+async def select_all_orders() -> Decimal:
     """Return total revenue for all time (sum of BoughtGoods.price)."""
-    with Database().session() as s:
-        return s.query(func.sum(BoughtGoods.price)).scalar() or Decimal(0)
+    async with Database().session() as s:
+        return (await s.execute(select(func.sum(BoughtGoods.price)))).scalar() or Decimal(0)
 
 
-def _select_today_operations(date: str) -> Decimal:
+async def select_today_operations(date: str) -> Decimal:
     """Return total operations value for given date (YYYY-MM-DD)."""
     start_of_day, end_of_day = _day_window(date)
-    with Database().session() as s:
-        res = (
-            s.query(func.sum(Operations.operation_value))
-            .filter(
+    async with Database().session() as s:
+        res = (await s.execute(
+            select(func.sum(Operations.operation_value)).where(
                 Operations.operation_time >= start_of_day,
                 Operations.operation_time < end_of_day
             )
-            .scalar()
-        )
+        )).scalar()
         return res or Decimal(0)
 
 
-def _select_all_operations() -> Decimal:
+async def select_all_operations() -> Decimal:
     """Return total operations value for all time."""
-    with Database().session() as s:
-        return s.query(func.sum(Operations.operation_value)).scalar() or Decimal(0)
+    async with Database().session() as s:
+        return (await s.execute(select(func.sum(Operations.operation_value)))).scalar() or Decimal(0)
 
 
-def _select_users_balance():
+async def select_users_balance():
     """Return sum of all users' balances."""
-    with Database().session() as s:
-        return s.query(func.sum(User.balance)).scalar()
+    async with Database().session() as s:
+        return (await s.execute(select(func.sum(User.balance)))).scalar()
 
 
-def _select_user_operations(user_id: int | str) -> list[float]:
+async def select_user_operations(user_id: int | str) -> list[float]:
     """Return list of operation amounts for user."""
-    with Database().session() as s:
-        return [row[0] for row in s.query(Operations.operation_value).filter(Operations.user_id == user_id).all()]
+    async with Database().session() as s:
+        result = await s.execute(
+            select(Operations.operation_value).where(Operations.user_id == user_id)
+        )
+        return [row[0] for row in result.all()]
 
 
-def _check_user_referrals(user_id: int) -> int:
+async def check_user_referrals(user_id: int) -> int:
     """Return count of referrals of the user."""
-    with Database().session() as s:
-        return s.query(User).filter(User.referral_id == user_id).count()
+    async with Database().session() as s:
+        return (await s.execute(
+            select(func.count()).select_from(User).where(User.referral_id == user_id)
+        )).scalar() or 0
 
 
-def _get_user_referral(user_id: int) -> Optional[int]:
+async def get_user_referral(user_id: int) -> Optional[int]:
     """Return referral_id of the user or None."""
-    with Database().session() as s:
-        result = s.query(User.referral_id).filter(User.telegram_id == user_id).first()
-        return result[0] if result else None
+    async with Database().session() as s:
+        result = await s.execute(select(User.referral_id).where(User.telegram_id == user_id))
+        row = result.first()
+        return row[0] if row else None
 
 
-def _get_referral_earnings_stats(referrer_id: int) -> Dict:
+async def get_referral_earnings_stats(referrer_id: int) -> Dict:
     """Get statistics on user referral charges."""
-    with Database().session() as s:
-        stats = s.query(
-            func.count(ReferralEarnings.id).label('total_earnings_count'),
-            func.sum(ReferralEarnings.amount).label('total_amount'),
-            func.sum(ReferralEarnings.original_amount).label('total_original_amount'),
-            func.count(func.distinct(ReferralEarnings.referral_id)).label('active_referrals_count')
-        ).filter(
-            ReferralEarnings.referrer_id == referrer_id
-        ).first()
+    async with Database().session() as s:
+        result = await s.execute(
+            select(
+                func.count(ReferralEarnings.id).label('total_earnings_count'),
+                func.sum(ReferralEarnings.amount).label('total_amount'),
+                func.sum(ReferralEarnings.original_amount).label('total_original_amount'),
+                func.count(func.distinct(ReferralEarnings.referral_id)).label('active_referrals_count')
+            ).where(ReferralEarnings.referrer_id == referrer_id)
+        )
+        stats = result.first()
 
         return {
             'total_earnings_count': stats.total_earnings_count or 0,
@@ -327,94 +350,56 @@ def _get_referral_earnings_stats(referrer_id: int) -> Dict:
         }
 
 
-def _get_one_referral_earning(earning_id: int) -> dict | None:
+async def get_one_referral_earning(earning_id: int) -> dict | None:
     """Get one user referral earning info."""
-    with Database().session() as s:
-        result = s.query(ReferralEarnings).filter(ReferralEarnings.id == earning_id).first()
-        return result.__dict__ if result else None
+    async with Database().session() as s:
+        result = await s.execute(select(ReferralEarnings).where(ReferralEarnings.id == earning_id))
+        obj = result.scalars().first()
+        return _obj_to_dict(obj, ReferralEarnings) if obj else None
 
 
-# Async public API (run in executor)
-
-check_user = run_sync(_check_user)
-check_role = run_sync(_check_role)
-get_role_id_by_name = run_sync(_get_role_id_by_name)
-check_role_name_by_id = run_sync(_check_role_name_by_id)
-select_max_role_id = run_sync(_select_max_role_id)
-get_all_roles = run_sync(_get_all_roles)
-get_role_by_id = run_sync(_get_role_by_id)
-get_roles_with_max_perms = run_sync(_get_roles_with_max_perms)
-count_users_with_role = run_sync(_count_users_with_role)
-select_today_users = run_sync(_select_today_users)
-get_user_count = run_sync(_get_user_count)
-select_admins = run_sync(_select_admins)
-get_all_users = run_sync(_get_all_users)
-get_bought_item_info = run_sync(_get_bought_item_info)
-get_item_info = run_sync(_get_item_info)
-get_goods_info = run_sync(_get_goods_info)
-check_category = run_sync(_check_category)
-select_item_values_amount = run_sync(_select_item_values_amount)
-check_value = run_sync(_check_value)
-select_user_items = run_sync(_select_user_items)
-select_bought_item = run_sync(_select_bought_item)
-select_count_items = run_sync(_select_count_items)
-select_count_goods = run_sync(_select_count_goods)
-select_count_categories = run_sync(_select_count_categories)
-select_count_bought_items = run_sync(_select_count_bought_items)
-select_today_orders = run_sync(_select_today_orders)
-select_all_orders = run_sync(_select_all_orders)
-select_today_operations = run_sync(_select_today_operations)
-select_all_operations = run_sync(_select_all_operations)
-select_users_balance = run_sync(_select_users_balance)
-select_user_operations = run_sync(_select_user_operations)
-check_user_referrals = run_sync(_check_user_referrals)
-get_user_referral = run_sync(_get_user_referral)
-get_referral_earnings_stats = run_sync(_get_referral_earnings_stats)
-get_one_referral_earning = run_sync(_get_one_referral_earning)
-
-
-# --- Cached versions (cache + executor) ---
+# --- Cached versions ---
 
 @async_cached(ttl=600, key_prefix="user")
-def check_user_cached(telegram_id: int | str):
+async def check_user_cached(telegram_id: int | str):
     """Cached version of check_user"""
-    return _check_user(telegram_id)
+    return await check_user(telegram_id)
 
 
 @async_cached(ttl=300, key_prefix="role")
-def check_role_cached(telegram_id: int):
+async def check_role_cached(telegram_id: int):
     """Cached Role Verification"""
-    return _check_role(telegram_id)
+    return await check_role(telegram_id)
 
 
 @async_cached(ttl=1800, key_prefix="category")
-def check_category_cached(category_name: str):
+async def check_category_cached(category_name: str):
     """Cached Category Check"""
-    return _check_category(category_name)
+    return await check_category(category_name)
 
 
 @async_cached(ttl=900, key_prefix="item_info")
-def get_item_info_cached(item_name: str):
+async def get_item_info_cached(item_name: str):
     """Cached product information"""
-    return _get_item_info(item_name)
+    return await get_item_info(item_name)
 
 
 @async_cached(ttl=300, key_prefix="item_values")
-def select_item_values_amount_cached(item_name: str):
+async def select_item_values_amount_cached(item_name: str):
     """Cached quantity of goods"""
-    return _select_item_values_amount(item_name)
+    return await select_item_values_amount(item_name)
 
 
 @async_cached(ttl=60, key_prefix="user_count")
-def get_user_count_cached():
+async def get_user_count_cached():
     """Cached number of users"""
-    return _get_user_count()
+    return await get_user_count()
 
 
 @async_cached(ttl=60, key_prefix="admin_count")
-def select_admins_cached():
+async def select_admins_cached():
     """Cached number of admins"""
-    return _select_admins()
+    return await select_admins()
 
 
 # Cache invalidation functions
@@ -435,7 +420,6 @@ async def invalidate_item_cache(item_name: str, category_name: str = None):
         await cache.delete(f"item:{item_name}")
         await cache.delete(f"item_info:{item_name}")
         await cache.delete(f"item_values:{item_name}")
-        # Invalidate affected category (or all if unknown)
         if category_name:
             await cache.delete(f"category:{category_name}")
         else:

@@ -63,14 +63,14 @@ async def process_category_for_add(message: Message, state):
             )
 
             admin_info = await message.bot.get_chat(message.from_user.id)
-            log_audit("create_category", user_id=message.from_user.id, resource_type="Category", resource_id=category_name, details=f"admin={admin_info.first_name}")
+            await log_audit("create_category", user_id=message.from_user.id, resource_type="Category", resource_id=category_name, details=f"admin={admin_info.first_name}")
 
     except Exception as e:
         await message.answer(
             localize("errors.invalid_data"),
             reply_markup=back("categories_management"),
         )
-        log_audit("create_category_error", level="ERROR", user_id=message.from_user.id, resource_type="Category", details=str(e))
+        await log_audit("create_category_error", level="ERROR", user_id=message.from_user.id, resource_type="Category", details=str(e))
 
     await state.clear()
 
@@ -107,7 +107,7 @@ async def process_category_for_delete(message: Message, state):
             reply_markup=back("categories_management"),
         )
         admin_info = await message.bot.get_chat(message.from_user.id)
-        log_audit("delete_category", user_id=message.from_user.id, resource_type="Category", resource_id=category_name, details=f"admin={admin_info.first_name}")
+        await log_audit("delete_category", user_id=message.from_user.id, resource_type="Category", resource_id=category_name, details=f"admin={admin_info.first_name}")
 
     await state.clear()
 
@@ -171,6 +171,6 @@ async def check_category_name_for_update(message: Message, state):
     )
 
     admin_info = await message.bot.get_chat(message.from_user.id)
-    log_audit("rename_category", user_id=message.from_user.id, resource_type="Category", resource_id=new_name, details=f"admin={admin_info.first_name}, old_name={old_name}")
+    await log_audit("rename_category", user_id=message.from_user.id, resource_type="Category", resource_id=new_name, details=f"admin={admin_info.first_name}, old_name={old_name}")
 
     await state.clear()

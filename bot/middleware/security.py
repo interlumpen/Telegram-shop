@@ -39,6 +39,10 @@ class SecurityMiddleware(BaseMiddleware):
             'fill-user-balance', 'deduct-user-balance',
             'role_mgmt', 'role_new', 'role_d', 'asr_'
         }
+        # Only transactional actions get replay protection (message age check)
+        self.replay_protected_actions = {
+            'buy_', 'pay_', 'fill-user-balance', 'deduct-user-balance',
+        }
 
     def is_critical_action(self, callback_data: str) -> bool:
         """Checking whether an action is critical"""
@@ -48,6 +52,16 @@ class SecurityMiddleware(BaseMiddleware):
         return any(
             callback_data.startswith(action)
             for action in self.critical_actions
+        )
+
+    def is_replay_protected(self, callback_data: str) -> bool:
+        """Check if this action needs replay attack protection"""
+        if not callback_data:
+            return False
+
+        return any(
+            callback_data.startswith(action)
+            for action in self.replay_protected_actions
         )
 
     async def __call__(
@@ -68,13 +82,14 @@ class SecurityMiddleware(BaseMiddleware):
             # Checking critical actions
             if self.is_critical_action(event.data):
                 # Logging a critical action
-                log_audit(
+                await log_audit(
                     "critical_action",
                     user_id=user.id,
                     details=f"callback={event.data[:50]}",
                 )
 
-                # Check that the callback is not too old (protection against replay attacks)
+            # Replay protection only for transactional actions (buy, pay, balance)
+            if self.is_replay_protected(event.data):
                 if hasattr(event.message, 'date'):
                     message_age = time.time() - event.message.date.timestamp()
                     if message_age > 3600:  # 1 hour
@@ -87,7 +102,7 @@ class SecurityMiddleware(BaseMiddleware):
         # Check for suspicious patterns in the data
         if isinstance(event, CallbackQuery) and event.data:
             if check_suspicious_patterns(event.data):
-                log_audit(
+                await log_audit(
                     "suspicious_callback",
                     level="WARNING",
                     user_id=user.id,
@@ -98,7 +113,7 @@ class SecurityMiddleware(BaseMiddleware):
 
         if isinstance(event, Message) and event.text:
             if check_suspicious_patterns(event.text):
-                log_audit(
+                await log_audit(
                     "suspicious_message",
                     level="WARNING",
                     user_id=user.id,
@@ -146,13 +161,13 @@ class AuthenticationMiddleware(BaseMiddleware):
 
         # Check bot
         if user.is_bot:
-            log_audit("bot_interaction", level="WARNING", user_id=user.id)
+            await log_audit("bot_interaction", level="WARNING", user_id=user.id)
             return None
 
         # Maintenance mode: block regular users
         if self.maintenance_mode:
             role = await self.get_user_role_cached(user.id)
-            if role <= Permission.USE:
+            if not Permission.has_any_admin_perm(role):
                 if isinstance(event, Message):
                     await event.answer(localize("maintenance.active"))
                 elif isinstance(event, CallbackQuery):
@@ -167,9 +182,9 @@ class AuthenticationMiddleware(BaseMiddleware):
         if isinstance(event, CallbackQuery):
             if event.data and any(event.data.startswith(x) for x in ['admin', 'console', 'send_message']):
                 role = await self.get_user_role_cached(user.id)
-                if role <= Permission.USE:  # Not admin
+                if not Permission.has_any_admin_perm(role):
                     await event.answer(localize("middleware.security.not_admin"), show_alert=True)
-                    log_audit("unauthorized_admin_access", level="WARNING", user_id=user.id)
+                    await log_audit("unauthorized_admin_access", level="WARNING", user_id=user.id)
                     return None
                 data['user_role'] = role
 
@@ -202,7 +217,7 @@ class AuthenticationMiddleware(BaseMiddleware):
         success = await set_user_blocked(user_id, True)
         if success:
             self.blocked_users.add(user_id)
-            log_audit("block_user", user_id=user_id, resource_type="User", resource_id=str(user_id))
+            await log_audit("block_user", user_id=user_id, resource_type="User", resource_id=str(user_id))
         return success
 
     async def unblock_user(self, user_id: int) -> bool:
@@ -211,5 +226,5 @@ class AuthenticationMiddleware(BaseMiddleware):
         success = await set_user_blocked(user_id, False)
         if success:
             self.blocked_users.discard(user_id)
-            log_audit("unblock_user", user_id=user_id, resource_type="User", resource_id=str(user_id))
+            await log_audit("unblock_user", user_id=user_id, resource_type="User", resource_id=str(user_id))
         return success

@@ -2,6 +2,7 @@ from typing import Callable, Iterable, Tuple
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 from bot.i18n import localize
+from bot.database.models import Permission
 from bot.misc import LazyPaginator # noqa: F401
 
 
@@ -17,7 +18,7 @@ def main_menu(role: int, channel: str | None = None, helper: str | None = None) 
         kb.button(text=localize("btn.support"), url=f"tg://user?id={helper}")
     if channel:
         kb.button(text=localize("btn.channel"), url=f"https://t.me/{channel.lstrip('@')}")
-    if role > 1:
+    if Permission.has_any_admin_perm(role):
         kb.button(text=localize("btn.admin_menu"), callback_data="console")
     kb.adjust(2)
     return kb.as_markup()
@@ -38,19 +39,24 @@ def profile_keyboard(referral_percent: int, user_items: int = 0) -> InlineKeyboa
     return kb.as_markup()
 
 
-def admin_console_keyboard(maintenance_mode: bool = False) -> InlineKeyboardMarkup:
+def admin_console_keyboard(maintenance_mode: bool = False, role: int = 127) -> InlineKeyboardMarkup:
     """
-    Admin panel.
+    Admin panel — shows only buttons the user has permissions for.
     """
     kb = InlineKeyboardBuilder()
-    kb.button(text=localize("admin.menu.shop"), callback_data="shop_management")
-    kb.button(text=localize("admin.menu.goods"), callback_data="goods_management")
-    kb.button(text=localize("admin.menu.categories"), callback_data="categories_management")
-    kb.button(text=localize("admin.menu.users"), callback_data="user_management")
-    kb.button(text=localize("admin.menu.roles"), callback_data="role_mgmt")
-    kb.button(text=localize("admin.menu.broadcast"), callback_data="send_message")
-    maintenance_key = "admin.menu.maintenance_on" if maintenance_mode else "admin.menu.maintenance_off"
-    kb.button(text=localize(maintenance_key), callback_data="toggle_maintenance")
+    if role & Permission.SHOP_MANAGE:
+        kb.button(text=localize("admin.menu.shop"), callback_data="shop_management")
+        kb.button(text=localize("admin.menu.goods"), callback_data="goods_management")
+        kb.button(text=localize("admin.menu.categories"), callback_data="categories_management")
+    if role & Permission.USERS_MANAGE:
+        kb.button(text=localize("admin.menu.users"), callback_data="user_management")
+    if role & Permission.ADMINS_MANAGE:
+        kb.button(text=localize("admin.menu.roles"), callback_data="role_mgmt")
+    if role & Permission.BROADCAST:
+        kb.button(text=localize("admin.menu.broadcast"), callback_data="send_message")
+    if role & Permission.SETTINGS_MANAGE:
+        maintenance_key = "admin.menu.maintenance_on" if maintenance_mode else "admin.menu.maintenance_off"
+        kb.button(text=localize(maintenance_key), callback_data="toggle_maintenance")
     kb.button(text=localize("btn.back"), callback_data="back_to_menu")
     kb.adjust(1)
     return kb.as_markup()

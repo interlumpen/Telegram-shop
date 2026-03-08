@@ -2,16 +2,19 @@ import datetime
 import pytest
 from unittest.mock import patch, AsyncMock, MagicMock
 
-from bot.database.methods.create import _create_user as create_user, _create_referral_earning as create_referral_earning
-from bot.database.methods.read import _get_one_referral_earning as get_one_referral_earning
+from sqlalchemy import select
+
+from bot.database.methods.create import create_user, create_referral_earning
+from bot.database.methods.read import (
+    get_one_referral_earning, check_user_referrals, get_referral_earnings_stats,
+)
 
 
 class TestReferralPage:
 
-    @pytest.mark.asyncio
     async def test_referral_page_shows_link(self, make_callback_query, fsm_context, user_factory):
         """Test referral page via the router-registered handler (first referral_callback_handler)."""
-        user_factory(telegram_id=700001)
+        await user_factory(telegram_id=700001)
 
         call = make_callback_query(data="referral_system", user_id=700001)
 
@@ -29,39 +32,35 @@ class TestReferralPage:
                     break
 
         # Simpler approach: just test the data we can test
-        from bot.database.methods.read import _check_user_referrals as check_user_referrals, _get_referral_earnings_stats as get_referral_earnings_stats
-        referrals_count = check_user_referrals(700001)
+        referrals_count = await check_user_referrals(700001)
         assert referrals_count == 0
 
-        earnings_stats = get_referral_earnings_stats(700001)
+        earnings_stats = await get_referral_earnings_stats(700001)
         assert earnings_stats['total_earnings_count'] == 0
 
-    @pytest.mark.asyncio
     async def test_referral_page_with_referrals(self, make_callback_query, fsm_context, user_factory):
         """Test that referral stats work with actual referrals."""
-        user_factory(telegram_id=700002)
-        create_user(
+        await user_factory(telegram_id=700002)
+        await create_user(
             telegram_id=700003,
             registration_date=datetime.datetime.now(),
             referral_id=700002,
             role=1,
         )
 
-        from bot.database.methods.read import _check_user_referrals as check_user_referrals, _get_referral_earnings_stats as get_referral_earnings_stats
-        referrals_count = check_user_referrals(700002)
+        referrals_count = await check_user_referrals(700002)
         assert referrals_count == 1
 
-        earnings_stats = get_referral_earnings_stats(700002)
+        earnings_stats = await get_referral_earnings_stats(700002)
         assert earnings_stats['total_earnings_count'] == 0
 
 
 class TestViewReferrals:
 
-    @pytest.mark.asyncio
     async def test_view_referrals_empty(self, make_callback_query, fsm_context, user_factory):
         from bot.handlers.user.referral_system import view_referrals_handler
 
-        user_factory(telegram_id=700010)
+        await user_factory(telegram_id=700010)
 
         call = make_callback_query(data="view_referrals", user_id=700010)
 
@@ -71,12 +70,11 @@ class TestViewReferrals:
         text = call.message.edit_text.call_args[0][0]
         assert isinstance(text, str)
 
-    @pytest.mark.asyncio
     async def test_view_referrals_with_data(self, make_callback_query, fsm_context, user_factory):
         from bot.handlers.user.referral_system import view_referrals_handler
 
-        user_factory(telegram_id=700011)
-        create_user(
+        await user_factory(telegram_id=700011)
+        await create_user(
             telegram_id=700012,
             registration_date=datetime.datetime.now(),
             referral_id=700011,
@@ -98,11 +96,10 @@ class TestViewReferrals:
 
 class TestViewAllEarnings:
 
-    @pytest.mark.asyncio
     async def test_view_all_earnings_empty(self, make_callback_query, fsm_context, user_factory):
         from bot.handlers.user.referral_system import view_all_earnings_handler
 
-        user_factory(telegram_id=700020)
+        await user_factory(telegram_id=700020)
 
         call = make_callback_query(data="view_all_earnings", user_id=700020)
 
@@ -110,18 +107,17 @@ class TestViewAllEarnings:
 
         call.message.edit_text.assert_called_once()
 
-    @pytest.mark.asyncio
     async def test_view_all_earnings_with_data(self, make_callback_query, fsm_context, user_factory):
         from bot.handlers.user.referral_system import view_all_earnings_handler
 
-        user_factory(telegram_id=700021)
-        create_user(
+        await user_factory(telegram_id=700021)
+        await create_user(
             telegram_id=700022,
             registration_date=datetime.datetime.now(),
             referral_id=700021,
             role=1,
         )
-        create_referral_earning(
+        await create_referral_earning(
             referrer_id=700021,
             referral_id=700022,
             amount=50,
@@ -139,17 +135,16 @@ class TestViewAllEarnings:
 
 class TestEarningDetail:
 
-    @pytest.mark.asyncio
     async def test_earning_detail_data_exists(self, user_factory):
         """Test that referral earning data is correctly stored and retrieved."""
-        user_factory(telegram_id=700030)
-        create_user(
+        await user_factory(telegram_id=700030)
+        await create_user(
             telegram_id=700031,
             registration_date=datetime.datetime.now(),
             referral_id=700030,
             role=1,
         )
-        create_referral_earning(
+        await create_referral_earning(
             referrer_id=700030,
             referral_id=700031,
             amount=100,
@@ -159,14 +154,15 @@ class TestEarningDetail:
         # Get the earning
         from bot.database.main import Database
         from bot.database.models.main import ReferralEarnings
-        with Database().session() as s:
-            earning = s.query(ReferralEarnings).filter(
-                ReferralEarnings.referrer_id == 700030
-            ).first()
+        async with Database().session() as s:
+            result = await s.execute(
+                select(ReferralEarnings).where(ReferralEarnings.referrer_id == 700030)
+            )
+            earning = result.scalars().first()
             assert earning is not None
             earning_id = earning.id
 
-        earning_info = get_one_referral_earning(earning_id)
+        earning_info = await get_one_referral_earning(earning_id)
         assert earning_info is not None
         assert earning_info['amount'] == 100
         assert earning_info['original_amount'] == 1000

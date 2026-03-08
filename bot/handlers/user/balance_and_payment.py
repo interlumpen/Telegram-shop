@@ -149,11 +149,11 @@ async def process_replenish_balance(call: CallbackQuery, state: FSMContext):
                     payload=str(call.from_user.id),
                 )
             except CryptoPayAPIError as e:
-                log_audit("cryptopay_error", level="ERROR", user_id=call.from_user.id, resource_type="Payment", details=f"[{e.code}] {e.name}")
+                await log_audit("cryptopay_error", level="ERROR", user_id=call.from_user.id, resource_type="Payment", details=f"[{e.code}] {e.name}")
                 await call.answer(localize("payments.crypto.api_error", error=e.name), show_alert=True)
                 return
             except Exception as e:
-                log_audit("cryptopay_invoice_fail", level="ERROR", user_id=call.from_user.id, resource_type="Payment", details=str(e))
+                await log_audit("cryptopay_invoice_fail", level="ERROR", user_id=call.from_user.id, resource_type="Payment", details=str(e))
                 await call.answer(localize("payments.crypto.create_fail", error=str(e)), show_alert=True)
                 return
 
@@ -188,7 +188,7 @@ async def process_replenish_balance(call: CallbackQuery, state: FSMContext):
                         amount=int(amount_dec),
                     )
                 except Exception as e:
-                    log_audit("stars_invoice_fail", level="ERROR", user_id=call.from_user.id, resource_type="Payment", details=str(e))
+                    await log_audit("stars_invoice_fail", level="ERROR", user_id=call.from_user.id, resource_type="Payment", details=str(e))
                     await call.answer(localize("payments.stars.create_fail", error=str(e)), show_alert=True)
                     return
                 await state.clear()
@@ -208,7 +208,7 @@ async def process_replenish_balance(call: CallbackQuery, state: FSMContext):
                     amount=int(amount_dec),
                 )
             except Exception as e:
-                log_audit("fiat_invoice_fail", level="ERROR", user_id=call.from_user.id, resource_type="Payment", details=str(e))
+                await log_audit("fiat_invoice_fail", level="ERROR", user_id=call.from_user.id, resource_type="Payment", details=str(e))
                 await call.answer(localize("payments.fiat.create_fail", error=str(e)), show_alert=True)
                 return
             await state.clear()
@@ -242,11 +242,11 @@ async def checking_payment(call: CallbackQuery, state: FSMContext):
             crypto = CryptoPayAPI()
             info = await crypto.get_invoice(invoice_id)
         except CryptoPayAPIError as e:
-            log_audit("cryptopay_check_error", level="ERROR", user_id=user_id, resource_type="Payment", details=f"[{e.code}] {e.name}")
+            await log_audit("cryptopay_check_error", level="ERROR", user_id=user_id, resource_type="Payment", details=f"[{e.code}] {e.name}")
             await call.answer(localize("payments.crypto.api_error", error=e.name), show_alert=True)
             return
         except Exception as e:
-            log_audit("cryptopay_get_fail", level="ERROR", user_id=user_id, resource_type="Payment", details=str(e))
+            await log_audit("cryptopay_get_fail", level="ERROR", user_id=user_id, resource_type="Payment", details=str(e))
             await call.answer(localize("payments.crypto.check_fail", error=str(e)), show_alert=True)
             return
 
@@ -288,14 +288,14 @@ async def checking_payment(call: CallbackQuery, state: FSMContext):
             # Audit log
             try:
                 user_info = await call.bot.get_chat(user_id)
-                log_audit(
+                await log_audit(
                     "balance_replenish",
                     user_id=user_id,
                     resource_type="Payment",
                     details=f"name={user_info.first_name}, amount={balance_amount} {EnvKeys.PAY_CURRENCY}, provider=cryptopay",
                 )
             except (TelegramBadRequest, TelegramForbiddenError) as e:
-                log_audit("balance_replenish", level="ERROR", user_id=user_id, resource_type="Payment", details=f"log_failed: {e}")
+                await log_audit("balance_replenish", level="ERROR", user_id=user_id, resource_type="Payment", details=f"log_failed: {e}")
 
         elif status == "active":
             await call.answer(localize("payments.not_paid_yet"))
@@ -398,14 +398,14 @@ async def successful_payment_handler(message: Message):
     # audit log
     try:
         user_info = await message.bot.get_chat(user_id)
-        log_audit(
+        await log_audit(
             "balance_replenish",
             user_id=user_id,
             resource_type="Payment",
             details=f"name={user_info.first_name}, amount={amount} {EnvKeys.PAY_CURRENCY}, provider={suffix}",
         )
     except (TelegramBadRequest, TelegramForbiddenError) as e:
-        log_audit("balance_replenish", level="ERROR", user_id=user_id, resource_type="Payment", details=f"log_failed: {e}")
+        await log_audit("balance_replenish", level="ERROR", user_id=user_id, resource_type="Payment", details=f"log_failed: {e}")
 
 
 @router.callback_query(F.data == "buy")
@@ -434,7 +434,7 @@ async def buy_item_callback_handler(call: CallbackQuery, state: FSMContext):
                 localize("errors.invalid_item_name"),
                 show_alert=True
             )
-            log_audit("suspicious_item_name", level="WARNING", user_id=call.from_user.id, resource_type="Item", details=raw_item_name)
+            await log_audit("suspicious_item_name", level="WARNING", user_id=call.from_user.id, resource_type="Item", details=raw_item_name)
             return
 
         # User_id validation
@@ -473,7 +473,7 @@ async def buy_item_callback_handler(call: CallbackQuery, state: FSMContext):
             )
 
             if message not in error_messages:
-                log_audit("purchase_error", level="ERROR", user_id=user_id, resource_type="Item", resource_id=purchase_request.item_name, details=message)
+                await log_audit("purchase_error", level="ERROR", user_id=user_id, resource_type="Item", resource_id=purchase_request.item_name, details=message)
             return
 
         # Successful purchase - sanitize the output
@@ -501,7 +501,7 @@ async def buy_item_callback_handler(call: CallbackQuery, state: FSMContext):
         # Secure logging
         try:
             user_info = await call.bot.get_chat(user_id)
-            log_audit(
+            await log_audit(
                 "purchase",
                 user_id=user_id,
                 resource_type="Item",
@@ -509,7 +509,7 @@ async def buy_item_callback_handler(call: CallbackQuery, state: FSMContext):
                 details=f"name={user_info.first_name[:50]}, price={purchase_data['price']} {EnvKeys.PAY_CURRENCY}, unique_id={purchase_data['unique_id']}",
             )
         except Exception as e:
-            log_audit("purchase", level="ERROR", user_id=user_id, resource_type="Item", details=f"log_failed: {e}")
+            await log_audit("purchase", level="ERROR", user_id=user_id, resource_type="Item", details=f"log_failed: {e}")
 
     except Exception as e:
         logger.error(f"Critical error in purchase handler: {e}")

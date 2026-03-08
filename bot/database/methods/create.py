@@ -1,20 +1,19 @@
 from datetime import datetime
 from decimal import Decimal
 
-from sqlalchemy import exists
-from sqlalchemy.exc import IntegrityError
+from sqlalchemy import select, exists
 
 from bot.database.models import User, ItemValues, Goods, Categories, Operations, Payments, ReferralEarnings, Role
 from bot.database import Database
-from bot.database.main import run_sync
 from bot.database.methods.cache_utils import safe_create_task
 from bot.database.methods.read import invalidate_stats_cache
 
 
-def _create_user(telegram_id: int, registration_date: datetime, referral_id: int | None, role: int = 1) -> None:
+async def create_user(telegram_id: int, registration_date: datetime, referral_id: int | None, role: int = 1) -> None:
     """Create user if missing; commit."""
-    with Database().session() as s:
-        if s.query(exists().where(User.telegram_id == telegram_id)).scalar():
+    async with Database().session() as s:
+        result = await s.execute(select(exists().where(User.telegram_id == telegram_id)))
+        if result.scalar():
             return
         s.add(
             User(
@@ -26,12 +25,13 @@ def _create_user(telegram_id: int, registration_date: datetime, referral_id: int
         )
 
 
-def _create_item(item_name: str, item_description: str, item_price: int, category_name: str) -> None:
+async def create_item(item_name: str, item_description: str, item_price: int, category_name: str) -> None:
     """Insert item (goods); commit. Resolves category_name to category_id."""
-    with Database().session() as s:
-        if s.query(exists().where(Goods.name == item_name)).scalar():
+    async with Database().session() as s:
+        result = await s.execute(select(exists().where(Goods.name == item_name)))
+        if result.scalar():
             return
-        cat = s.query(Categories.id).filter(Categories.name == category_name).scalar()
+        cat = (await s.execute(select(Categories.id).where(Categories.name == category_name))).scalar()
         if not cat:
             return
         s.add(
@@ -46,51 +46,54 @@ def _create_item(item_name: str, item_description: str, item_price: int, categor
     safe_create_task(invalidate_stats_cache())
 
 
-def _add_values_to_item(item_name: str, value: str, is_infinity: bool) -> bool:
+async def add_values_to_item(item_name: str, value: str, is_infinity: bool) -> bool:
     """Add item value if not duplicate; True if inserted. Resolves item_name to item_id."""
     value_norm = (value or "").strip()
     if not value_norm:
         return False
 
-    with Database().session() as s:
-        item_id = s.query(Goods.id).filter(Goods.name == item_name).scalar()
+    async with Database().session() as s:
+        item_id = (await s.execute(select(Goods.id).where(Goods.name == item_name))).scalar()
         if not item_id:
             return False
 
-        if s.query(
-                exists().where(
-                    ItemValues.item_id == item_id,
-                    ItemValues.value == value_norm
-                )
-        ).scalar():
+        dup = (await s.execute(
+            select(exists().where(
+                ItemValues.item_id == item_id,
+                ItemValues.value == value_norm,
+            ))
+        )).scalar()
+        if dup:
             return False
 
         try:
             s.add(ItemValues(item_id=item_id, value=value_norm, is_infinity=bool(is_infinity)))
+            await s.flush()
             return True
-        except IntegrityError:
+        except Exception:
             return False
 
 
-def _create_category(category_name: str) -> None:
+async def create_category(category_name: str) -> None:
     """Insert category; commit."""
-    with Database().session() as s:
-        if s.query(exists().where(Categories.name == category_name)).scalar():
+    async with Database().session() as s:
+        result = await s.execute(select(exists().where(Categories.name == category_name)))
+        if result.scalar():
             return
         s.add(Categories(name=category_name))
 
     safe_create_task(invalidate_stats_cache())
 
 
-def _create_operation(user_id: int, value: int, operation_time: datetime) -> None:
+async def create_operation(user_id: int, value: int, operation_time: datetime) -> None:
     """Record completed balance operation; commit."""
-    with Database().session() as s:
+    async with Database().session() as s:
         s.add(Operations(user_id, value, operation_time))
 
 
-def _create_pending_payment(provider: str, external_id: str, user_id: int, amount: int, currency: str) -> None:
+async def create_pending_payment(provider: str, external_id: str, user_id: int, amount: int, currency: str) -> None:
     """Create pending payment."""
-    with Database().session() as s:
+    async with Database().session() as s:
         s.add(Payments(
             provider=provider,
             external_id=external_id,
@@ -101,9 +104,9 @@ def _create_pending_payment(provider: str, external_id: str, user_id: int, amoun
         ))
 
 
-def _create_referral_earning(referrer_id: int, referral_id: int, amount: int, original_amount: int) -> None:
+async def create_referral_earning(referrer_id: int, referral_id: int, amount: int, original_amount: int) -> None:
     """Create a referral credit record."""
-    with Database().session() as s:
+    async with Database().session() as s:
         s.add(
             ReferralEarnings(
                 referrer_id=referrer_id,
@@ -114,23 +117,13 @@ def _create_referral_earning(referrer_id: int, referral_id: int, amount: int, or
         )
 
 
-def _create_role(name: str, permissions: int) -> int | None:
+async def create_role(name: str, permissions: int) -> int | None:
     """Create a new role. Returns the new role ID, or None if name conflict."""
-    with Database().session() as s:
-        if s.query(exists().where(Role.name == name)).scalar():
+    async with Database().session() as s:
+        result = await s.execute(select(exists().where(Role.name == name)))
+        if result.scalar():
             return None
         role = Role(name=name, permissions=permissions)
         s.add(role)
-        s.flush()
+        await s.flush()
         return role.id
-
-
-# Async public API
-create_user = run_sync(_create_user)
-create_item = run_sync(_create_item)
-add_values_to_item = run_sync(_add_values_to_item)
-create_category = run_sync(_create_category)
-create_operation = run_sync(_create_operation)
-create_pending_payment = run_sync(_create_pending_payment)
-create_referral_earning = run_sync(_create_referral_earning)
-create_role = run_sync(_create_role)

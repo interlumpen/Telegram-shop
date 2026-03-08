@@ -1,5 +1,6 @@
 import hashlib
 import re
+from urllib.parse import urlparse
 
 from aiogram import Router, F
 from aiogram.types import CallbackQuery
@@ -46,6 +47,18 @@ def _any_payment_method_enabled() -> bool:
     tg_stars_ok = bool(EnvKeys.STARS_PER_VALUE)
     tg_pay_ok = bool(EnvKeys.TELEGRAM_PROVIDER_TOKEN)
     return cryptopay_ok or tg_stars_ok or tg_pay_ok
+
+
+def _parse_channel_username() -> str | None:
+    """Extract channel username from CHANNEL_URL env variable."""
+    channel_url = EnvKeys.CHANNEL_URL or ""
+    parsed = urlparse(channel_url)
+    return (
+        parsed.path.lstrip('/')
+        if parsed.path
+        else channel_url.replace("https://t.me/", "").replace("t.me/", "").lstrip('@')
+    ) or None
+
 
 
 def generate_short_hash(text: str, length: int = 8) -> str:

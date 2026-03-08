@@ -2,15 +2,14 @@ import pytest
 from decimal import Decimal
 from unittest.mock import patch, MagicMock, AsyncMock
 
-from bot.database.methods.read import _check_user as check_user, _get_role_id_by_name as get_role_id_by_name, _check_role_name_by_id as check_role_name_by_id
+from bot.database.methods.read import check_user, get_role_id_by_name, check_role_name_by_id, select_max_role_id, get_item_info
 
 class TestCheckUserData:
 
-    @pytest.mark.asyncio
     async def test_check_valid_user(self, make_message, fsm_context, user_factory):
         from bot.handlers.admin.user_management_states import check_user_data
 
-        user_factory(telegram_id=800001, balance=500)
+        await user_factory(telegram_id=800001, balance=500)
 
         msg = make_message(text="800001", user_id=900001)
         await fsm_context.set_state("waiting_user_id_for_check")
@@ -21,7 +20,6 @@ class TestCheckUserData:
         text = msg.answer.call_args[0][0]
         assert "800001" in text
 
-    @pytest.mark.asyncio
     async def test_check_invalid_user_id(self, make_message, fsm_context):
         from bot.handlers.admin.user_management_states import check_user_data
 
@@ -33,7 +31,6 @@ class TestCheckUserData:
         text = msg.answer.call_args[0][0]
         assert "invalid_id" in text
 
-    @pytest.mark.asyncio
     async def test_check_nonexistent_user(self, make_message, fsm_context):
         from bot.handlers.admin.user_management_states import check_user_data
 
@@ -48,12 +45,11 @@ class TestCheckUserData:
 
 class TestAssignRole:
 
-    @pytest.mark.asyncio
     async def test_assign_role(self, make_callback_query, user_factory):
         from bot.handlers.admin.role_management_states import assign_role_confirm
 
-        user_factory(telegram_id=800010, role_id=1)
-        admin_role = get_role_id_by_name('ADMIN')
+        await user_factory(telegram_id=800010, role_id=1)
+        admin_role = await get_role_id_by_name('ADMIN')
 
         call = make_callback_query(data=f"asr_{admin_role}_800010", user_id=900010)
 
@@ -61,16 +57,15 @@ class TestAssignRole:
             await assign_role_confirm(call)
 
         call.message.edit_text.assert_called_once()
-        user = check_user(800010)
+        user = await check_user(800010)
         assert user['role_id'] == admin_role
 
-    @pytest.mark.asyncio
     async def test_assign_user_role(self, make_callback_query, user_factory):
         from bot.handlers.admin.role_management_states import assign_role_confirm
 
-        admin_role = get_role_id_by_name('ADMIN')
-        user_role = get_role_id_by_name('USER')
-        user_factory(telegram_id=800011, role_id=admin_role)
+        admin_role = await get_role_id_by_name('ADMIN')
+        user_role = await get_role_id_by_name('USER')
+        await user_factory(telegram_id=800011, role_id=admin_role)
 
         call = make_callback_query(data=f"asr_{user_role}_800011", user_id=900011)
 
@@ -78,17 +73,15 @@ class TestAssignRole:
             await assign_role_confirm(call)
 
         call.message.edit_text.assert_called_once()
-        user = check_user(800011)
+        user = await check_user(800011)
         assert user['role_id'] == user_role
 
-    @pytest.mark.asyncio
     async def test_cannot_change_owner_role(self, make_callback_query, user_factory):
         from bot.handlers.admin.role_management_states import assign_role_confirm
-        from bot.database.methods.read import _select_max_role_id as select_max_role_id
 
-        max_role = select_max_role_id()
-        user_factory(telegram_id=800012, role_id=max_role)
-        admin_role = get_role_id_by_name('ADMIN')
+        max_role = await select_max_role_id()
+        await user_factory(telegram_id=800012, role_id=max_role)
+        admin_role = await get_role_id_by_name('ADMIN')
 
         call = make_callback_query(data=f"asr_{admin_role}_800012", user_id=900012)
 
@@ -97,17 +90,16 @@ class TestAssignRole:
 
         call.answer.assert_called_once()
         # Role should not change
-        user = check_user(800012)
+        user = await check_user(800012)
         assert user['role_id'] == max_role
 
 
 class TestReplenishBalance:
 
-    @pytest.mark.asyncio
     async def test_replenish_user_balance(self, make_message, fsm_context, user_factory):
         from bot.handlers.admin.user_management_states import process_replenish_user_balance
 
-        user_factory(telegram_id=800020, balance=100)
+        await user_factory(telegram_id=800020, balance=100)
         await fsm_context.update_data(target_user=800020)
 
         msg = make_message(text="500", user_id=900020)
@@ -115,14 +107,13 @@ class TestReplenishBalance:
         await process_replenish_user_balance(msg, fsm_context)
 
         msg.answer.assert_called_once()
-        user = check_user(800020)
+        user = await check_user(800020)
         assert user['balance'] == Decimal("600")
 
-    @pytest.mark.asyncio
     async def test_deduct_user_balance(self, make_message, fsm_context, user_factory):
         from bot.handlers.admin.user_management_states import process_deduct_user_balance
 
-        user_factory(telegram_id=800021, balance=500)
+        await user_factory(telegram_id=800021, balance=500)
         await fsm_context.update_data(target_user=800021)
 
         msg = make_message(text="200", user_id=900021)
@@ -130,14 +121,13 @@ class TestReplenishBalance:
         await process_deduct_user_balance(msg, fsm_context)
 
         msg.answer.assert_called_once()
-        user = check_user(800021)
+        user = await check_user(800021)
         assert user['balance'] == Decimal("300")
 
-    @pytest.mark.asyncio
     async def test_deduct_insufficient_balance(self, make_message, fsm_context, user_factory):
         from bot.handlers.admin.user_management_states import process_deduct_user_balance
 
-        user_factory(telegram_id=800022, balance=50)
+        await user_factory(telegram_id=800022, balance=50)
         await fsm_context.update_data(target_user=800022)
 
         msg = make_message(text="200", user_id=900022)
@@ -146,17 +136,16 @@ class TestReplenishBalance:
 
         msg.answer.assert_called_once()
         # Balance should not change
-        user = check_user(800022)
+        user = await check_user(800022)
         assert user['balance'] == Decimal("50")
 
 
 class TestBlockUser:
 
-    @pytest.mark.asyncio
     async def test_block_user(self, make_callback_query, user_factory):
         from bot.handlers.admin.user_management_states import block_user_handler
 
-        user_factory(telegram_id=800030, role_id=1)
+        await user_factory(telegram_id=800030, role_id=1)
 
         call = make_callback_query(data="block-user_800030", user_id=900030)
 
@@ -169,11 +158,10 @@ class TestBlockUser:
         call.message.edit_text.assert_called_once()
         mock_auth.block_user.assert_called_once_with(800030)
 
-    @pytest.mark.asyncio
     async def test_unblock_user(self, make_callback_query, user_factory):
         from bot.handlers.admin.user_management_states import unblock_user_handler
 
-        user_factory(telegram_id=800031, role_id=1)
+        await user_factory(telegram_id=800031, role_id=1)
 
         call = make_callback_query(data="unblock-user_800031", user_id=900031)
 
@@ -186,13 +174,11 @@ class TestBlockUser:
         call.message.edit_text.assert_called_once()
         mock_auth.unblock_user.assert_called_once_with(800031)
 
-    @pytest.mark.asyncio
     async def test_cannot_block_owner(self, make_callback_query, user_factory):
         from bot.handlers.admin.user_management_states import block_user_handler
-        from bot.database.methods.read import _select_max_role_id as select_max_role_id
 
-        max_role = select_max_role_id()
-        user_factory(telegram_id=800032, role_id=max_role)
+        max_role = await select_max_role_id()
+        await user_factory(telegram_id=800032, role_id=max_role)
 
         call = make_callback_query(data="block-user_800032", user_id=900032)
 
@@ -203,11 +189,10 @@ class TestBlockUser:
 
 class TestReplenishBalanceEdgeCases:
 
-    @pytest.mark.asyncio
     async def test_replenish_non_numeric_input(self, make_message, fsm_context, user_factory):
         from bot.handlers.admin.user_management_states import process_replenish_user_balance
 
-        user_factory(telegram_id=800040, balance=100)
+        await user_factory(telegram_id=800040, balance=100)
         await fsm_context.update_data(target_user=800040)
 
         msg = make_message(text="abc", user_id=900060)
@@ -216,14 +201,13 @@ class TestReplenishBalanceEdgeCases:
 
         msg.answer.assert_called_once()
         # Balance should not change
-        user = check_user(800040)
+        user = await check_user(800040)
         assert user['balance'] == Decimal("100")
 
-    @pytest.mark.asyncio
     async def test_replenish_negative_amount(self, make_message, fsm_context, user_factory):
         from bot.handlers.admin.user_management_states import process_replenish_user_balance
 
-        user_factory(telegram_id=800041, balance=100)
+        await user_factory(telegram_id=800041, balance=100)
         await fsm_context.update_data(target_user=800041)
 
         msg = make_message(text="-500", user_id=900061)
@@ -231,14 +215,13 @@ class TestReplenishBalanceEdgeCases:
         await process_replenish_user_balance(msg, fsm_context)
 
         msg.answer.assert_called_once()
-        user = check_user(800041)
+        user = await check_user(800041)
         assert user['balance'] == Decimal("100")
 
-    @pytest.mark.asyncio
     async def test_replenish_zero_amount(self, make_message, fsm_context, user_factory):
         from bot.handlers.admin.user_management_states import process_replenish_user_balance
 
-        user_factory(telegram_id=800042, balance=100)
+        await user_factory(telegram_id=800042, balance=100)
         await fsm_context.update_data(target_user=800042)
 
         msg = make_message(text="0", user_id=900062)
@@ -250,7 +233,6 @@ class TestReplenishBalanceEdgeCases:
 
 class TestCategoryManagement:
 
-    @pytest.mark.asyncio
     async def test_add_category(self, make_message, fsm_context):
         from bot.handlers.admin.categories_management_states import process_category_for_add
 
@@ -262,11 +244,10 @@ class TestCategoryManagement:
         text = msg.answer.call_args[0][0]
         assert "success" in text
 
-    @pytest.mark.asyncio
     async def test_add_duplicate_category(self, make_message, fsm_context, category_factory):
         from bot.handlers.admin.categories_management_states import process_category_for_add
 
-        category_factory("ExistingCat")
+        await category_factory("ExistingCat")
 
         msg = make_message(text="ExistingCat", user_id=900041)
 
@@ -276,11 +257,10 @@ class TestCategoryManagement:
         text = msg.answer.call_args[0][0]
         assert "exist" in text
 
-    @pytest.mark.asyncio
     async def test_delete_category(self, make_message, fsm_context, category_factory):
         from bot.handlers.admin.categories_management_states import process_category_for_delete
 
-        category_factory("ToDelete")
+        await category_factory("ToDelete")
 
         msg = make_message(text="ToDelete", user_id=900042)
 
@@ -290,7 +270,6 @@ class TestCategoryManagement:
         text = msg.answer.call_args[0][0]
         assert "success" in text
 
-    @pytest.mark.asyncio
     async def test_delete_nonexistent_category(self, make_message, fsm_context):
         from bot.handlers.admin.categories_management_states import process_category_for_delete
 
@@ -302,14 +281,13 @@ class TestCategoryManagement:
         text = msg.answer.call_args[0][0]
         assert "not_found" in text
 
-    @pytest.mark.asyncio
     async def test_rename_category(self, make_message, fsm_context, category_factory):
         from bot.handlers.admin.categories_management_states import (
             check_category_for_update,
             check_category_name_for_update,
         )
 
-        category_factory("OldName")
+        await category_factory("OldName")
 
         # Step 1: enter old name
         msg1 = make_message(text="OldName", user_id=900044)
@@ -326,12 +304,10 @@ class TestCategoryManagement:
 
 class TestGoodsManagement:
 
-    @pytest.mark.asyncio
     async def test_delete_item(self, make_message, fsm_context, item_factory):
         from bot.handlers.admin.goods_management_states import delete_str_item
-        from bot.database.methods.read import _get_item_info as get_item_info
 
-        item_factory(name="ToDeleteItem", price=100, category="DelCat", values=[("v1", False)])
+        await item_factory(name="ToDeleteItem", price=100, category="DelCat", values=[("v1", False)])
 
         msg = make_message(text="ToDeleteItem", user_id=900050)
 
@@ -342,10 +318,9 @@ class TestGoodsManagement:
         assert "success" in text
 
         # Verify item deleted
-        item = get_item_info("ToDeleteItem")
+        item = await get_item_info("ToDeleteItem")
         assert item is None
 
-    @pytest.mark.asyncio
     async def test_delete_item_not_found(self, make_message, fsm_context):
         from bot.handlers.admin.goods_management_states import delete_str_item
 
@@ -357,7 +332,6 @@ class TestGoodsManagement:
         text = msg.answer.call_args[0][0]
         assert "not_found" in text
 
-    @pytest.mark.asyncio
     async def test_show_items_not_found(self, make_message, fsm_context):
         from bot.handlers.admin.goods_management_states import show_str_item
 

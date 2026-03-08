@@ -2,6 +2,8 @@ import asyncio
 import logging
 from datetime import datetime, timedelta
 
+from sqlalchemy import select, update, text
+
 logger = logging.getLogger(__name__)
 
 
@@ -50,15 +52,17 @@ class RecoveryManager:
 
         while self.running:
             try:
-                # Collect payment data synchronously, then close session
                 payment_copies = []
-                with Database().session() as s:
+                async with Database().session() as s:
                     cutoff = datetime.now() - timedelta(hours=1)
-                    pending_payments = s.query(Payments).filter(
-                        Payments.status == "pending",
-                        Payments.created_at < cutoff,
-                        Payments.provider == "cryptopay"
-                    ).all()
+                    result = await s.execute(
+                        select(Payments).where(
+                            Payments.status == "pending",
+                            Payments.created_at < cutoff,
+                            Payments.provider == "cryptopay"
+                        )
+                    )
+                    pending_payments = result.scalars().all()
 
                     for p in pending_payments:
                         payment_copies.append({
@@ -70,7 +74,6 @@ class RecoveryManager:
                             'currency': p.currency,
                         })
 
-                # Process outside DB session to avoid deadlock
                 for pc in payment_copies:
                     await self._check_and_process_payment(pc)
 
@@ -128,18 +131,14 @@ class RecoveryManager:
             logger.error(f"Error processing payment {p_id}: {e}")
 
     async def _mark_payment_failed(self, payment_id: int):
-        """Mark payment as failed using executor to avoid blocking event loop."""
+        """Mark payment as failed."""
         from bot.database import Database
         from bot.database.models import Payments
 
-        def _update():
-            with Database().session() as s:
-                s.query(Payments).filter(
-                    Payments.id == payment_id
-                ).update({"status": "failed"})
-
-        loop = asyncio.get_running_loop()
-        await loop.run_in_executor(None, _update)
+        async with Database().session() as s:
+            await s.execute(
+                update(Payments).where(Payments.id == payment_id).values(status="failed")
+            )
 
     async def periodic_health_check(self):
         """Periodic system health checks"""
@@ -147,9 +146,8 @@ class RecoveryManager:
 
         while self.running:
             try:
-                with Database().session() as s:
-                    from sqlalchemy import text
-                    s.execute(text("SELECT 1"))
+                async with Database().session() as s:
+                    await s.execute(text("SELECT 1"))
 
                 from bot.misc.caching.cache import get_cache_manager
                 cache = get_cache_manager()

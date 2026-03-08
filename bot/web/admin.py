@@ -11,6 +11,8 @@ from starlette.middleware.sessions import SessionMiddleware
 from starlette.routing import Route
 from sqlalchemy import text
 
+from markupsafe import Markup
+
 from bot.misc import EnvKeys
 from bot.database.methods.audit import log_audit
 
@@ -30,13 +32,11 @@ class LoginRateLimiter:
         if ip not in self._attempts:
             return False
         now = time.time()
-        # Clean old attempts
         self._attempts[ip] = [t for t in self._attempts[ip] if now - t < self.lockout_seconds]
         return len(self._attempts[ip]) >= self.max_attempts
 
     def record_failure(self, ip: str) -> None:
         now = time.time()
-        # Periodic cleanup of stale entries (every 10 minutes)
         if now - self._last_cleanup > 600:
             self._attempts = {
                 k: [t for t in v if now - t < self.lockout_seconds]
@@ -69,7 +69,7 @@ class AdminAuth(AuthenticationBackend):
         ip = request.client.host
 
         if _login_limiter.is_blocked(ip):
-            log_audit("web_login_blocked", level="WARNING", details=f"ip={ip}", ip_address=ip)
+            await log_audit("web_login_blocked", level="WARNING", details=f"ip={ip}", ip_address=ip)
             return False
 
         form = await request.form()
@@ -81,19 +81,19 @@ class AdminAuth(AuthenticationBackend):
                 username == "admin" and password == "admin"
                 and ip not in ("127.0.0.1", "::1", "localhost")
             ):
-                log_audit("web_login_blocked_default_creds", level="WARNING", details=f"ip={ip}", ip_address=ip)
+                await log_audit("web_login_blocked_default_creds", level="WARNING", details=f"ip={ip}", ip_address=ip)
                 return False
             request.session.update({"authenticated": True})
             _login_limiter.reset(ip)
-            log_audit("web_login", user_id=None, details=f"user={username}", ip_address=ip)
+            await log_audit("web_login", user_id=None, details=f"user={username}", ip_address=ip)
             return True
 
         _login_limiter.record_failure(ip)
-        log_audit("web_login_failed", level="WARNING", details=f"user={username}", ip_address=ip)
+        await log_audit("web_login_failed", level="WARNING", details=f"user={username}", ip_address=ip)
         return False
 
     async def logout(self, request: Request) -> bool:
-        log_audit("web_logout", ip_address=request.client.host)
+        await log_audit("web_logout", ip_address=request.client.host)
         request.session.clear()
         return True
 
@@ -105,7 +105,7 @@ class AdminAuth(AuthenticationBackend):
 class AuditModelView(ModelView):
     async def after_model_change(self, data: dict, model: Any, is_created: bool, request: Request) -> None:
         action = f"sqladmin_{'create' if is_created else 'update'}"
-        log_audit(
+        await log_audit(
             action,
             resource_type=self.name,
             resource_id=str(getattr(model, 'id', getattr(model, 'name', None))),
@@ -114,7 +114,7 @@ class AuditModelView(ModelView):
         )
 
     async def after_model_delete(self, model: Any, request: Request) -> None:
-        log_audit(
+        await log_audit(
             "sqladmin_delete",
             resource_type=self.name,
             resource_id=str(getattr(model, 'id', getattr(model, 'name', None))),
@@ -135,6 +135,32 @@ class UserAdmin(AuditModelView, model=User):
     icon = "fa-solid fa-users"
 
 
+_PERM_FLAGS = [
+    (1,  "USE"),
+    (2,  "BROADCAST"),
+    (4,  "SETTINGS"),
+    (8,  "USERS"),
+    (16, "SHOP"),
+    (32, "ADMINS"),
+    (64, "OWNER"),
+]
+
+
+def _format_perms_html(model, name):
+    perms = getattr(model, name, 0) or 0
+    if not perms:
+        return Markup('<span style="color:#999">\u2014</span>')
+    badges = []
+    for bit, label in _PERM_FLAGS:
+        if perms & bit:
+            badges.append(
+                f'<span style="display:inline-block;background:#e2e8f0;padding:1px 6px;'
+                f'border-radius:4px;margin:1px;font-size:12px">{label}</span>'
+            )
+    raw = f'<span style="color:#999;font-size:11px;margin-left:4px">({perms})</span>'
+    return Markup(" ".join(badges) + raw)
+
+
 class RoleAdmin(AuditModelView, model=Role):
     column_list = [Role.id, Role.name, Role.default, Role.permissions]
     column_details_exclude_list = ["users"]
@@ -142,6 +168,17 @@ class RoleAdmin(AuditModelView, model=Role):
     name = "Role"
     name_plural = "Roles"
     icon = "fa-solid fa-shield-halved"
+    column_formatters = {"permissions": _format_perms_html}
+    column_formatters_detail = {"permissions": _format_perms_html}
+    form_args = {
+        "permissions": {
+            "description": (
+                "Bitmask value — sum the flags you need: "
+                "USE=1, BROADCAST=2, SETTINGS=4, USERS=8, SHOP=16, ADMINS=32, OWNER=64. "
+                "Example: 31 = USE+BROADCAST+SETTINGS+USERS+SHOP (Admin), 127 = all (Owner)."
+            ),
+        },
+    }
 
 
 class CategoryAdmin(AuditModelView, model=Categories):
@@ -251,8 +288,8 @@ async def health_check(request: Request) -> JSONResponse:
     }
 
     try:
-        with Database().session() as s:
-            s.execute(text("SELECT 1"))
+        async with Database().session() as s:
+            await s.execute(text("SELECT 1"))
         health_status["checks"]["database"] = "ok"
     except Exception as e:
         health_status["checks"]["database"] = f"error: {e}"

@@ -1,66 +1,61 @@
-import asyncio
 import logging
-from contextlib import contextmanager
-from functools import wraps
-from sqlalchemy import create_engine, Engine, QueuePool
-from sqlalchemy.orm import declarative_base, sessionmaker
+from contextlib import asynccontextmanager
+
+from sqlalchemy.ext.asyncio import create_async_engine, AsyncEngine, async_sessionmaker, AsyncSession
+from sqlalchemy.orm import declarative_base
 
 from bot.database.dsn import dsn
 from bot.misc import SingletonMeta
-
-
-def run_sync(func):
-    """Decorator: wraps a synchronous DB function to run in a thread pool executor,
-    keeping the event loop free for other async operations."""
-    @wraps(func)
-    async def wrapper(*args, **kwargs):
-        loop = asyncio.get_running_loop()
-        return await loop.run_in_executor(None, lambda: func(*args, **kwargs))
-    return wrapper
 
 
 class Database(metaclass=SingletonMeta):
     BASE = declarative_base()
 
     def __init__(self):
-        self.__engine: Engine = create_engine(
+        self.__engine: AsyncEngine = create_async_engine(
             dsn(),
-            echo=False,  # Disable SQL logging (enable only for debug)
-            pool_pre_ping=True,  # Check the connection before use
-            future=True,  # Using SQLAlchemy 2.0 style
+            echo=False,
+            pool_pre_ping=True,
 
-            # Settings for optimization
-            poolclass=QueuePool,  # Connection pool type
-            pool_size=20,  # Number of permanent connections
-            max_overflow=40,  # Additional connections at peak load
-            pool_timeout=30,  # Free connection timeout
-            pool_recycle=3600,  # Re-create connections every hour
+            pool_size=20,
+            max_overflow=40,
+            pool_timeout=30,
+            pool_recycle=3600,
 
             connect_args={
-                "connect_timeout": 10,
-                "options": "-c statement_timeout=30000 -c lc_messages=C",
-            }
+                "timeout": 10,
+                "command_timeout": 30,
+                "server_settings": {
+                    "lc_messages": "C",
+                },
+            },
         )
 
-        # Pool state logging
         logging.info(f"Database pool initialized: size={20}, max_overflow={40}")
 
-        self.__SessionLocal = sessionmaker(bind=self.__engine, autoflush=False, autocommit=False, future=True,
-                                           expire_on_commit=False)
+        self.__SessionLocal = async_sessionmaker(
+            bind=self.__engine,
+            class_=AsyncSession,
+            autoflush=False,
+            autocommit=False,
+            expire_on_commit=False,
+        )
 
-    @contextmanager
-    def session(self):
-        """Contextual session: guaranteed to close/rollback on error."""
-        db = self.__SessionLocal()
-        try:
-            yield db
-            db.commit()
-        except Exception:
-            db.rollback()
-            raise
-        finally:
-            db.close()
+    @asynccontextmanager
+    async def session(self):
+        """Async contextual session: guaranteed to close/rollback on error."""
+        async with self.__SessionLocal() as db:
+            try:
+                yield db
+                await db.commit()
+            except Exception:
+                await db.rollback()
+                raise
 
     @property
-    def engine(self) -> Engine:
+    def engine(self) -> AsyncEngine:
         return self.__engine
+
+    async def dispose(self):
+        """Dispose of the connection pool."""
+        await self.__engine.dispose()

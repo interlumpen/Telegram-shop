@@ -508,7 +508,7 @@ async def process_replenish_user_balance(message: Message, state: FSMContext):
 
         # Audit logging
         admin_info = await message.bot.get_chat(message.from_user.id)
-        log_audit("balance_topup", user_id=message.from_user.id, resource_type="User", resource_id=str(user_id), details=f"admin={admin_info.first_name}, target={user_info.first_name}, amount={int(amount)}")
+        await log_audit("balance_topup", user_id=message.from_user.id, resource_type="User", resource_id=str(user_id), details=f"admin={admin_info.first_name}, target={user_info.first_name}, amount={int(amount)}")
 
         # Notify user
         try:
@@ -520,7 +520,7 @@ async def process_replenish_user_balance(message: Message, state: FSMContext):
                 reply_markup=close()
             )
         except (TelegramBadRequest, TelegramForbiddenError) as e:
-            log_audit("balance_topup_notify_fail", level="ERROR", user_id=user_id, details=str(e))
+            await log_audit("balance_topup_notify_fail", level="ERROR", user_id=user_id, details=str(e))
 
         await state.clear()
 
@@ -593,7 +593,7 @@ async def process_deduct_user_balance(message: Message, state: FSMContext):
 
         # Audit logging
         admin_info = await message.bot.get_chat(message.from_user.id)
-        log_audit("balance_deduct", user_id=message.from_user.id, resource_type="User", resource_id=str(user_id), details=f"admin={admin_info.first_name}, target={user_info.first_name}, amount={int(amount)}")
+        await log_audit("balance_deduct", user_id=message.from_user.id, resource_type="User", resource_id=str(user_id), details=f"admin={admin_info.first_name}, target={user_info.first_name}, amount={int(amount)}")
 
         # Notify user
         try:
@@ -605,7 +605,7 @@ async def process_deduct_user_balance(message: Message, state: FSMContext):
                 reply_markup=close()
             )
         except (TelegramBadRequest, TelegramForbiddenError) as e:
-            log_audit("balance_deduct_notify_fail", level="ERROR", user_id=user_id, details=str(e))
+            await log_audit("balance_deduct_notify_fail", level="ERROR", user_id=user_id, details=str(e))
 
         await state.clear()
 
@@ -663,7 +663,7 @@ async def block_user_handler(call: CallbackQuery):
     )
 
     admin_info = await call.message.bot.get_chat(call.from_user.id)
-    log_audit("block_user", user_id=call.from_user.id, resource_type="User", resource_id=str(user_id), details=f"admin={admin_info.first_name}, target={user_info.first_name}")
+    await log_audit("block_user", user_id=call.from_user.id, resource_type="User", resource_id=str(user_id), details=f"admin={admin_info.first_name}, target={user_info.first_name}")
 
 
 @router.callback_query(F.data.startswith('unblock-user_'), HasPermissionFilter(Permission.USERS_MANAGE))
@@ -692,4 +692,4 @@ async def unblock_user_handler(call: CallbackQuery):
     )
 
     admin_info = await call.message.bot.get_chat(call.from_user.id)
-    log_audit("unblock_user", user_id=call.from_user.id, resource_type="User", resource_id=str(user_id), details=f"admin={admin_info.first_name}, target={user_info.first_name}")
+    await log_audit("unblock_user", user_id=call.from_user.id, resource_type="User", resource_id=str(user_id), details=f"admin={admin_info.first_name}, target={user_info.first_name}")

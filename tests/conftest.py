@@ -5,8 +5,8 @@ from typing import Dict, Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-from sqlalchemy import create_engine
-from sqlalchemy.orm import sessionmaker
+from sqlalchemy import delete
+from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker, AsyncSession
 from sqlalchemy.pool import StaticPool
 
 
@@ -71,7 +71,7 @@ class FakeFSMContext:
 
 @pytest.fixture(scope="session", autouse=True)
 def setup_test_database():
-    """Replace Database singleton with SQLite in-memory engine for all tests."""
+    """Replace Database singleton with async SQLite in-memory engine for all tests."""
     from bot.database.main import Database
 
     # Reset singleton
@@ -81,14 +81,15 @@ def setup_test_database():
     original_init = Database.__init__
 
     def test_init(self):
-        self.__dict__['_Database__engine'] = create_engine(
-            "sqlite:///:memory:",
+        self.__dict__['_Database__engine'] = create_async_engine(
+            "sqlite+aiosqlite:///:memory:",
             echo=False,
             connect_args={"check_same_thread": False},
             poolclass=StaticPool,
         )
-        self.__dict__['_Database__SessionLocal'] = sessionmaker(
+        self.__dict__['_Database__SessionLocal'] = async_sessionmaker(
             bind=self.__dict__['_Database__engine'],
+            class_=AsyncSession,
             autoflush=False,
             autocommit=False,
             expire_on_commit=False,
@@ -96,13 +97,16 @@ def setup_test_database():
 
     Database.__init__ = test_init
 
-    # Create all tables
+    # Create all tables synchronously using the async engine
     db = Database()
-    Database.BASE.metadata.create_all(db.engine)
 
-    # Insert roles
-    from bot.database.models.main import Role
-    Role.insert_roles()
+    async def _setup():
+        async with db.engine.begin() as conn:
+            await conn.run_sync(Database.BASE.metadata.create_all)
+        from bot.database.models.main import Role
+        await Role.insert_roles()
+
+    asyncio.run(_setup())
 
     yield
 
@@ -111,7 +115,7 @@ def setup_test_database():
 
 
 @pytest.fixture(autouse=True)
-def db_cleanup(setup_test_database):
+async def db_cleanup(setup_test_database):
     """
     Clean all data between tests by deleting rows from all tables
     (except roles which are session-scoped).
@@ -125,18 +129,18 @@ def db_cleanup(setup_test_database):
     )
 
     db = Database()
-    with db.session() as s:
+    async with db.session() as s:
         # Delete in FK order
-        s.query(ReferralEarnings).delete()
-        s.query(BoughtGoods).delete()
-        s.query(Operations).delete()
-        s.query(Payments).delete()
-        s.query(ItemValues).delete()
-        s.query(Goods).delete()
-        s.query(Categories).delete()
-        s.query(User).delete()
+        await s.execute(delete(ReferralEarnings))
+        await s.execute(delete(BoughtGoods))
+        await s.execute(delete(Operations))
+        await s.execute(delete(Payments))
+        await s.execute(delete(ItemValues))
+        await s.execute(delete(Goods))
+        await s.execute(delete(Categories))
+        await s.execute(delete(User))
         # Delete custom roles (keep built-in)
-        s.query(Role).filter(Role.name.notin_(['USER', 'ADMIN', 'OWNER'])).delete(synchronize_session=False)
+        await s.execute(delete(Role).where(Role.name.notin_(['USER', 'ADMIN', 'OWNER'])))
 
 
 @pytest.fixture(autouse=True)
@@ -214,25 +218,25 @@ def mock_localize():
 @pytest.fixture
 def user_factory():
     """Factory to create test users."""
-    from bot.database.methods.create import _create_user
-    from bot.database.methods.update import _update_balance
+    from bot.database.methods.create import create_user
+    from bot.database.methods.update import update_balance
+    from bot.database.methods.read import check_user
 
-    def _create(
+    async def _create(
             telegram_id: int = 100001,
             balance: int = 0,
             role_id: int = 1,
             referral_id: int = None,
     ):
-        _create_user(
+        await create_user(
             telegram_id=telegram_id,
             registration_date=datetime.datetime.now(datetime.timezone.utc),
             referral_id=referral_id,
             role=role_id,
         )
         if balance > 0:
-            _update_balance(telegram_id, balance)
-        from bot.database.methods.read import _check_user
-        return _check_user(telegram_id)
+            await update_balance(telegram_id, balance)
+        return await check_user(telegram_id)
 
     return _create
 
@@ -240,10 +244,10 @@ def user_factory():
 @pytest.fixture
 def category_factory():
     """Factory to create categories."""
-    from bot.database.methods.create import _create_category
+    from bot.database.methods.create import create_category
 
-    def _create(name: str = "TestCategory"):
-        _create_category(name)
+    async def _create(name: str = "TestCategory"):
+        await create_category(name)
 
     return _create
 
@@ -251,20 +255,20 @@ def category_factory():
 @pytest.fixture
 def item_factory(category_factory):
     """Factory to create items with optional stock values."""
-    from bot.database.methods.create import _create_item, _add_values_to_item
+    from bot.database.methods.create import create_item, add_values_to_item
 
-    def _create(
+    async def _create(
             name: str = "TestItem",
             price: int = 100,
             category: str = "TestCategory",
             description: str = "Test description",
             values: list = None,
     ):
-        category_factory(category)
-        _create_item(name, description, price, category)
+        await category_factory(category)
+        await create_item(name, description, price, category)
         if values:
             for val, is_inf in values:
-                _add_values_to_item(name, val, is_inf)
+                await add_values_to_item(name, val, is_inf)
 
     return _create
 
@@ -333,9 +337,9 @@ def fsm_context():
 @pytest.fixture
 def role_factory():
     """Factory to create custom roles."""
-    from bot.database.methods.create import _create_role
+    from bot.database.methods.create import create_role
 
-    def _create(name: str = "CUSTOM", permissions: int = 3):
-        return _create_role(name, permissions)
+    async def _create(name: str = "CUSTOM", permissions: int = 3):
+        return await create_role(name, permissions)
 
     return _create

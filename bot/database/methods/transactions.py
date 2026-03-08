@@ -2,64 +2,61 @@ from datetime import datetime, timezone
 from decimal import Decimal
 from uuid import uuid4
 
+from sqlalchemy import select, update
 from sqlalchemy.exc import IntegrityError
 
 from bot.database.models import User, ItemValues, Goods, BoughtGoods, Payments, Operations
 from bot.database import Database
-from bot.database.main import run_sync
 from bot.misc import EnvKeys
 from bot.database.methods.read import invalidate_user_cache, invalidate_stats_cache
 from bot.database.methods.cache_utils import safe_create_task
 from bot.database.methods.audit import log_audit
 
 
-def _buy_item_transaction(telegram_id: int, item_name: str) -> tuple[bool, str, dict | None]:
+async def buy_item_transaction(telegram_id: int, item_name: str) -> tuple[bool, str, dict | None]:
     """
     Complete transactional purchase of goods with checks and locks.
     Returns: (success, message, purchase_data)
     """
-    with Database().session() as s:
+    async with Database().session() as s:
         try:
-            # Starting the transaction
-            s.begin()
-
-            # 1. Block the user to check the balance
-            user = s.query(User).filter(
-                User.telegram_id == telegram_id
-            ).with_for_update().one_or_none()
+            # 1. Lock the user to check the balance
+            user = (await s.execute(
+                select(User).where(User.telegram_id == telegram_id).with_for_update()
+            )).scalars().one_or_none()
 
             if not user:
-                s.rollback()
+                await s.rollback()
                 return False, "user_not_found", None
 
             # 2. Get information about the product
-            goods = s.query(Goods).filter(
-                Goods.name == item_name
-            ).with_for_update().one_or_none()
+            goods = (await s.execute(
+                select(Goods).where(Goods.name == item_name).with_for_update()
+            )).scalars().one_or_none()
 
             if not goods:
-                s.rollback()
+                await s.rollback()
                 return False, "item_not_found", None
 
             price = Decimal(str(goods.price))
 
             # 3. Checking the balance
             if user.balance < price:
-                s.rollback()
+                await s.rollback()
                 return False, "insufficient_funds", None
 
-            # 4. receive and block the goods for purchase
-            item_value = s.query(ItemValues).filter(
-                ItemValues.item_id == goods.id
-            ).with_for_update(skip_locked=True).first()
+            # 4. Receive and lock the goods for purchase
+            item_value = (await s.execute(
+                select(ItemValues).where(ItemValues.item_id == goods.id).with_for_update(skip_locked=True)
+            )).scalars().first()
 
             if not item_value:
-                s.rollback()
+                await s.rollback()
                 return False, "out_of_stock", None
 
             # 5. If the product is not endless, we remove it
             if not item_value.is_infinity:
-                s.delete(item_value)
+                await s.delete(item_value)
 
             # 6. Write off the balance
             user.balance -= price
@@ -71,12 +68,12 @@ def _buy_item_transaction(telegram_id: int, item_name: str) -> tuple[bool, str, 
                 price=price,
                 buyer_id=telegram_id,
                 bought_datetime=datetime.now(timezone.utc),
-                unique_id=uuid4().int >> 65  # 63-bit positive UUID-derived ID
+                unique_id=uuid4().int >> 65
             )
             s.add(bought_item)
 
             # 8. Commit the transaction
-            s.commit()
+            await s.commit()
 
             safe_create_task(invalidate_user_cache(telegram_id))
             safe_create_task(invalidate_stats_cache())
@@ -90,8 +87,8 @@ def _buy_item_transaction(telegram_id: int, item_name: str) -> tuple[bool, str, 
             }
 
         except Exception as e:
-            s.rollback()
-            log_audit(
+            await s.rollback()
+            await log_audit(
                 "purchase_failed",
                 level="WARNING",
                 user_id=telegram_id,
@@ -102,7 +99,7 @@ def _buy_item_transaction(telegram_id: int, item_name: str) -> tuple[bool, str, 
             return False, "transaction_error", None
 
 
-def _process_payment_with_referral(
+async def process_payment_with_referral(
         user_id: int,
         amount: Decimal,
         provider: str,
@@ -114,23 +111,22 @@ def _process_payment_with_referral(
     Returns (success, message)
     """
 
-    with Database().session() as s:
+    async with Database().session() as s:
         try:
-            s.begin()
-
             # 1. Check the idempotency of the payment
-            existing_payment = s.query(Payments).filter(
-                Payments.provider == provider,
-                Payments.external_id == external_id
-            ).with_for_update().first()
+            existing_payment = (await s.execute(
+                select(Payments).where(
+                    Payments.provider == provider,
+                    Payments.external_id == external_id
+                ).with_for_update()
+            )).scalars().first()
 
             if existing_payment:
                 if existing_payment.status == "succeeded":
-                    s.rollback()
+                    await s.rollback()
                     return False, "already_processed"
                 existing_payment.status = "succeeded"
             else:
-                # Create a new payment record
                 payment = Payments(
                     provider=provider,
                     external_id=external_id,
@@ -142,9 +138,9 @@ def _process_payment_with_referral(
                 s.add(payment)
 
             # 2. Update the user's balance
-            user = s.query(User).filter(
-                User.telegram_id == user_id
-            ).with_for_update().one()
+            user = (await s.execute(
+                select(User).where(User.telegram_id == user_id).with_for_update()
+            )).scalars().one()
 
             user.balance += amount
 
@@ -161,14 +157,13 @@ def _process_payment_with_referral(
                 referral_amount = (Decimal(referral_percent) / Decimal(100)) * amount
 
                 if referral_amount > 0:
-                    # Update the referrer's balance
-                    referrer = s.query(User).filter(
-                        User.telegram_id == user.referral_id
-                    ).with_for_update().one_or_none()
+                    referrer = (await s.execute(
+                        select(User).where(User.telegram_id == user.referral_id).with_for_update()
+                    )).scalars().one_or_none()
 
                     if referrer:
                         referrer.balance += referral_amount
-                        log_audit(
+                        await log_audit(
                             "referral_bonus",
                             user_id=user.referral_id,
                             resource_type="User",
@@ -176,7 +171,6 @@ def _process_payment_with_referral(
                             details=f"paid={amount}, bonus={referral_amount}",
                         )
 
-                        # Create a referral credit record
                         from bot.database.models import ReferralEarnings
                         earning = ReferralEarnings(
                             referrer_id=user.referral_id,
@@ -188,7 +182,7 @@ def _process_payment_with_referral(
 
             referrer_id = user.referral_id if referral_percent > 0 else None
 
-            s.commit()
+            await s.commit()
 
             safe_create_task(invalidate_user_cache(user_id))
             safe_create_task(invalidate_stats_cache())
@@ -198,12 +192,12 @@ def _process_payment_with_referral(
             return True, "success"
 
         except IntegrityError:
-            s.rollback()
+            await s.rollback()
             return False, "already_processed"
 
         except Exception as e:
-            s.rollback()
-            log_audit(
+            await s.rollback()
+            await log_audit(
                 "payment_failed",
                 level="WARNING",
                 user_id=user_id,
@@ -213,27 +207,25 @@ def _process_payment_with_referral(
             return False, "payment_error"
 
 
-def _admin_balance_change(telegram_id: int, amount: int) -> tuple[bool, str]:
+async def admin_balance_change(telegram_id: int, amount: int) -> tuple[bool, str]:
     """
     Atomic admin balance change (top-up or deduction) with operation record.
     amount > 0 for top-up, amount < 0 for deduction.
     Returns (success, message).
     Raises ValueError if insufficient funds for deduction.
     """
-    with Database().session() as s:
+    async with Database().session() as s:
         try:
-            s.begin()
-
-            user = s.query(User).filter(
-                User.telegram_id == telegram_id
-            ).with_for_update().one_or_none()
+            user = (await s.execute(
+                select(User).where(User.telegram_id == telegram_id).with_for_update()
+            )).scalars().one_or_none()
 
             if not user:
-                s.rollback()
+                await s.rollback()
                 return False, "user_not_found"
 
             if amount < 0 and user.balance < abs(amount):
-                s.rollback()
+                await s.rollback()
                 raise ValueError("insufficient_funds")
 
             user.balance += amount
@@ -245,7 +237,7 @@ def _admin_balance_change(telegram_id: int, amount: int) -> tuple[bool, str]:
             )
             s.add(operation)
 
-            s.commit()
+            await s.commit()
 
             safe_create_task(invalidate_user_cache(telegram_id))
             safe_create_task(invalidate_stats_cache())
@@ -256,8 +248,8 @@ def _admin_balance_change(telegram_id: int, amount: int) -> tuple[bool, str]:
             raise
 
         except Exception as e:
-            s.rollback()
-            log_audit(
+            await s.rollback()
+            await log_audit(
                 "admin_balance_change_failed",
                 level="WARNING",
                 user_id=telegram_id,
@@ -265,9 +257,3 @@ def _admin_balance_change(telegram_id: int, amount: int) -> tuple[bool, str]:
                 details=f"amount={amount}, error={e}",
             )
             return False, "balance_change_error"
-
-
-# Async public API
-buy_item_transaction = run_sync(_buy_item_transaction)
-process_payment_with_referral = run_sync(_process_payment_with_referral)
-admin_balance_change = run_sync(_admin_balance_change)

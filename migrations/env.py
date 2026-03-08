@@ -1,3 +1,4 @@
+import asyncio
 from pathlib import Path
 from dotenv import load_dotenv
 
@@ -6,7 +7,8 @@ load_dotenv(env_path, encoding='utf-8')
 
 from logging.config import fileConfig
 from alembic import context
-from sqlalchemy import create_engine, pool
+from sqlalchemy import pool
+from sqlalchemy.ext.asyncio import create_async_engine
 
 import bot.database.models.main  # noqa: F401
 from bot.database.main import Database
@@ -36,16 +38,23 @@ def run_migrations_offline() -> None:
         context.run_migrations()
 
 
-def run_migrations_online() -> None:
-    url = get_url()
-    if config:
-        config.set_main_option("sqlalchemy.url", url)
+def do_run_migrations(connection) -> None:
+    context.configure(connection=connection, target_metadata=target_metadata)
+    with context.begin_transaction():
+        context.run_migrations()
 
-    connectable = create_engine(dsn(), poolclass=pool.NullPool)
-    with connectable.connect() as connection:
-        context.configure(connection=connection, target_metadata=target_metadata)
-        with context.begin_transaction():
-            context.run_migrations()
+
+async def run_migrations_online_async() -> None:
+    connectable = create_async_engine(dsn(), poolclass=pool.NullPool)
+
+    async with connectable.connect() as connection:
+        await connection.run_sync(do_run_migrations)
+
+    await connectable.dispose()
+
+
+def run_migrations_online() -> None:
+    asyncio.run(run_migrations_online_async())
 
 
 if context.is_offline_mode():

@@ -64,7 +64,7 @@ async def delete_str_item(message: Message, state):
             reply_markup=back('goods_management')
         )
         admin_info = await message.bot.get_chat(message.from_user.id)
-        log_audit("delete_item", user_id=message.from_user.id, resource_type="Item", resource_id=item_name, details=f"admin={admin_info.first_name}")
+        await log_audit("delete_item", user_id=message.from_user.id, resource_type="Item", resource_id=item_name, details=f"admin={admin_info.first_name}")
     await state.clear()
 
 
@@ -343,4 +343,4 @@ async def process_delete_item_from_position(call: CallbackQuery, state: FSMConte
         )
 
     admin_info = await call.message.bot.get_chat(call.from_user.id)
-    log_audit("delete_item_value", user_id=call.from_user.id, resource_type="ItemValue", resource_id=str(item_id), details=f"admin={admin_info.first_name}, position={position_name or '<?>'}")
+    await log_audit("delete_item_value", user_id=call.from_user.id, resource_type="ItemValue", resource_id=str(item_id), details=f"admin={admin_info.first_name}, position={position_name or '<?>'}")

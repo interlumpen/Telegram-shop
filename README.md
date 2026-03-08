@@ -64,7 +64,8 @@ via the command line (CLI) without the need for a shell and advanced monitoring 
     - Built-in roles: USER, ADMIN, OWNER
     - Custom roles: Create roles with granular permission bitmasks via admin panel
     - Role management: Create, edit, delete roles; assign roles to users
-    - Permission-safe: Cannot create/assign roles exceeding own permissions
+    - Permission-safe: Bitwise subset validation — cannot create/assign roles exceeding own permissions
+    - Permission-aware UI: Admin panel shows only buttons matching user's actual permissions
 - **Comprehensive Admin Panel**:
     - Real-time statistics dashboard
     - User management with balance control
@@ -82,9 +83,9 @@ via the command line (CLI) without the need for a shell and advanced monitoring 
 
 ### Performance & Reliability
 
-- **Advanced Connection Pooling**: Optimized PostgreSQL connection management with QueuePool
-    - 20 persistent connections with up to 40 overflow connections
-    - Automatic connection recycling and timeout handling
+- **Fully Async Database Layer**: Native async PostgreSQL via `asyncpg` + async SQLAlchemy
+    - Zero thread-pool overhead — all DB operations run natively on the event loop
+    - Async connection pooling with automatic recycling and timeout handling
     - Graceful handling of high-load scenarios
 - **Optional Redis Caching**: Multi-layer caching system for optimal performance (enable with `REDIS_ENABLED=1`)
     - User role caching (15-minute TTL)
@@ -96,8 +97,6 @@ via the command line (CLI) without the need for a shell and advanced monitoring 
     - When disabled: bot uses in-memory FSM storage and queries the database directly
 - **Performance Optimizations**: Up to 60% reduction in database queries for read operations (with Redis enabled)
 - **Optimized Queries**: JOIN-based queries instead of N+1 patterns, SQL-level sorting for paginated results
-- **Non-Blocking Database Layer**: All synchronous DB operations execute in a thread pool
-  via `run_sync()` decorator, keeping the asyncio event loop responsive under load
 
 ### Web Admin Panel & Monitoring
 
@@ -156,13 +155,13 @@ via the command line (CLI) without the need for a shell and advanced monitoring 
 - **SQL Injection Protection**: Parameterized queries via SQLAlchemy ORM (no raw SQL)
 - **XSS Prevention**: HTML sanitization for broadcast messages and category names
 - **Purchase Intent Verification**: Item name stored in server-side FSM state, verified on buy
-- **Replay Attack Prevention**: Timestamp validation on callbacks
+- **Replay Attack Prevention**: Timestamp validation on transactional callbacks (buy, pay, balance operations)
 
 #### 3. **Authentication & Authorization**
 
 - Bot detection and blocking
 - Telegram ID-based authentication
-- Permission bitmask access control (USE, BROADCAST, SETTINGS_MANAGE, etc.)
+- Permission bitmask access control with bitwise subset validation (USE, BROADCAST, SETTINGS_MANAGE, etc.)
 - Role caching with TTL for performance
 
 #### 4. **Payment Security**
@@ -220,11 +219,11 @@ via the command line (CLI) without the need for a shell and advanced monitoring 
 - **Transaction Script**: Business logic encapsulation
 - **Middleware Pattern**: Metrics collection and event tracking via AnalyticsMiddleware
 - **Conversion Funnel**: Purchase funnel tracking (view_shop → view_item → purchase)
-- **Thread Pool Offloading**: Synchronous DB calls wrapped with `run_sync()` to avoid blocking the event loop
+- **Natively Async DB**: All database operations use async SQLAlchemy with `asyncpg`, no thread-pool bridges
 
 ### Performance Architecture
 
-- **Connection Pooling**: Advanced PostgreSQL connection management with automatic recycling
+- **Async Connection Pooling**: Native async PostgreSQL connection management with automatic recycling
 - **Multi-Level Caching**: Optional Redis-based intelligent caching with TTL-based expiration
 - **Cache Invalidation**: Smart cache clearing on data modifications
 - **Concurrent Load Handling**: Optimized for high-traffic scenarios with connection queuing
@@ -236,7 +235,7 @@ via the command line (CLI) without the need for a shell and advanced monitoring 
 
 - **Language**: Python 3.11+
 - **Framework**: Aiogram 3.22+ (async Telegram Bot API)
-- **Database**: PostgreSQL 16+ with SQLAlchemy 2.0
+- **Database**: PostgreSQL 16+ with async SQLAlchemy 2.0 (`asyncpg` driver)
 - **Cache/Storage**: Redis 7+ (optional — FSM states, intelligent data caching)
 - **Migrations**: Alembic
 
@@ -262,7 +261,7 @@ via the command line (CLI) without the need for a shell and advanced monitoring 
 
 - **Containerization**: Docker & Docker Compose
 - **Logging**: Rotating file handlers + structured database audit log (`audit_log` table)
-- **Testing**: Pytest with async support
+- **Testing**: Pytest with `pytest-asyncio` (async SQLite via `aiosqlite`)
 - **CI/CD Ready**: Environment-based configuration
 - **Health Checks**: Built-in health monitoring endpoints
 
@@ -365,7 +364,7 @@ disabled. The bot remains fully functional but without caching optimizations.
 | `POSTGRES_PASSWORD` | PostgreSQL password                                     | **Required**                             |
 | `POSTGRES_HOST`     | PostgreSQL host (configure this only for manual deploy) | localhost (for manual) / db (for docker) |
 | `DB_PORT`           | PostgreSQL port                                         | `5432`                                   |
-| `DB_DRIVER`         | Database driver                                         | `postgresql+psycopg`                     |
+| `DB_DRIVER`         | Database driver                                         | `postgresql+asyncpg`                     |
 
 </details>
 
@@ -599,7 +598,7 @@ The bot includes a recovery system for stuck payments:
 <details>
 <summary>🎛️ Admin Features (click to expand)</summary>
 
-Available for users with ADMIN/OWNER role:
+Available for users with admin permissions (built-in ADMIN/OWNER or custom roles):
 
 #### Admin Panel
 
@@ -626,7 +625,8 @@ Available for users with ADMIN/OWNER role:
 
 - Create custom roles with granular permission bitmasks (USE, BROADCAST, SETTINGS, USERS, SHOP, ADMINS, OWNER)
 - Edit and delete custom roles (built-in USER/ADMIN/OWNER cannot be deleted)
-- Permission-safe: cannot create or assign roles with permissions exceeding your own
+- Permission-aware admin panel: each user sees only the buttons their permissions allow
+- Permission-safe: bitwise subset validation prevents creating or assigning roles exceeding your own
 
 #### Broadcasting & Analytics
 
@@ -747,7 +747,7 @@ await recovery_manager.recover_pending_payments()
 from bot.database.methods.audit import log_audit
 
 # Dual-write: logs to both rotating file and audit_log DB table
-log_audit(
+await log_audit(
     "purchase",  # action name
     level="INFO",  # INFO / WARNING / ERROR
     user_id=123456789,  # who performed the action
@@ -775,21 +775,27 @@ await invalidate_user_cache(telegram_id)
 await invalidate_item_cache(item_name, category_name)  # category_name is optional
 ```
 
-### Connection Pool Configuration
+### Async Engine Configuration
 
 ```python
-engine = create_engine(
-    DATABASE_URL,
+from sqlalchemy.ext.asyncio import create_async_engine
+
+engine = create_async_engine(
+    DATABASE_URL,  # postgresql+asyncpg://...
     pool_size=20,  # Base pool size
     max_overflow=40,  # Additional connections during peaks
     pool_recycle=3600,  # Refresh connections every hour
-    pool_timeout=30  # Max wait time for connection
+    pool_timeout=30,  # Max wait time for connection
+    connect_args={
+        "timeout": 10,
+        "command_timeout": 30,
+    },
 )
 ```
 
 ## 🧪 Testing
 
-The project includes a comprehensive test suite with **429 tests** covering all major components, business logic, and
+The project includes a comprehensive test suite with **448 tests** covering all major components, business logic, and
 edge cases. Tests use SQLite in-memory with real SQL queries, and a dict-based FakeCacheManager for realistic cache
 behavior. Coverage is measured automatically on every run via `pytest-cov`.
 
@@ -813,9 +819,9 @@ pytest tests/ --cov-report=html
 | Module                       | Tests   | Coverage                                                          |
 |------------------------------|---------|-------------------------------------------------------------------|
 | `test_database_crud.py`      | 71      | CRUD: users, roles, categories, items, balance, stats             |
-| `test_role_management.py`    | 43      | Role CRUD methods, role management handlers, helpers              |
+| `test_role_management.py`    | 53      | Role CRUD, handlers, helpers, Permission bitwise, regressions     |
 | `test_validators.py`         | 44      | Input validation, control chars, XSS, Pydantic models             |
-| `test_middleware.py`         | 36      | Rate limiting, suspicious patterns, critical actions, auth        |
+| `test_middleware.py`         | 45      | Rate limiting, suspicious patterns, critical/replay actions, auth |
 | `test_keyboards.py`          | 31      | All inline keyboard generators incl. admin console                |
 | `test_admin_handlers.py`     | 27      | User management, assign role, balance edge cases, categories      |
 | `test_transactions.py`       | 21      | Purchase & payment transactions, idempotency, admin balance       |
@@ -834,14 +840,14 @@ pytest tests/ --cov-report=html
 | `test_recovery.py`           | 7       | RecoveryManager lifecycle, payment recovery, timeout, skip        |
 | `test_login_rate_limiter.py` | 6       | LoginRateLimiter: blocking, reset, expiry, IP isolation           |
 | `test_audit.py`              | 4       | log_audit: DB record creation, levels, optional fields            |
-| **Total**                    | **429** | **Complete system coverage**                                      |
+| **Total**                    | **448** | **Complete system coverage**                                      |
 
 ### Test Architecture
 
-- **`conftest.py`** — shared fixtures: SQLite in-memory DB (StaticPool), FakeCacheManager (dict + fnmatch),
-  FakeFSMContext, factory fixtures (user, category, item), mock builders (CallbackQuery, Message)
+- **`conftest.py`** — shared fixtures: async SQLite in-memory DB via `aiosqlite` (StaticPool), FakeCacheManager (dict +
+  fnmatch), FakeFSMContext, factory fixtures (user, category, item), mock builders (CallbackQuery, Message)
 - **Mocks only for external services**: Telegram Bot API, CryptoPay API
-- **Real SQL queries** via SQLAlchemy against SQLite — no mocked DB sessions
+- **Real async SQL queries** via async SQLAlchemy against SQLite — no mocked DB sessions
 
 The test suite validates:
 
@@ -861,8 +867,9 @@ The test suite validates:
 
 * ✅ **Rate limiting** — global limits, action-specific limits, ban after exceed, ban expiry
 * ✅ **Suspicious pattern detection** — XSS/script injection, length-based DoS protection
-* ✅ **Critical action detection** — audit logging for buy/pay/delete/admin operations
+* ✅ **Critical action detection** — audit logging for buy/pay/delete/admin operations, replay protection for transactional actions
 * ✅ **Authentication middleware** — blocked user rejection, bot rejection
+* ✅ **Permission bitmask helpers** — `is_subset`, `has_any_admin_perm` bitwise validation
 * ✅ **Admin panel login rate limiting** — block after max attempts, lockout expiry, IP isolation
 
 </details>
@@ -887,8 +894,8 @@ The test suite validates:
 * ✅ **Shop handlers** — category browsing, item list, item info (limited/unlimited), bought items
 * ✅ **Admin handlers** — check user, assign role, replenish/deduct balance, block/unblock, category CRUD, item
   delete
-* ✅ **Role management** — create/edit/delete roles, permission toggles, assign role to users, permission escalation
-  prevention
+* ✅ **Role management** — create/edit/delete roles, permission toggles, assign role to users, bitwise escalation
+  prevention, permission-aware admin keyboard
 * ✅ **Referral handlers** — referral page, view referrals list, earnings, earning detail
 
 </details>
@@ -922,9 +929,9 @@ The test suite validates:
 
 ### Test Quality Features
 
-- **Real DB queries**: SQLite in-memory with StaticPool — tests catch real SQL issues
+- **Real async DB queries**: Async SQLite in-memory via `aiosqlite` with StaticPool — tests catch real SQL issues
 - **Realistic cache**: FakeCacheManager with pattern-based invalidation (fnmatch)
-- **Async testing**: Full asyncio support with `pytest-asyncio`
+- **Async testing**: Full asyncio support with `pytest-asyncio` (auto mode — no manual `@pytest.mark.asyncio` needed)
 - **Per-test isolation**: Automatic data cleanup between tests (FK-ordered delete)
 - **Factory pattern**: Reusable `user_factory`, `category_factory`, `item_factory` fixtures
 - **Security Validation**: XSS detection, critical action audit, and input sanitization testing

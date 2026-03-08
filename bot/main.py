@@ -21,7 +21,7 @@ from bot.misc.caching import CacheScheduler
 from bot.misc.caching import get_redis_storage
 from bot.misc.services import RecoveryManager
 from bot.misc.metrics import init_metrics, get_metrics, AnalyticsMiddleware
-from bot.database.methods.cache_utils import set_main_loop
+from bot.database.main import Database as _Database
 
 # Global variables for components
 recovery_manager = None
@@ -142,6 +142,9 @@ async def __on_shutdown(dp: Dispatcher, bot: Bot) -> None:
     if admin_server:
         admin_server.should_exit = True
 
+    # Close database engine
+    await _Database().dispose()
+
     logging.info("Shutdown completed")
 
 
@@ -210,9 +213,6 @@ async def start_bot() -> None:
             "Using MemoryStorage - FSM states will be lost on restart! "
             "Consider setting up Redis for production."
         )
-
-    # Store reference to the main event loop for worker threads
-    set_main_loop(asyncio.get_running_loop())
 
     # Creating a dispatcher
     dp = Dispatcher(storage=storage)

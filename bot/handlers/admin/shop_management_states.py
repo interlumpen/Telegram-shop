@@ -337,6 +337,6 @@ async def process_item_show(message: Message, state: FSMContext):
             localize("errors.invalid_data"),
             reply_markup=back("show_bought_item")
         )
-        log_audit("search_error", level="ERROR", details=str(e))
+        await log_audit("search_error", level="ERROR", details=str(e))
 
     await state.clear()

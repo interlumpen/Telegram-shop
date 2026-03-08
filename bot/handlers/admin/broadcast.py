@@ -73,7 +73,7 @@ async def broadcast_messages(message: Message, state: FSMContext):
                     reply_markup=back("send_message")
                 )
             except (TelegramBadRequest, TelegramForbiddenError) as e:
-                log_audit("broadcast_progress_fail", level="WARNING", details=str(e))
+                await log_audit("broadcast_progress_fail", level="WARNING", details=str(e))
 
         # Start the mailing
         broadcast_manager = BroadcastManager(
@@ -105,14 +105,14 @@ async def broadcast_messages(message: Message, state: FSMContext):
 
         # Logging
         user_info = await message.bot.get_chat(message.from_user.id)
-        log_audit("broadcast_sent", user_id=user_info.id, details=f"admin={user_info.first_name}, delivered={stats.sent}/{stats.total}, duration={duration}s")
+        await log_audit("broadcast_sent", user_id=user_info.id, details=f"admin={user_info.first_name}, delivered={stats.sent}/{stats.total}, duration={duration}s")
 
     except Exception as e:
         await message.answer(
             localize("errors.invalid_data"),
             reply_markup=back("send_message")
         )
-        log_audit("broadcast_error", level="ERROR", user_id=message.from_user.id, details=str(e))
+        await log_audit("broadcast_error", level="ERROR", user_id=message.from_user.id, details=str(e))
 
     await state.clear()
 

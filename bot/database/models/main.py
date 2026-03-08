@@ -3,7 +3,7 @@ from typing import Any
 
 from sqlalchemy import (
     Column, Integer, String, BigInteger, ForeignKey, Text, Boolean,
-    DateTime, Numeric, Index, UniqueConstraint, CheckConstraint, func
+    DateTime, Numeric, Index, UniqueConstraint, CheckConstraint, func, select
 )
 from bot.database.main import Database
 from sqlalchemy.orm import relationship
@@ -18,6 +18,16 @@ class Permission:
     ADMINS_MANAGE = 32
     OWN = 64
 
+    @staticmethod
+    def is_subset(perms: int, of: int) -> bool:
+        """True if every bit in `perms` is also set in `of`."""
+        return (perms & ~of) == 0
+
+    @staticmethod
+    def has_any_admin_perm(perms: int) -> bool:
+        """True if `perms` has any permission beyond USE."""
+        return (perms & ~Permission.USE) != 0
+
 
 class Role(Database.BASE):
     __tablename__ = 'roles'
@@ -25,7 +35,7 @@ class Role(Database.BASE):
     name = Column(String(64), unique=True)
     default = Column(Boolean, default=False, index=True)
     permissions = Column(Integer)
-    users = relationship('User', backref='role', lazy='select')
+    users = relationship('User', backref='role', lazy='raise')
 
     def __init__(self, name: str, permissions=None, **kwargs):
         super(Role, self).__init__(**kwargs)
@@ -35,7 +45,7 @@ class Role(Database.BASE):
         self.permissions = permissions
 
     @staticmethod
-    def insert_roles():
+    async def insert_roles():
         roles = {
             'USER': [Permission.USE],
             'ADMIN': [Permission.USE, Permission.BROADCAST,
@@ -45,9 +55,10 @@ class Role(Database.BASE):
                       Permission.ADMINS_MANAGE, Permission.OWN],
         }
         default_role = 'USER'
-        with Database().session() as s:
+        async with Database().session() as s:
             for r, perms in roles.items():
-                role = s.query(Role).filter_by(name=r).first()
+                result = await s.execute(select(Role).filter_by(name=r))
+                role = result.scalars().first()
                 if role is None:
                     role = Role(name=r)
                     s.add(role)
@@ -82,8 +93,8 @@ class User(Database.BASE):
     referral_id = Column(BigInteger, ForeignKey('users.telegram_id', ondelete="SET NULL"), nullable=True, index=True)
     registration_date = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
     is_blocked = Column(Boolean, default=False, index=True)
-    user_operations = relationship("Operations", back_populates="user_telegram_id")
-    user_goods = relationship("BoughtGoods", back_populates="user_telegram_id")
+    user_operations = relationship("Operations", back_populates="user_telegram_id", lazy='raise')
+    user_goods = relationship("BoughtGoods", back_populates="user_telegram_id", lazy='raise')
 
     __table_args__ = (
         CheckConstraint('referral_id != telegram_id', name='ck_users_no_self_referral'),
@@ -93,12 +104,14 @@ class User(Database.BASE):
     referral_earnings_received = relationship(
         "ReferralEarnings",
         foreign_keys="ReferralEarnings.referrer_id",
-        back_populates="referrer"
+        back_populates="referrer",
+        lazy='raise',
     )
     referral_earnings_generated = relationship(
         "ReferralEarnings",
         foreign_keys="ReferralEarnings.referral_id",
-        back_populates="referral"
+        back_populates="referral",
+        lazy='raise',
     )
 
     def __init__(self, telegram_id: int, registration_date: datetime.datetime, balance=0, referral_id=None,
@@ -115,7 +128,7 @@ class Categories(Database.BASE):
     __tablename__ = 'categories'
     id = Column(Integer, primary_key=True)
     name = Column(String(100), unique=True, nullable=False)
-    items = relationship("Goods", back_populates="category")
+    items = relationship("Goods", back_populates="category", lazy='raise')
 
     def __init__(self, name: str, **kw: Any):
         super().__init__(**kw)
@@ -129,8 +142,8 @@ class Goods(Database.BASE):
     price = Column(Numeric(12, 2), nullable=False)
     description = Column(Text, nullable=False)
     category_id = Column(Integer, ForeignKey('categories.id', ondelete="CASCADE"), nullable=False, index=True)
-    category = relationship("Categories", back_populates="items")
-    values = relationship("ItemValues", back_populates="item")
+    category = relationship("Categories", back_populates="items", lazy='raise')
+    values = relationship("ItemValues", back_populates="item", lazy='raise')
 
     def __init__(self, name: str, price, description: str, category_id: int, **kw: Any):
         super().__init__(**kw)
@@ -146,7 +159,7 @@ class ItemValues(Database.BASE):
     item_id = Column(Integer, ForeignKey('goods.id', ondelete="CASCADE"), nullable=False, index=True)
     value = Column(Text, nullable=True)
     is_infinity = Column(Boolean, nullable=False)
-    item = relationship("Goods", back_populates="values")
+    item = relationship("Goods", back_populates="values", lazy='raise')
 
     __table_args__ = (
         UniqueConstraint('item_id', 'value', name='uq_item_value_per_item'),
@@ -169,7 +182,7 @@ class BoughtGoods(Database.BASE):
     buyer_id = Column(BigInteger, ForeignKey('users.telegram_id', ondelete="SET NULL"), nullable=True, index=True)
     bought_datetime = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
     unique_id = Column(BigInteger, nullable=False, unique=True)
-    user_telegram_id = relationship("User", back_populates="user_goods")
+    user_telegram_id = relationship("User", back_populates="user_goods", lazy='raise')
 
     __table_args__ = (
         Index('ix_bought_goods_datetime', 'bought_datetime'),
@@ -192,7 +205,7 @@ class Operations(Database.BASE):
     user_id = Column(BigInteger, ForeignKey('users.telegram_id', ondelete="SET NULL"), nullable=True, index=True)
     operation_value = Column(Numeric(12, 2), nullable=False)
     operation_time = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
-    user_telegram_id = relationship("User", back_populates="user_operations")
+    user_telegram_id = relationship("User", back_populates="user_operations", lazy='raise')
 
     __table_args__ = (
         Index('ix_operations_time', 'operation_time'),
@@ -236,12 +249,14 @@ class ReferralEarnings(Database.BASE):
     referrer = relationship(
         "User",
         foreign_keys="ReferralEarnings.referrer_id",
-        back_populates="referral_earnings_received"
+        back_populates="referral_earnings_received",
+        lazy='raise',
     )
     referral = relationship(
         "User",
         foreign_keys="ReferralEarnings.referral_id",
-        back_populates="referral_earnings_generated"
+        back_populates="referral_earnings_generated",
+        lazy='raise',
     )
 
     __table_args__ = (
@@ -281,11 +296,6 @@ class AuditLog(Database.BASE):
 
 
 async def register_models():
-    import asyncio
-    loop = asyncio.get_running_loop()
-    await loop.run_in_executor(None, _register_models_sync)
-
-
-def _register_models_sync():
-    Database.BASE.metadata.create_all(Database().engine)
-    Role.insert_roles()
+    async with Database().engine.begin() as conn:
+        await conn.run_sync(Database.BASE.metadata.create_all)
+    await Role.insert_roles()

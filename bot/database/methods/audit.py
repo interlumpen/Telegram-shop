@@ -11,7 +11,7 @@ _LOG_LEVELS = {
 }
 
 
-def log_audit(
+async def log_audit(
     action: str,
     *,
     level: str = "INFO",
@@ -21,13 +21,7 @@ def log_audit(
     details: str | None = None,
     ip_address: str | None = None,
 ) -> None:
-    """Write audit entry to both the log file and the database.
-
-    NOTE: This function is intentionally kept synchronous so it can be called
-    from both sync (inside transactions/executor) and async contexts.
-    Callers in async context should use ``run_in_executor`` if needed, but
-    audit logging is typically fire-and-forget and fast enough to inline.
-    """
+    """Write audit entry to both the log file and the database."""
     # 1. File log
     log_level = _LOG_LEVELS.get(level, logging.INFO)
     parts = [f"action={action}"]
@@ -54,7 +48,7 @@ def log_audit(
             details=details,
             ip_address=ip_address,
         )
-        with Database().session() as s:
+        async with Database().session() as s:
             s.add(entry)
     except Exception:
         audit_logger.warning("Failed to write audit entry to DB", exc_info=True)

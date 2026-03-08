@@ -182,7 +182,7 @@ class RateLimitMiddleware(BaseMiddleware):
             else:
                 from bot.database.methods import check_role
                 role = await check_role(user_id) or 0
-            return role > Permission.USE
+            return Permission.has_any_admin_perm(role)
         except Exception:
             return False
 
