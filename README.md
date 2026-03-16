@@ -540,7 +540,7 @@ Open in browser: http://localhost:9090/admin
 1. **Add bot to channel** (if using news channel feature):
     - Add your bot to the channel specified in `CHANNEL_URL` and `CHANNEL_ID`
     - Grant administrator rights with "Post Messages" permission
-    - 
+
 The bot will send relevant messages to your channel when adding products.
 
 ![Stock](assets/stock.png)
@@ -677,6 +677,7 @@ Available for users with admin permissions (built-in ADMIN/OWNER or custom roles
 - Categories, products, stock control
 
 ![Categories](assets/categories_management_menu_picture.png)
+
 ![Products](assets/goods_management_menu_picture.png)
 
 #### User Management
