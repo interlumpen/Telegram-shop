@@ -13,7 +13,7 @@ from bot.states import CategoryFSM
 router = Router()
 
 
-@router.callback_query(F.data == 'categories_management', HasPermissionFilter(permission=Permission.SHOP_MANAGE))
+@router.callback_query(F.data == 'categories_management', HasPermissionFilter(permission=Permission.CATALOG_MANAGE))
 async def categories_callback_handler(call: CallbackQuery):
     """
     Opens the categories management submenu.
@@ -30,7 +30,7 @@ async def categories_callback_handler(call: CallbackQuery):
     )
 
 
-@router.callback_query(F.data == 'add_category', HasPermissionFilter(permission=Permission.SHOP_MANAGE))
+@router.callback_query(F.data == 'add_category', HasPermissionFilter(permission=Permission.CATALOG_MANAGE))
 async def add_category_callback_handler(call: CallbackQuery, state):
     """
     Asks admin for a new category name.
@@ -75,7 +75,7 @@ async def process_category_for_add(message: Message, state):
     await state.clear()
 
 
-@router.callback_query(F.data == 'delete_category', HasPermissionFilter(permission=Permission.SHOP_MANAGE))
+@router.callback_query(F.data == 'delete_category', HasPermissionFilter(permission=Permission.CATALOG_MANAGE))
 async def delete_category_callback_handler(call: CallbackQuery, state):
     """
     Asks admin for a category name to delete.
@@ -112,7 +112,7 @@ async def process_category_for_delete(message: Message, state):
     await state.clear()
 
 
-@router.callback_query(F.data == 'update_category', HasPermissionFilter(permission=Permission.SHOP_MANAGE))
+@router.callback_query(F.data == 'update_category', HasPermissionFilter(permission=Permission.CATALOG_MANAGE))
 async def update_category_callback_handler(call: CallbackQuery, state):
     """
     Asks admin for current category name before renaming.

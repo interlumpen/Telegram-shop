@@ -19,7 +19,7 @@ from bot.states import AddItemFSM
 router = Router()
 
 
-@router.callback_query(F.data == 'add_item', HasPermissionFilter(permission=Permission.SHOP_MANAGE))
+@router.callback_query(F.data == 'add_item', HasPermissionFilter(permission=Permission.CATALOG_MANAGE))
 async def add_item_callback_handler(call: CallbackQuery, state):
     """
     Ask administrator for a new position name.
@@ -215,6 +215,7 @@ async def finish_adding_items_callback_handler(call: CallbackQuery, state):
 
     admin_info = await call.message.bot.get_chat(call.from_user.id)
     await log_audit("create_item", user_id=call.from_user.id, resource_type="Item", resource_id=item_name, details=f"admin={admin_info.first_name}")
+
     await state.clear()
 
 
@@ -263,4 +264,5 @@ async def finish_adding_item_callback_handler(message: Message, state):
     await message.answer(localize('admin.goods.add.single.created'), reply_markup=back('goods_management'))
     admin_info = await message.bot.get_chat(message.from_user.id)
     await log_audit("create_item", user_id=message.from_user.id, resource_type="Item", resource_id=item_name, details=f"admin={admin_info.first_name}, infinite=true")
+
     await state.clear()

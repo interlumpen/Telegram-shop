@@ -54,12 +54,12 @@ class TestRoleCRUDMethods:
             assert (r['permissions'] & ~1) == 0
 
     async def test_get_roles_with_max_perms_all(self):
-        roles = await get_roles_with_max_perms(127)  # All permissions
+        roles = await get_roles_with_max_perms(1023)  # All permissions
         assert len(roles) >= 3  # At least USER, ADMIN, OWNER
 
     async def test_get_roles_with_max_perms_includes_custom(self, role_factory):
         await role_factory("HELPER", 3)
-        roles = await get_roles_with_max_perms(127)
+        roles = await get_roles_with_max_perms(1023)
         names = [r['name'] for r in roles]
         assert 'HELPER' in names
 

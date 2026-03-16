@@ -4,8 +4,9 @@ from sqlalchemy import desc
 from bot.database import Database
 from bot.database.models import (
     Categories, Goods, User, BoughtGoods, ItemValues,
-    ReferralEarnings, Role
+    ReferralEarnings, Role, Operations
 )
+from bot.database.models.main import PromoCodes, Reviews
 
 
 async def query_categories(offset: int = 0, limit: int = 10, count_only: bool = False) -> Any:
@@ -163,3 +164,102 @@ async def query_all_referral_earnings(referrer_id: int, offset: int = 0, limit: 
             base.order_by(desc(ReferralEarnings.created_at)).offset(offset).limit(limit)
         )
         return result.scalars().all()
+
+
+async def query_promo_codes(offset: int = 0, limit: int = 10, count_only: bool = False) -> Any:
+    """Query promo codes with pagination"""
+    async with Database().session() as s:
+        if count_only:
+            return (await s.execute(select(func.count(PromoCodes.id)))).scalar() or 0
+        result = await s.execute(
+            select(PromoCodes)
+            .order_by(desc(PromoCodes.created_at))
+            .offset(offset)
+            .limit(limit)
+        )
+        rows = result.scalars().all()
+        return [
+            {
+                'id': p.id, 'code': p.code, 'discount_type': p.discount_type,
+                'discount_value': p.discount_value, 'max_uses': p.max_uses,
+                'current_uses': p.current_uses, 'is_active': p.is_active,
+                'expires_at': p.expires_at, 'created_at': p.created_at,
+            }
+            for p in rows
+        ]
+
+
+
+async def query_user_operations_history(user_id: int, offset: int = 0, limit: int = 10,
+                                        count_only: bool = False) -> Any:
+    """Query user's full operations history (topups, purchases, referral bonuses) as UNION ALL"""
+    from sqlalchemy import literal_column, union_all, literal
+    async with Database().session() as s:
+        # 1. Top-ups (operations with positive value)
+        topups = (
+            select(
+                Operations.id,
+                literal('topup').label('type'),
+                Operations.operation_value.label('amount'),
+                Operations.operation_time.label('date'),
+            )
+            .where(Operations.user_id == user_id, Operations.operation_value > 0)
+        )
+        # 2. Purchases
+        purchases = (
+            select(
+                BoughtGoods.id,
+                literal('purchase').label('type'),
+                (-BoughtGoods.price).label('amount'),
+                BoughtGoods.bought_datetime.label('date'),
+            )
+            .where(BoughtGoods.buyer_id == user_id)
+        )
+        # 3. Referral earnings
+        referrals = (
+            select(
+                ReferralEarnings.id,
+                literal('referral').label('type'),
+                ReferralEarnings.amount.label('amount'),
+                ReferralEarnings.created_at.label('date'),
+            )
+            .where(ReferralEarnings.referrer_id == user_id)
+        )
+
+        combined = union_all(topups, purchases, referrals).subquery()
+
+        if count_only:
+            return (await s.execute(select(func.count()).select_from(combined))).scalar() or 0
+
+        result = await s.execute(
+            select(combined).order_by(combined.c.date.desc()).offset(offset).limit(limit)
+        )
+        return [
+            {
+                'id': row.id,
+                'type': row.type,
+                'amount': row.amount,
+                'date': row.date,
+            }
+            for row in result.all()
+        ]
+
+
+async def query_item_reviews(item_name: str, offset: int = 0, limit: int = 10,
+                             count_only: bool = False) -> Any:
+    """Query reviews for an item with pagination"""
+    async with Database().session() as s:
+        base = select(Reviews).where(Reviews.item_name == item_name)
+        if count_only:
+            count_q = select(func.count()).select_from(base.subquery())
+            return (await s.execute(count_q)).scalar() or 0
+        result = await s.execute(
+            base.order_by(desc(Reviews.created_at)).offset(offset).limit(limit)
+        )
+        return [
+            {
+                'id': r.id, 'user_id': r.user_id, 'rating': r.rating,
+                'text': r.text, 'created_at': r.created_at,
+            }
+            for r in result.scalars().all()
+        ]

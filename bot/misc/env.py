@@ -60,6 +60,7 @@ class EnvKeys(ABC):
     LOG_TO_STDOUT: Final = _get_optional("LOG_TO_STDOUT", "1")
     LOG_TO_FILE: Final = _get_optional("LOG_TO_FILE", "1")
     DEBUG: Final = _get_optional("DEBUG", "0")
+    REVIEWS_ENABLED: Final = _get_optional("REVIEWS_ENABLED", "1")
 
     # Web admin panel
     ADMIN_HOST: Final = _get_optional("ADMIN_HOST", _get_optional("MONITORING_HOST", "localhost"))
@@ -67,5 +68,15 @@ class EnvKeys(ABC):
     ADMIN_USERNAME: Final = _get_optional("ADMIN_USERNAME", "admin")
     ADMIN_PASSWORD: Final = _get_optional("ADMIN_PASSWORD", "admin")
     SECRET_KEY: Final = _get_optional("SECRET_KEY", "change-me-in-production")
+
+    # Webhook
+    WEBHOOK_ENABLED: Final = _get_optional("WEBHOOK_ENABLED", "0")
+    WEBHOOK_URL: Final = _get_optional("WEBHOOK_URL", "")
+    WEBHOOK_PATH: Final = _get_optional("WEBHOOK_PATH", "/webhook")
+    WEBHOOK_SECRET: Final = _get_optional("WEBHOOK_SECRET", "")
+
+    # Cleanup
+    AUDIT_RETENTION_DAYS: Final = int(_get_optional("AUDIT_RETENTION_DAYS", "90"))
+    PAYMENTS_RETENTION_DAYS: Final = int(_get_optional("PAYMENTS_RETENTION_DAYS", "90"))
 
     DATABASE_URL: Final = f"postgresql+asyncpg://{POSTGRES_USER}:{quote_plus(POSTGRES_PASSWORD)}@{POSTGRES_HOST}:{DB_PORT}/{POSTGRES_DB}"

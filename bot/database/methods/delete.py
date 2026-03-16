@@ -3,6 +3,7 @@ from sqlalchemy import func, select, delete as sa_delete
 from bot.database.methods.read import invalidate_item_cache, invalidate_category_cache
 from bot.database.methods.cache_utils import safe_create_task
 from bot.database.models import Database, Goods, ItemValues, Categories, Role, User
+from bot.database.models.main import PromoCodes, CartItems, Reviews
 from bot.database.methods.audit import log_audit
 
 
@@ -72,3 +73,36 @@ async def delete_role(role_id: int) -> tuple[bool, str | None]:
             return False, f"Role has {user_count} users assigned"
         await s.delete(role)
         return True, None
+
+
+async def delete_promo_code(promo_id: int) -> bool:
+    """Delete a promo code by ID."""
+    async with Database().session() as s:
+        result = await s.execute(select(PromoCodes).where(PromoCodes.id == promo_id))
+        promo = result.scalars().first()
+        if promo:
+            await s.delete(promo)
+            return True
+        return False
+
+
+async def remove_from_cart(cart_item_id: int) -> bool:
+    """Remove a single item from cart by CartItems ID."""
+    async with Database().session() as s:
+        result = await s.execute(sa_delete(CartItems).where(CartItems.id == cart_item_id))
+        return result.rowcount > 0
+
+
+async def clear_cart(user_id: int) -> int:
+    """Clear all cart items for a user. Returns count deleted."""
+    async with Database().session() as s:
+        result = await s.execute(sa_delete(CartItems).where(CartItems.user_id == user_id))
+        return result.rowcount
+
+
+
+async def delete_review(review_id: int) -> bool:
+    """Delete a review by ID."""
+    async with Database().session() as s:
+        result = await s.execute(sa_delete(Reviews).where(Reviews.id == review_id))
+        return result.rowcount > 0

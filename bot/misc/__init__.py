@@ -5,6 +5,7 @@ from bot.misc.lazy_paginator import LazyPaginator
 from bot.misc.validators import (
     PaymentRequest, ItemPurchaseRequest, UserDataUpdate,
     CategoryRequest, BroadcastMessage, SearchQuery,
+    PromoCodeRequest, ReviewRequest,
     validate_telegram_id, validate_money_amount, sanitize_html
 )
 from bot.misc.caching.stats_cache import StatsCache

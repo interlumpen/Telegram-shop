@@ -7,16 +7,20 @@ from bot.logger_mesh import logger
 
 
 class CacheManager:
-    """Centralized caching manager"""
+    """Centralized caching manager with graceful Redis degradation"""
 
     def __init__(self, redis_client: Redis):
         self.redis = redis_client
         self.default_ttl = 300
         self.hits = 0
         self.misses = 0
+        self._healthy = True
 
     async def get(self, key: str, deserialize: bool = True) -> Optional[Any]:
         """Get value from cache with correct deserialization"""
+        if not self._healthy:
+            self.misses += 1
+            return None
         try:
             # Redis returns bytes
             value = await self.redis.get(key)
@@ -50,6 +54,10 @@ class CacheManager:
                 except json.JSONDecodeError:
                     return value
 
+        except (ConnectionError, TimeoutError, OSError) as e:
+            self._healthy = False
+            logger.warning(f"Redis unavailable (get): {e}")
+            return None
         except Exception as e:
             logger.error(f"Cache get error for key {key}: {e}")
             return None
@@ -62,6 +70,8 @@ class CacheManager:
             serialize: bool = True
     ) -> bool:
         """Save the value to cache with correct serialization"""
+        if not self._healthy:
+            return False
         try:
             ttl = ttl or self.default_ttl
 
@@ -87,21 +97,33 @@ class CacheManager:
             await self.redis.setex(key, ttl, serialized)
             return True
 
+        except (ConnectionError, TimeoutError, OSError) as e:
+            self._healthy = False
+            logger.warning(f"Redis unavailable (set): {e}")
+            return False
         except Exception as e:
             logger.error(f"Cache set error for key {key}: {e}")
             return False
 
     async def delete(self, key: str) -> bool:
         """Delete a value from the cache"""
+        if not self._healthy:
+            return False
         try:
             await self.redis.delete(key)
             return True
+        except (ConnectionError, TimeoutError, OSError) as e:
+            self._healthy = False
+            logger.warning(f"Redis unavailable (delete): {e}")
+            return False
         except Exception as e:
             logger.error(f"Cache delete error for key {key}: {e}")
             return False
 
     async def invalidate_pattern(self, pattern: str) -> int:
         """Invalidate all keys by pattern"""
+        if not self._healthy:
+            return 0
         try:
             keys = []
             async for key in self.redis.scan_iter(match=pattern):
@@ -109,6 +131,10 @@ class CacheManager:
 
             if keys:
                 return await self.redis.delete(*keys)
+            return 0
+        except (ConnectionError, TimeoutError, OSError) as e:
+            self._healthy = False
+            logger.warning(f"Redis unavailable (invalidate): {e}")
             return 0
         except Exception as e:
             logger.error(f"Cache invalidate error for pattern {pattern}: {e}")

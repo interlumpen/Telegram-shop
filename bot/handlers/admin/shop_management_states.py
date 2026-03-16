@@ -22,7 +22,7 @@ from bot.database.methods.read import (
     select_today_orders_count, select_blocked_users_count,
 )
 from bot.keyboards import back, simple_buttons, lazy_paginated_keyboard
-from bot.filters import HasPermissionFilter
+from bot.filters import HasPermissionFilter, HasAnyPermissionFilter
 from bot.database.methods.audit import log_audit
 from bot.misc import EnvKeys, LazyPaginator, sanitize_html, SearchQuery, StatsCache, get_cache_manager
 from bot.i18n import localize
@@ -43,23 +43,32 @@ def init_stats_cache():
         asyncio.create_task(stats_cache.warm_up_cache())
 
 
-@router.callback_query(F.data == "shop_management", HasPermissionFilter(Permission.SHOP_MANAGE))
+@router.callback_query(F.data == "shop_management", HasAnyPermissionFilter(
+    permissions=Permission.CATALOG_MANAGE | Permission.STATS_VIEW
+))
 async def shop_callback_handler(call: CallbackQuery):
     """
     Open shop-management main menu.
+    Shows only items the caller has permissions for.
     """
-    actions = [
-        (localize("admin.shop.menu.statistics"), "statistics"),
-        (localize("admin.shop.menu.logs"), "show_logs"),
-        (localize("admin.shop.menu.users"), "users_list"),
-        (localize("admin.shop.menu.search_bought"), "show_bought_item"),
-        (localize("btn.back"), "console"),
-    ]
+    from bot.database.methods import check_role_cached
+    role = await check_role_cached(call.from_user.id) or 0
+
+    actions = []
+    if role & Permission.STATS_VIEW:
+        actions.append((localize("admin.shop.menu.statistics"), "statistics"))
+        actions.append((localize("admin.shop.menu.logs"), "show_logs"))
+    if role & Permission.USERS_MANAGE:
+        actions.append((localize("admin.shop.menu.users"), "users_list"))
+    if role & Permission.CATALOG_MANAGE:
+        actions.append((localize("admin.shop.menu.search_bought"), "show_bought_item"))
+    actions.append((localize("btn.back"), "console"))
+
     markup = simple_buttons(actions, per_row=1)
     await call.message.edit_text(localize("admin.shop.menu.title"), reply_markup=markup)
 
 
-@router.callback_query(F.data == "show_logs", HasPermissionFilter(Permission.SHOP_MANAGE))
+@router.callback_query(F.data == "show_logs", HasPermissionFilter(Permission.STATS_VIEW))
 async def logs_callback_handler(call: CallbackQuery):
     """
     Send bot logs (audit and bot) files if they exist and are not empty.
@@ -89,7 +98,7 @@ async def logs_callback_handler(call: CallbackQuery):
         await call.answer(localize("admin.shop.logs.empty"))
 
 
-@router.callback_query(F.data == "statistics", HasPermissionFilter(Permission.SHOP_MANAGE))
+@router.callback_query(F.data == "statistics", HasPermissionFilter(Permission.STATS_VIEW))
 async def statistics_callback_handler(call: CallbackQuery):
     """
     Show key shop statistics.
@@ -166,9 +175,12 @@ _PERM_LABELS = {
     Permission.BROADCAST: "BROADCAST",
     Permission.SETTINGS_MANAGE: "SETTINGS",
     Permission.USERS_MANAGE: "USERS",
-    Permission.SHOP_MANAGE: "SHOP",
+    Permission.CATALOG_MANAGE: "CATALOG",
     Permission.ADMINS_MANAGE: "ADMINS",
     Permission.OWN: "OWNER",
+    Permission.STATS_VIEW: "STATS",
+    Permission.BALANCE_MANAGE: "BALANCE",
+    Permission.PROMO_MANAGE: "PROMOS",
 }
 
 
@@ -259,7 +271,7 @@ async def show_user_info(call: CallbackQuery):
     await call.message.edit_text(text, parse_mode="HTML", reply_markup=back("users_list"))
 
 
-@router.callback_query(F.data == "show_bought_item", HasPermissionFilter(Permission.SHOP_MANAGE))
+@router.callback_query(F.data == "show_bought_item", HasPermissionFilter(Permission.CATALOG_MANAGE))
 async def show_bought_item_callback_handler(call: CallbackQuery, state: FSMContext):
     """
     Ask for purchased item's unique ID to search.
@@ -271,7 +283,7 @@ async def show_bought_item_callback_handler(call: CallbackQuery, state: FSMConte
     await state.set_state(GoodsFSM.waiting_bought_item_id)
 
 
-@router.message(GoodsFSM.waiting_bought_item_id, F.text, HasPermissionFilter(Permission.SHOP_MANAGE))
+@router.message(GoodsFSM.waiting_bought_item_id, F.text, HasPermissionFilter(Permission.CATALOG_MANAGE))
 async def process_item_show(message: Message, state: FSMContext):
     """Show purchased item details by unique ID."""
     try:

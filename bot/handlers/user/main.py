@@ -10,8 +10,11 @@ from bot.database.methods import (
     select_max_role_id, create_user, check_role, check_user,
     select_user_operations, select_user_items, check_user_cached
 )
+from bot.database.methods.read import get_cart_count
+from bot.database.methods.lazy_queries import query_user_operations_history
 from bot.handlers.other import check_sub_channel, _parse_channel_username
 from bot.keyboards import main_menu, back, profile_keyboard, check_sub
+from bot.keyboards.inline import simple_buttons, lazy_paginated_keyboard
 from bot.misc import EnvKeys
 from bot.misc.metrics import get_metrics
 from bot.i18n import localize
@@ -128,8 +131,9 @@ async def profile_callback_handler(call: CallbackQuery, state: FSMContext):
     overall_balance = sum(operations) if operations else 0
     items = await select_user_items(user_id)
     referral = EnvKeys.REFERRAL_PERCENT
+    cart_count = await get_cart_count(user_id)
 
-    markup = profile_keyboard(referral, items)
+    markup = profile_keyboard(referral, items, cart_count=cart_count)
     text = (
         f"{localize('profile.caption', name=tg_user.first_name, id=user_id)}\n"
         f"{localize('profile.id', id=user_id)}\n"
@@ -137,7 +141,11 @@ async def profile_callback_handler(call: CallbackQuery, state: FSMContext):
         f"{localize('profile.total_topup', amount=overall_balance, currency=EnvKeys.PAY_CURRENCY)}\n"
         f"{localize('profile.purchased_count', count=items)}"
     )
-    await call.message.edit_text(text, reply_markup=markup, parse_mode='HTML')
+    try:
+        await call.message.edit_text(text, reply_markup=markup, parse_mode='HTML')
+    except TelegramBadRequest as e:
+        if "message is not modified" not in str(e):
+            raise
     await state.clear()
 
 
@@ -162,3 +170,67 @@ async def check_sub_to_channel(call: CallbackQuery, state: FSMContext):
             return
 
     await call.answer(localize("errors.not_subscribed"))
+
+
+# --- Operation History ---
+
+@router.callback_query(F.data == "operation_history")
+async def operation_history_handler(call: CallbackQuery, state: FSMContext):
+    user_id = call.from_user.id
+    await _show_operations_page(call, state, user_id, 0)
+
+
+@router.callback_query(F.data.startswith("ops-page_"))
+async def navigate_operations(call: CallbackQuery, state: FSMContext):
+    page = int(call.data.split("_")[1])
+    await _show_operations_page(call, state, call.from_user.id, page)
+
+
+async def _show_operations_page(call: CallbackQuery, state: FSMContext, user_id: int, page: int):
+    from functools import partial
+    from bot.misc import LazyPaginator
+
+    paginator = LazyPaginator(partial(query_user_operations_history, user_id), per_page=10)
+    items = await paginator.get_page(page)
+    total_pages = await paginator.get_total_pages()
+
+    if not items:
+        await call.message.edit_text(
+            localize("history.title") + "\n\n" + localize("history.empty"),
+            reply_markup=back("profile"),
+        )
+        return
+
+    lines = [localize("history.title"), ""]
+    for op in items:
+        op_type = op['type']
+        amount = op['amount']
+        date = op['date']
+        date_str = str(date)[:19] if date else ""
+
+        if op_type == 'topup':
+            lines.append(localize("history.topup", amount=amount, currency=EnvKeys.PAY_CURRENCY))
+        elif op_type == 'purchase':
+            lines.append(localize("history.purchase", amount=amount, currency=EnvKeys.PAY_CURRENCY))
+        elif op_type == 'referral':
+            lines.append(localize("history.referral", amount=amount, currency=EnvKeys.PAY_CURRENCY))
+        lines.append(localize("history.date", date=date_str))
+        lines.append("")
+
+    from aiogram.utils.keyboard import InlineKeyboardBuilder
+    from aiogram.types import InlineKeyboardButton
+    kb = InlineKeyboardBuilder()
+    nav_buttons = []
+    if page > 0:
+        nav_buttons.append(InlineKeyboardButton(text="◀️", callback_data=f"ops-page_{page - 1}"))
+    if total_pages > 1:
+        nav_buttons.append(InlineKeyboardButton(text=f"{page + 1}/{total_pages}", callback_data="noop"))
+    if page < total_pages - 1:
+        nav_buttons.append(InlineKeyboardButton(text="▶️", callback_data=f"ops-page_{page + 1}"))
+    if nav_buttons:
+        kb.row(*nav_buttons)
+    kb.row(InlineKeyboardButton(text=localize("btn.back"), callback_data="profile"))
+
+    await call.message.edit_text("\n".join(lines), reply_markup=kb.as_markup())
+
+

@@ -57,7 +57,7 @@ from bot.database.main import Database
 from bot.database.models.main import (
     User, Role, Categories, Goods, ItemValues,
     BoughtGoods, Operations, Payments, ReferralEarnings,
-    AuditLog,
+    AuditLog, PromoCodes, CartItems, Reviews,
 )
 from bot.misc.metrics import get_metrics
 from bot.misc.caching import get_cache_manager
@@ -136,13 +136,16 @@ class UserAdmin(AuditModelView, model=User):
 
 
 _PERM_FLAGS = [
-    (1,  "USE"),
-    (2,  "BROADCAST"),
-    (4,  "SETTINGS"),
-    (8,  "USERS"),
-    (16, "SHOP"),
-    (32, "ADMINS"),
-    (64, "OWNER"),
+    (1,   "USE"),
+    (2,   "BROADCAST"),
+    (4,   "SETTINGS"),
+    (8,   "USERS"),
+    (16,  "CATALOG"),
+    (32,  "ADMINS"),
+    (64,  "OWNER"),
+    (128, "STATS"),
+    (256, "BALANCE"),
+    (512, "PROMOS"),
 ]
 
 
@@ -174,8 +177,9 @@ class RoleAdmin(AuditModelView, model=Role):
         "permissions": {
             "description": (
                 "Bitmask value — sum the flags you need: "
-                "USE=1, BROADCAST=2, SETTINGS=4, USERS=8, SHOP=16, ADMINS=32, OWNER=64. "
-                "Example: 31 = USE+BROADCAST+SETTINGS+USERS+SHOP (Admin), 127 = all (Owner)."
+                "USE=1, BROADCAST=2, SETTINGS=4, USERS=8, CATALOG=16, ADMINS=32, "
+                "OWNER=64, STATS=128, BALANCE=256, PROMOS=512. "
+                "Example: 927 = full Admin, 1023 = all (Owner)."
             ),
         },
     }
@@ -280,6 +284,43 @@ class AuditLogAdmin(ModelView, model=AuditLog):
     icon = "fa-solid fa-clipboard-list"
 
 
+class PromoCodeAdmin(AuditModelView, model=PromoCodes):
+    column_list = [PromoCodes.id, PromoCodes.code, PromoCodes.discount_type,
+                   PromoCodes.discount_value, PromoCodes.max_uses, PromoCodes.current_uses,
+                   PromoCodes.is_active, PromoCodes.expires_at, PromoCodes.created_at]
+    column_searchable_list = [PromoCodes.code]
+    column_sortable_list = [PromoCodes.id, PromoCodes.code, PromoCodes.created_at]
+    column_default_sort = (PromoCodes.id, True)
+    name = "Promo Code"
+    name_plural = "Promo Codes"
+    icon = "fa-solid fa-tag"
+
+
+class CartItemsAdmin(ModelView, model=CartItems):
+    column_list = [CartItems.id, CartItems.user_id, CartItems.item_name, CartItems.added_at]
+    column_searchable_list = [CartItems.user_id, CartItems.item_name]
+    column_sortable_list = [CartItems.id, CartItems.added_at]
+    column_default_sort = (CartItems.id, True)
+    can_create = False
+    can_edit = False
+    can_delete = False
+    name = "Cart Item"
+    name_plural = "Cart Items"
+    icon = "fa-solid fa-cart-plus"
+
+
+
+class ReviewsAdmin(AuditModelView, model=Reviews):
+    column_list = [Reviews.id, Reviews.user_id, Reviews.item_name,
+                   Reviews.rating, Reviews.text, Reviews.created_at]
+    column_searchable_list = [Reviews.user_id, Reviews.item_name]
+    column_sortable_list = [Reviews.id, Reviews.rating, Reviews.created_at]
+    column_default_sort = (Reviews.id, True)
+    name = "Review"
+    name_plural = "Reviews"
+    icon = "fa-solid fa-star"
+
+
 # Health & Metrics Endpoints
 async def health_check(request: Request) -> JSONResponse:
     health_status = {
@@ -292,11 +333,15 @@ async def health_check(request: Request) -> JSONResponse:
             await s.execute(text("SELECT 1"))
         health_status["checks"]["database"] = "ok"
     except Exception as e:
-        health_status["checks"]["database"] = f"error: {e}"
+        logger.error(f"Health check database error: {e}")
+        health_status["checks"]["database"] = "error"
         health_status["status"] = "unhealthy"
 
     cache = get_cache_manager()
-    health_status["checks"]["redis"] = "ok" if cache else "not configured"
+    if cache:
+        health_status["checks"]["redis"] = "ok" if cache._healthy else "degraded"
+    else:
+        health_status["checks"]["redis"] = "not configured"
 
     metrics = get_metrics()
     if metrics:
@@ -336,11 +381,13 @@ def create_admin_app() -> Starlette:
             "Change them in .env for production"
         )
 
+    from bot.web.export import export_routes
+
     routes = [
         Route("/health", health_check),
         Route("/metrics", metrics_json),
         Route("/metrics/prometheus", prometheus_metrics),
-    ]
+    ] + export_routes
 
     app = Starlette(routes=routes)
     app.add_middleware(SessionMiddleware, secret_key=EnvKeys.SECRET_KEY, max_age=1800)
@@ -363,5 +410,9 @@ def create_admin_app() -> Starlette:
     admin.add_view(PaymentsAdmin)
     admin.add_view(ReferralEarningsAdmin)
     admin.add_view(AuditLogAdmin)
+    admin.add_view(PromoCodeAdmin)
+    admin.add_view(CartItemsAdmin)
+    if EnvKeys.REVIEWS_ENABLED == "1":
+        admin.add_view(ReviewsAdmin)
 
     return app

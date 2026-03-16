@@ -1,3 +1,4 @@
+import re
 import time
 from typing import Dict, Any, Callable, Awaitable
 from aiogram import BaseMiddleware
@@ -17,7 +18,6 @@ def check_suspicious_patterns(text: str) -> bool:
     if len(text) > 4096:
         return True
 
-    import re
     # Check for script injection
     if re.search(r"<script|javascript:|onerror=|onclick=", text, re.IGNORECASE):
         return True
@@ -134,7 +134,30 @@ class AuthenticationMiddleware(BaseMiddleware):
         self.blocked_users: set[int] = set()
         self.admin_cache: Dict[int, tuple[int, float]] = {}  # user_id: (role, timestamp)
         self.cache_ttl = 300  # 5 minutes
-        self.maintenance_mode: bool = False
+        self._maintenance_mode: bool = False
+
+    @property
+    def maintenance_mode(self) -> bool:
+        from bot.misc.caching import get_cache_manager
+        import asyncio
+        cache = get_cache_manager()
+        if cache:
+            try:
+                loop = asyncio.get_running_loop()
+                # In async context, return cached in-memory value (updated via setter)
+                return self._maintenance_mode
+            except RuntimeError:
+                return self._maintenance_mode
+        return self._maintenance_mode
+
+    @maintenance_mode.setter
+    def maintenance_mode(self, value: bool):
+        self._maintenance_mode = value
+        from bot.misc.caching import get_cache_manager
+        cache = get_cache_manager()
+        if cache:
+            from bot.database.methods.cache_utils import safe_create_task
+            safe_create_task(cache.set("bot:maintenance_mode", value, ttl=0))
 
     async def __call__(
             self,
@@ -210,6 +233,25 @@ class AuthenticationMiddleware(BaseMiddleware):
     def invalidate_admin_cache(self, user_id: int) -> None:
         """Remove cached role for a user so permissions are re-fetched."""
         self.admin_cache.pop(user_id, None)
+
+    async def load_blocked_users(self) -> None:
+        """Load blocked users from DB into memory cache on startup."""
+        from bot.database.methods.read import get_blocked_user_ids
+        try:
+            self.blocked_users = set(await get_blocked_user_ids())
+        except Exception:
+            pass  # Will fall back to per-request DB checks
+
+        # Restore maintenance mode from Redis
+        from bot.misc.caching import get_cache_manager
+        cache = get_cache_manager()
+        if cache:
+            try:
+                val = await cache.get("bot:maintenance_mode")
+                if val is not None:
+                    self._maintenance_mode = bool(val)
+            except Exception:
+                pass
 
     async def block_user(self, user_id: int) -> bool:
         """Block a user (saves to DB and memory cache)"""

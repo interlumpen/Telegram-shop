@@ -55,6 +55,9 @@ via the command line (CLI) without the need for a shell and advanced monitoring 
     - 💎 CryptoPay (TON, USDT, BTC, ETH)
     - ⭐ Telegram Stars
     - 💳 Telegram Payments (Fiat)
+- **Shopping Cart**: Add multiple items, apply promo codes per item, atomic multi-item checkout with receipt
+- **Promo Codes**: Percent/fixed/balance discount types, category/item binding, usage limits, expiration
+- **Product Reviews**: 1–5 star ratings with optional text, one review per user per item
 - **Referral System**: Configurable commission rates
 - **Multi-language Support**: Russian and English localization
 
@@ -62,7 +65,8 @@ via the command line (CLI) without the need for a shell and advanced monitoring 
 
 - **Role-Based Access Control** (RBAC):
     - Built-in roles: USER, ADMIN, OWNER
-    - Custom roles: Create roles with granular permission bitmasks via admin panel
+    - 10 granular permission bits: USE, BROADCAST, SETTINGS, USERS, CATALOG, ADMINS, OWNER, STATS, BALANCE, PROMOS
+    - Custom roles: Create roles with any combination of permissions via admin panel
     - Role management: Create, edit, delete roles; assign roles to users
     - Permission-safe: Bitwise subset validation — cannot create/assign roles exceeding own permissions
     - Permission-aware UI: Admin panel shows only buttons matching user's actual permissions
@@ -72,10 +76,15 @@ via the command line (CLI) without the need for a shell and advanced monitoring 
     - Role management: create custom roles, assign roles to users
     - Product and category management
     - Broadcast messaging system
+    - Promo code management (create, toggle, delete, view usage stats)
+    - CSV data export (users, purchases, payments, operations) with date filtering
     - Dual-write audit logging (rotating file + database table with web UI)
 
 ### User Experience
 
+- **Shopping Cart**: Add items, apply promo codes, batch checkout with formatted receipt
+- **Purchase Receipts**: Formatted order receipt with item details, order ID, timestamp, and quick-view buttons
+- **Product Reviews**: Rate and review purchased items (1–5 stars with optional text)
 - **Lazy Loading Pagination**: Efficient data loading for large catalogs
 - **Purchase History**: Complete transaction records
 - **Referral Dashboard**: Track earnings and referrals
@@ -91,7 +100,7 @@ via the command line (CLI) without the need for a shell and advanced monitoring 
     - User role caching (15-minute TTL)
     - Product catalog caching (5-minute TTL)
     - Statistics caching (1-minute TTL)
-    - Smart cache invalidation on data updates
+    - Smart cache invalidation on data updates (purchases, admin item adds, stock changes)
     - Cache warm-up on startup (categories, user/admin counts)
     - Cache scheduler: hourly stats refresh, daily cleanup at 3:00 AM
     - When disabled: bot uses in-memory FSM storage and queries the database directly
@@ -105,6 +114,8 @@ via the command line (CLI) without the need for a shell and advanced monitoring 
     - Browse, search, filter, and edit all tables
     - Read-only views for purchases, payments, operations, and audit logs
     - All CRUD operations via web panel are audit-logged automatically
+    - CSV data export endpoints (`/export/users`, `/export/purchases`, `/export/operations`, `/export/payments`) with
+      optional date filtering
 - **Real-Time Metrics Collection**:
     - Event tracking (purchases, payments, user actions)
     - Performance metrics (response times, query durations)
@@ -130,6 +141,10 @@ via the command line (CLI) without the need for a shell and advanced monitoring 
 - **Health Monitoring**:
     - Periodic system health checks (database, Redis, Telegram API)
     - Logs failures for observability
+- **Data Cleanup**:
+    - Scheduled daily cleanup at 4:00 UTC
+    - Automatic deletion of old audit logs (configurable retention period)
+    - Automatic deletion of old pending/failed payments
 - **Graceful Shutdown**:
     - Metrics snapshot saved to `data/final_metrics.json`
     - Recovery tasks properly cancelled
@@ -161,7 +176,7 @@ via the command line (CLI) without the need for a shell and advanced monitoring 
 
 - Bot detection and blocking
 - Telegram ID-based authentication
-- Permission bitmask access control with bitwise subset validation (USE, BROADCAST, SETTINGS_MANAGE, etc.)
+- Permission bitmask access control with 10 granular bits and bitwise subset validation
 - Role caching with TTL for performance
 
 #### 4. **Payment Security**
@@ -208,6 +223,9 @@ via the command line (CLI) without the need for a shell and advanced monitoring 
 - **Products**: Categories, items, stock management
 - **Transactions**: Purchases, payments, operations
 - **Referrals**: Earnings tracking and statistics
+- **Promo Codes**: Discount codes with type, value, usage tracking, and category/item binding
+- **Cart**: User shopping cart items with promo code association
+- **Reviews**: Product ratings and text reviews (one per user per item)
 - **Audit Log**: Structured action log with user, action, resource, details, and IP tracking
 
 ### Key Design Patterns
@@ -243,7 +261,7 @@ via the command line (CLI) without the need for a shell and advanced monitoring 
 
 - **Input Validation**: Pydantic
 - **Rate Limiting**: Custom in-memory middleware (per-process)
-- **Authentication**: Role-based with permission bitmask
+- **Authentication**: Role-based with 10-bit permission bitmask
 
 ### Payment Integrations
 
@@ -298,26 +316,27 @@ The application requires the following environment variables:
 <details>
 <summary><b>🔗 Links / UI</b></summary>
 
-| Variable      | Description                                       | Default |
-|---------------|---------------------------------------------------|---------|
-| `CHANNEL_URL` | News channel link                                 | -       |
-| `CHANNEL_ID`  | [News channel ID](https://telegram.me/get_id_bot) | -       |
-| `HELPER_ID`   | Support user Telegram ID                          | -       |
-| `RULES`       | Bot usage rules text                              | -       |
+| Variable      | Description                                                                             | Default |
+|---------------|-----------------------------------------------------------------------------------------|---------|
+| `CHANNEL_URL` | News channel link (the bot sends notifications about new products here when setting up) | -       |
+| `CHANNEL_ID`  | [News channel ID](https://telegram.me/get_id_bot)                                       | -       |
+| `HELPER_ID`   | Support user Telegram ID                                                                | -       |
+| `RULES`       | Bot usage rules text                                                                    | -       |
 
 </details>
 
 <details>
 <summary><b>🌐 Locale & Logs</b></summary>
 
-| Variable        | Description                   | Default     |
-|-----------------|-------------------------------|-------------|
-| `BOT_LOCALE`    | Localization language (ru/en) | `ru`        |
-| `BOT_LOGFILE`   | Path to main log file         | `bot.log`   |
-| `BOT_AUDITFILE` | Path to audit log file        | `audit.log` |
-| `LOG_TO_STDOUT` | Console logging (1/0)         | `1`         |
-| `LOG_TO_FILE`   | File logging (1/0)            | `1`         |
-| `DEBUG`         | Debug mode (1/0)              | `0`         |
+| Variable          | Description                        | Default     |
+|-------------------|------------------------------------|-------------|
+| `BOT_LOCALE`      | Localization language (ru/en)      | `ru`        |
+| `BOT_LOGFILE`     | Path to main log file              | `bot.log`   |
+| `BOT_AUDITFILE`   | Path to audit log file             | `audit.log` |
+| `LOG_TO_STDOUT`   | Console logging (1/0)              | `1`         |
+| `LOG_TO_FILE`     | File logging (1/0)                 | `1`         |
+| `DEBUG`           | Debug mode (1/0)                   | `0`         |
+| `REVIEWS_ENABLED` | Enable product review system (1/0) | `1`         |
 
 </details>
 
@@ -364,6 +383,30 @@ disabled. The bot remains fully functional but without caching optimizations.
 | `POSTGRES_PASSWORD` | PostgreSQL password                                     | **Required**                             |
 | `POSTGRES_HOST`     | PostgreSQL host (configure this only for manual deploy) | localhost (for manual) / db (for docker) |
 | `DB_PORT`           | PostgreSQL port                                         | `5432`                                   |
+
+</details>
+
+<details>
+<summary><b>🌐 Webhook Mode (Optional)</b></summary>
+
+| Variable          | Description                                             | Default    |
+|-------------------|---------------------------------------------------------|------------|
+| `WEBHOOK_ENABLED` | Use webhook instead of polling (`1`/`0`)                | `0`        |
+| `WEBHOOK_URL`     | Public URL for webhook (e.g., `https://yourdomain.com`) | -          |
+| `WEBHOOK_PATH`    | Path for webhook endpoint                               | `/webhook` |
+| `WEBHOOK_SECRET`  | Secret token for webhook verification                   | -          |
+
+**Note**: Webhook mode requires a publicly accessible HTTPS URL. When disabled (default), the bot uses long polling.
+
+</details>
+
+<details>
+<summary><b>🧹 Auto-Cleanup</b></summary>
+
+| Variable                  | Description                                         | Default |
+|---------------------------|-----------------------------------------------------|---------|
+| `AUDIT_RETENTION_DAYS`    | Days to keep audit log entries (0 to disable)       | `90`    |
+| `PAYMENTS_RETENTION_DAYS` | Days to keep pending/failed payments (0 to disable) | `90`    |
 
 </details>
 
@@ -497,6 +540,10 @@ Open in browser: http://localhost:9090/admin
 1. **Add bot to channel** (if using news channel feature):
     - Add your bot to the channel specified in `CHANNEL_URL` and `CHANNEL_ID`
     - Grant administrator rights with "Post Messages" permission
+    - 
+The bot will send relevant messages to your channel when adding products.
+
+![Stock](assets/stock.png)
 
 2. **Apply latest migrations** (if updating):
 
@@ -532,6 +579,10 @@ The bot includes a web-based admin panel powered by SQLAdmin, accessible at http
 - /health - Health check endpoint (database, Redis status if enabled)
 - /metrics - Raw metrics in JSON format
 - /metrics/prometheus - Prometheus-compatible metrics export
+- /export/users - CSV export of users (with optional date filtering)
+- /export/purchases - CSV export of purchases
+- /export/operations - CSV export of operations
+- /export/payments - CSV export of payments
 
 ### Recovery System
 
@@ -574,21 +625,35 @@ The bot includes a recovery system for stuck payments:
 
 ![Goods](assets/positions_picture.png)
 
-#### Shop Item Information
+#### Shop Item Information & Purchase
 
 ![Item Information](assets/position_description_picture.png)
+
+![Item Information](assets/position_purchase.png)
 
 #### Profile
 
 ![Profile](assets/user_profile.png)
 
-#### Purchases
+#### Balance top up
 
-![Purchases](assets/user_purchases.png)
+![top up](assets/balance_topup.png)
 
 #### Referral System
 
 ![Referral system](assets/referral_system.png)
+
+#### Purchases
+
+![Purchases](assets/user_purchases.png)
+
+### Cart
+
+![Cart](assets/cart.png)
+
+## Operation History
+
+![History](assets/operation_history.png)
 
 </details>
 
@@ -616,13 +681,29 @@ Available for users with admin permissions (built-in ADMIN/OWNER or custom roles
 
 #### User Management
 
-- View profiles, adjust balances, assign roles from inline keyboard
+- View profiles, block/unblock users, assign roles (USERS permission)
+- Adjust balances: top-up and deduction (separate BALANCE permission)
 
 ![User Management](assets/user_menu_picture.png)
 
 #### Role Management
 
-- Create custom roles with granular permission bitmasks (USE, BROADCAST, SETTINGS, USERS, SHOP, ADMINS, OWNER)
+![Role Management](assets/roles.png)
+
+![Role Management](assets/role_menu_picture.png)
+
+- 10 granular permission bits for fine-grained access control:
+    - **USE** (1) — basic bot access
+    - **BROADCAST** (2) — mass messaging to all users
+    - **SETTINGS** (4) — bot settings (maintenance mode)
+    - **USERS** (8) — view/block/unblock users, view referrals and purchases
+    - **CATALOG** (16) — categories, positions, items/goods CRUD
+    - **ADMINS** (32) — role CRUD and role assignment
+    - **OWNER** (64) — owner-only operations
+    - **STATS** (128) — statistics dashboard, log files, bought-item search
+    - **BALANCE** (256) — top-up / deduct user balance
+    - **PROMOS** (512) — promo code management (create, toggle, delete)
+- Create custom roles with any combination of permissions via admin panel
 - Edit and delete custom roles (built-in USER/ADMIN/OWNER cannot be deleted)
 - Permission-aware admin panel: each user sees only the buttons their permissions allow
 - Permission-safe: bitwise subset validation prevents creating or assigning roles exceeding your own
@@ -630,6 +711,7 @@ Available for users with admin permissions (built-in ADMIN/OWNER or custom roles
 #### Broadcasting & Analytics
 
 ![Broadcast](assets/broadcast_picture.png)
+
 ![Statistics](assets/shop_statistics.png)
 
 #### System Monitoring
@@ -638,30 +720,11 @@ Available for users with admin permissions (built-in ADMIN/OWNER or custom roles
 
 </details>
 
-### Example Workflows
-
-#### Adding a Product (Admin)
-
-1. Admin Panel → Goods Management
-2. Add Position → Enter name, description, price
-3. Select category → Choose stock type (limited/unlimited)
-4. Add stock values
-
-#### Making a Purchase (User)
-
-1. Shop → Select Category → Choose Product
-2. Click Buy → Confirm purchase
-3. Receive product details instantly
-
-#### Processing Payment
-
-1. Profile → Top up balance
-2. Enter amount → Choose payment method
-3. Complete payment → Balance credited automatically
-
 ## 📊 API Documentation
 
-### Core Database Methods
+<details>
+<summary>Core Database Methods</summary>
+
 
 #### User Management
 
@@ -674,10 +737,12 @@ await update_balance(telegram_id: int, amount: int) -> None
 #### Transaction Processing
 
 ```python
-await buy_item_transaction(telegram_id: int, item_name: str) -> tuple[bool, str, dict]
+await buy_item_transaction(telegram_id: int, item_name: str, promo_code: str = None) -> tuple[bool, str, dict]
+await checkout_cart_transaction(user_id: int) -> tuple[bool, str, list]
 await process_payment_with_referral(
     user_id: int, amount: Decimal, provider: str, external_id: str, referral_percent: int = 0) -> tuple[bool, str]
 await admin_balance_change(telegram_id: int, amount: int) -> tuple[bool, str]
+await redeem_balance_promo(code: str, user_id: int) -> tuple[bool, str, Decimal | None]
 ```
 
 #### Product Management
@@ -769,7 +834,7 @@ async def get_user_role(telegram_id: int) -> str
 async def get_products_by_category(category_id: int) -> List[Product]
 
 
-# Cache invalidation
+# Cache invalidation (called automatically after purchases, admin item adds, and stock changes)
 await invalidate_user_cache(telegram_id)
 await invalidate_item_cache(item_name, category_name)  # category_name is optional
 ```
@@ -791,6 +856,7 @@ engine = create_async_engine(
     },
 )
 ```
+</details>
 
 ## 🧪 Testing
 
@@ -854,10 +920,11 @@ The test suite validates:
 <summary>Core Functionality</summary>
 
 * ✅ **Transactional purchase safety** — balance deduction, stock removal, rollback on error
+* ✅ **Cart checkout integrity** — atomic multi-item checkout, duplicate value prevention for same-item cart entries
 * ✅ **Payment idempotency** — duplicate payment processing prevented via unique constraint
 * ✅ **Referral bonus calculation** — percentage-based bonus, referrer cache invalidation
 * ✅ **Atomic admin balance operations** — top-up, deduction, insufficient funds check in single transaction
-* ✅ **Cache invalidation after mutations** — stale balance/stats prevention
+* ✅ **Cache invalidation after mutations** — stale balance/stats/item count prevention (purchases, admin adds)
 
 </details>
 
@@ -866,7 +933,8 @@ The test suite validates:
 
 * ✅ **Rate limiting** — global limits, action-specific limits, ban after exceed, ban expiry
 * ✅ **Suspicious pattern detection** — XSS/script injection, length-based DoS protection
-* ✅ **Critical action detection** — audit logging for buy/pay/delete/admin operations, replay protection for transactional actions
+* ✅ **Critical action detection** — audit logging for buy/pay/delete/admin operations, replay protection for
+  transactional actions
 * ✅ **Authentication middleware** — blocked user rejection, bot rejection
 * ✅ **Permission bitmask helpers** — `is_subset`, `has_any_admin_perm` bitwise validation
 * ✅ **Admin panel login rate limiting** — block after max attempts, lockout expiry, IP isolation

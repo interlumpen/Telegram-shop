@@ -26,7 +26,7 @@ from bot.misc import EnvKeys, LazyPaginator, validate_telegram_id, validate_mone
 router = Router()
 
 
-async def _build_user_profile(bot, target_id: int):
+async def _build_user_profile(bot, target_id: int, caller_perms: int = 0):
     """Build user profile text and action buttons for admin view.
     Returns (text, markup) or None if user not found.
     """
@@ -52,8 +52,9 @@ async def _build_user_profile(bot, target_id: int):
     if role_name != 'OWNER':
         actions.append((localize('btn.admin.assign_role'), f"asr_list_{target_id}"))
 
-    actions.append((localize('btn.admin.replenish_user'), f"fill-user-balance_{target_id}"))
-    actions.append((localize('btn.admin.deduct_user'), f"deduct-user-balance_{target_id}"))
+    if caller_perms & Permission.BALANCE_MANAGE:
+        actions.append((localize('btn.admin.replenish_user'), f"fill-user-balance_{target_id}"))
+        actions.append((localize('btn.admin.deduct_user'), f"deduct-user-balance_{target_id}"))
 
     if role_name != 'OWNER':
         if await is_user_blocked(target_id):
@@ -120,7 +121,9 @@ async def check_user_data(message: Message, state: FSMContext):
     try:
         target_id = validate_telegram_id(message.text.strip())
 
-        result = await _build_user_profile(message.bot, target_id)
+        from bot.database.methods import check_role_cached
+        caller_perms = await check_role_cached(message.from_user.id) or 0
+        result = await _build_user_profile(message.bot, target_id, caller_perms)
         if not result:
             await message.answer(
                 localize('admin.users.profile_unavailable'),
@@ -151,7 +154,9 @@ async def user_profile_view(call: CallbackQuery):
         await call.answer(localize('errors.invalid_data'), show_alert=True)
         return
 
-    result = await _build_user_profile(call.message.bot, target_id)
+    from bot.database.methods import check_role_cached
+    caller_perms = await check_role_cached(call.from_user.id) or 0
+    result = await _build_user_profile(call.message.bot, target_id, caller_perms)
     if not result:
         await call.answer(localize('admin.users.not_found'), show_alert=True)
         return
@@ -454,7 +459,7 @@ async def user_items_callback_handler(call: CallbackQuery, state: FSMContext):
     await state.update_data(admin_user_items_paginator=paginator.get_state())
 
 
-@router.callback_query(F.data.startswith('fill-user-balance_'), HasPermissionFilter(Permission.USERS_MANAGE))
+@router.callback_query(F.data.startswith('fill-user-balance_'), HasPermissionFilter(Permission.BALANCE_MANAGE))
 async def replenish_user_balance_callback_handler(call: CallbackQuery, state: FSMContext):
     """
     Asks for amount to top up selected user's balance.
@@ -495,7 +500,7 @@ async def process_replenish_user_balance(message: Message, state: FSMContext):
         )
 
         # Apply top-up (atomic: operation + balance in one transaction)
-        await admin_balance_change(user_update.telegram_id, int(amount))
+        await admin_balance_change(user_update.telegram_id, Decimal(int(amount)))
 
         user_info = await message.bot.get_chat(user_id)
         await message.answer(
@@ -534,7 +539,7 @@ async def process_replenish_user_balance(message: Message, state: FSMContext):
         )
 
 
-@router.callback_query(F.data.startswith('deduct-user-balance_'), HasPermissionFilter(Permission.USERS_MANAGE))
+@router.callback_query(F.data.startswith('deduct-user-balance_'), HasPermissionFilter(Permission.BALANCE_MANAGE))
 async def deduct_user_balance_callback_handler(call: CallbackQuery, state: FSMContext):
     """
     Asks for amount to deduct from selected user's balance.
@@ -570,7 +575,7 @@ async def process_deduct_user_balance(message: Message, state: FSMContext):
 
         # Apply deduction (atomic: check + operation + balance in one transaction)
         try:
-            await admin_balance_change(user_id, -int(amount))
+            await admin_balance_change(user_id, Decimal(-int(amount)))
         except ValueError:
             db_user = await check_user_cached(user_id)
             current_balance = int(float(db_user.get('balance', 0))) if db_user else 0

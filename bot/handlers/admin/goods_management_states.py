@@ -18,7 +18,7 @@ from bot.states import GoodsFSM
 router = Router()
 
 
-@router.callback_query(F.data == 'goods_management', HasPermissionFilter(permission=Permission.SHOP_MANAGE))
+@router.callback_query(F.data == 'goods_management', HasPermissionFilter(permission=Permission.CATALOG_MANAGE))
 async def goods_management_callback_handler(call: CallbackQuery, state):
     """
     Opens the positions (goods) management menu.
@@ -36,7 +36,7 @@ async def goods_management_callback_handler(call: CallbackQuery, state):
     await state.clear()
 
 
-@router.callback_query(F.data == 'delete_item', HasPermissionFilter(permission=Permission.SHOP_MANAGE))
+@router.callback_query(F.data == 'delete_item', HasPermissionFilter(permission=Permission.CATALOG_MANAGE))
 async def delete_item_callback_handler(call: CallbackQuery, state):
     """
     Requests a position name to delete.
@@ -68,7 +68,7 @@ async def delete_str_item(message: Message, state):
     await state.clear()
 
 
-@router.callback_query(F.data == 'show__items_in_position', HasPermissionFilter(permission=Permission.SHOP_MANAGE))
+@router.callback_query(F.data == 'show__items_in_position', HasPermissionFilter(permission=Permission.CATALOG_MANAGE))
 async def show_items_callback_handler(call: CallbackQuery, state):
     """
     Requests a position name to show its items.
@@ -132,7 +132,7 @@ async def show_str_item(message: Message, state: FSMContext):
     )
 
 
-@router.callback_query(F.data.startswith('gip_'), HasPermissionFilter(permission=Permission.SHOP_MANAGE))
+@router.callback_query(F.data.startswith('gip_'), HasPermissionFilter(permission=Permission.CATALOG_MANAGE))
 async def navigate_items_in_goods(call: CallbackQuery, state: FSMContext):
     """
     Paginates items inside a position with lazy loading.
@@ -191,7 +191,7 @@ async def navigate_items_in_goods(call: CallbackQuery, state: FSMContext):
     )
 
 
-@router.callback_query(F.data.startswith('si_'), HasPermissionFilter(permission=Permission.SHOP_MANAGE))
+@router.callback_query(F.data.startswith('si_'), HasPermissionFilter(permission=Permission.CATALOG_MANAGE))
 async def item_info_callback_handler(call: CallbackQuery, state: FSMContext):
     """
     Shows details for a specific item within a position.
@@ -248,7 +248,7 @@ async def item_info_callback_handler(call: CallbackQuery, state: FSMContext):
 
 @router.callback_query(
     F.data.startswith('dip_'),  # Shortened from 'delete-item-from-position_'
-    HasPermissionFilter(permission=Permission.SHOP_MANAGE)
+    HasPermissionFilter(permission=Permission.CATALOG_MANAGE)
 )
 async def process_delete_item_from_position(call: CallbackQuery, state: FSMContext):
     """

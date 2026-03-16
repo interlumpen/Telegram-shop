@@ -4,6 +4,7 @@ from decimal import Decimal
 from sqlalchemy import select, exists
 
 from bot.database.models import User, ItemValues, Goods, Categories, Operations, Payments, ReferralEarnings, Role
+from bot.database.models.main import PromoCodes, CartItems, Reviews
 from bot.database import Database
 from bot.database.methods.cache_utils import safe_create_task
 from bot.database.methods.read import invalidate_stats_cache
@@ -69,6 +70,9 @@ async def add_values_to_item(item_name: str, value: str, is_infinity: bool) -> b
         try:
             s.add(ItemValues(item_id=item_id, value=value_norm, is_infinity=bool(is_infinity)))
             await s.flush()
+            from bot.database.methods.read import invalidate_item_cache
+            from bot.database.methods.cache_utils import safe_create_task
+            safe_create_task(invalidate_item_cache(item_name))
             return True
         except Exception:
             return False
@@ -127,3 +131,77 @@ async def create_role(name: str, permissions: int) -> int | None:
         s.add(role)
         await s.flush()
         return role.id
+
+
+async def create_promo_code(
+    code: str,
+    discount_type: str,
+    discount_value,
+    max_uses: int = 0,
+    expires_at=None,
+    category_id: int = None,
+    item_id: int = None,
+) -> int | None:
+    """Create a promo code. Returns ID or None if code already exists."""
+    from decimal import Decimal
+    async with Database().session() as s:
+        result = await s.execute(select(exists().where(PromoCodes.code == code.upper())))
+        if result.scalar():
+            return None
+        promo = PromoCodes(
+            code=code.upper(),
+            discount_type=discount_type,
+            discount_value=Decimal(str(discount_value)),
+            max_uses=max_uses,
+            expires_at=expires_at,
+            category_id=category_id,
+            item_id=item_id,
+        )
+        s.add(promo)
+        await s.flush()
+        return promo.id
+
+
+async def add_to_cart(user_id: int, item_name: str, promo_code: str = None) -> tuple[bool, str]:
+    """Add item to user's cart. Returns (success, message)."""
+    from sqlalchemy import func as sa_func
+    CART_MAX_ITEMS = 10
+    async with Database().session() as s:
+        count = (await s.execute(
+            select(sa_func.count(CartItems.id)).where(CartItems.user_id == user_id)
+        )).scalar() or 0
+        if count >= CART_MAX_ITEMS:
+            return False, "cart_full"
+
+        # Check item exists
+        item_exists = (await s.execute(
+            select(exists().where(Goods.name == item_name))
+        )).scalar()
+        if not item_exists:
+            return False, "item_not_found"
+
+        s.add(CartItems(user_id=user_id, item_name=item_name, promo_code=promo_code))
+        return True, "success"
+
+
+
+async def create_review(user_id: int, item_name: str, rating: int, text: str = None) -> int | None:
+    """Create a review. Returns ID or None if already reviewed."""
+    async with Database().session() as s:
+        existing = (await s.execute(
+            select(exists().where(
+                Reviews.user_id == user_id,
+                Reviews.item_name == item_name
+            ))
+        )).scalar()
+        if existing:
+            return None
+        review = Reviews(
+            user_id=user_id,
+            item_name=item_name,
+            rating=rating,
+            text=text,
+        )
+        s.add(review)
+        await s.flush()
+        return review.id

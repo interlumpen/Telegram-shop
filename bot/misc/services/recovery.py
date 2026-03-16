@@ -1,6 +1,6 @@
 import asyncio
 import logging
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 from sqlalchemy import select, update, text
 
@@ -21,11 +21,11 @@ class RecoveryManager:
         self.running = True
 
         self.recovery_tasks.append(
-            asyncio.create_task(self._safe_run(self.recover_pending_payments()))
+            asyncio.create_task(self._safe_run(self.recover_pending_payments))
         )
 
         self.recovery_tasks.append(
-            asyncio.create_task(self._safe_run(self.periodic_health_check()))
+            asyncio.create_task(self._safe_run(self.periodic_health_check))
         )
 
     async def stop(self):
@@ -36,14 +36,16 @@ class RecoveryManager:
         await asyncio.gather(*self.recovery_tasks, return_exceptions=True)
         logger.info("Recovery manager stopped")
 
-    async def _safe_run(self, coro):
-        """Safe startup of coroutine with error handling"""
-        try:
-            await coro
-        except asyncio.CancelledError:
-            raise
-        except Exception as e:
-            logger.error(f"Recovery task error: {e}", exc_info=True)
+    async def _safe_run(self, coro_func, *args):
+        """Safe startup with automatic restart on failure"""
+        while self.running:
+            try:
+                await coro_func(*args)
+            except asyncio.CancelledError:
+                raise
+            except Exception as e:
+                logger.error(f"Recovery task error: {e}", exc_info=True)
+                await asyncio.sleep(30)
 
     async def recover_pending_payments(self):
         """Recovery of suspended payments"""
@@ -54,7 +56,7 @@ class RecoveryManager:
             try:
                 payment_copies = []
                 async with Database().session() as s:
-                    cutoff = datetime.now() - timedelta(hours=1)
+                    cutoff = datetime.now(timezone.utc) - timedelta(hours=1)
                     result = await s.execute(
                         select(Payments).where(
                             Payments.status == "pending",

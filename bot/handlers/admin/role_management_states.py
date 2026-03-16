@@ -23,9 +23,12 @@ PERM_LABELS = {
     Permission.BROADCAST: "BROADCAST",
     Permission.SETTINGS_MANAGE: "SETTINGS",
     Permission.USERS_MANAGE: "USERS",
-    Permission.SHOP_MANAGE: "SHOP",
+    Permission.CATALOG_MANAGE: "CATALOG",
     Permission.ADMINS_MANAGE: "ADMINS",
     Permission.OWN: "OWNER",
+    Permission.STATS_VIEW: "STATS",
+    Permission.BALANCE_MANAGE: "BALANCE",
+    Permission.PROMO_MANAGE: "PROMOS",
 }
 
 

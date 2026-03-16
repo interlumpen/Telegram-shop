@@ -447,10 +447,14 @@ async def buy_item_callback_handler(call: CallbackQuery, state: FSMContext):
         # Show the processing indicator
         await call.answer(localize("shop.purchase.processing"))
 
+        # Get promo code from state if applied
+        promo_code = data.get('applied_promo')
+
         # Execute a transactional purchase
         success, message, purchase_data = await buy_item_transaction(
             user_id,
-            purchase_request.item_name
+            purchase_request.item_name,
+            promo_code=promo_code,
         )
 
         if not success:
@@ -469,7 +473,7 @@ async def buy_item_callback_handler(call: CallbackQuery, state: FSMContext):
 
             await call.message.edit_text(
                 error_text,
-                reply_markup=back('gp_0')
+                reply_markup=back('back_to_item')
             )
 
             if message not in error_messages:
@@ -486,16 +490,28 @@ async def buy_item_callback_handler(call: CallbackQuery, state: FSMContext):
             metrics.track_conversion("purchase_funnel", "purchase", call.from_user.id)
 
         safe_value = sanitize_html(purchase_data['value'])
+        username = call.from_user.username or call.from_user.first_name
+
+        from bot.keyboards.inline import simple_buttons
+        buttons = [
+            (f"📦 {purchase_data['item_name']}", f"bought-item:{purchase_data['bought_id']}:back_to_item"),
+            (localize("btn.back"), "back_to_item"),
+        ]
 
         await call.message.edit_text(
             localize(
-                'shop.purchase.success',
-                balance=purchase_data['new_balance'],
+                'shop.purchase.receipt',
+                item_name=purchase_data['item_name'],
+                price=purchase_data['price'],
+                unique_id=purchase_data['unique_id'],
+                datetime=purchase_data['bought_datetime'],
+                username=username,
+                user_id=call.from_user.id,
                 value=safe_value,
-                currency=EnvKeys.PAY_CURRENCY
+                currency=EnvKeys.PAY_CURRENCY,
             ),
             parse_mode='HTML',
-            reply_markup=back('gp_0')
+            reply_markup=simple_buttons(buttons),
         )
 
         # Secure logging

@@ -4,6 +4,7 @@ from bot.database.methods.read import invalidate_user_cache, invalidate_stats_ca
     invalidate_category_cache
 from bot.database.methods.cache_utils import safe_create_task
 from bot.database.models import User, ItemValues, Goods, Categories, BoughtGoods, Role
+from bot.database.models.main import PromoCodes
 from bot.database import Database
 from bot.i18n import localize
 
@@ -134,3 +135,16 @@ async def update_role(role_id: int, name: str, permissions: int) -> tuple[bool, 
         role.name = name
         role.permissions = permissions
         return True, None
+
+
+async def toggle_promo_code(promo_id: int) -> bool | None:
+    """Toggle promo code active status. Returns new is_active or None if not found."""
+    async with Database().session() as s:
+        result = await s.execute(
+            select(PromoCodes).where(PromoCodes.id == promo_id).with_for_update()
+        )
+        promo = result.scalars().first()
+        if not promo:
+            return None
+        promo.is_active = not promo.is_active
+        return promo.is_active

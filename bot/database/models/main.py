@@ -10,13 +10,16 @@ from sqlalchemy.orm import relationship
 
 
 class Permission:
-    USE = 1
-    BROADCAST = 2
-    SETTINGS_MANAGE = 4
-    USERS_MANAGE = 8
-    SHOP_MANAGE = 16
-    ADMINS_MANAGE = 32
-    OWN = 64
+    USE             = 1 << 0   #   1 — basic access
+    BROADCAST       = 1 << 1   #   2 — mass messaging
+    SETTINGS_MANAGE = 1 << 2   #   4 — bot settings (maintenance, etc.)
+    USERS_MANAGE    = 1 << 3   #   8 — view/block/unblock users, referrals, purchases
+    CATALOG_MANAGE  = 1 << 4   #  16 — categories, positions, items/goods CRUD
+    ADMINS_MANAGE   = 1 << 5   #  32 — role CRUD, role assignment
+    OWN             = 1 << 6   #  64 — owner-only operations
+    STATS_VIEW      = 1 << 7   # 128 — statistics, logs, bought-item search
+    BALANCE_MANAGE  = 1 << 8   # 256 — top-up / deduct user balance
+    PROMO_MANAGE    = 1 << 9   # 512 — promo code CRUD
 
     @staticmethod
     def is_subset(perms: int, of: int) -> bool:
@@ -49,10 +52,14 @@ class Role(Database.BASE):
         roles = {
             'USER': [Permission.USE],
             'ADMIN': [Permission.USE, Permission.BROADCAST,
-                      Permission.SETTINGS_MANAGE, Permission.USERS_MANAGE, Permission.SHOP_MANAGE],
+                      Permission.SETTINGS_MANAGE, Permission.USERS_MANAGE,
+                      Permission.CATALOG_MANAGE, Permission.STATS_VIEW,
+                      Permission.BALANCE_MANAGE, Permission.PROMO_MANAGE],
             'OWNER': [Permission.USE, Permission.BROADCAST,
-                      Permission.SETTINGS_MANAGE, Permission.USERS_MANAGE, Permission.SHOP_MANAGE,
-                      Permission.ADMINS_MANAGE, Permission.OWN],
+                      Permission.SETTINGS_MANAGE, Permission.USERS_MANAGE,
+                      Permission.CATALOG_MANAGE, Permission.ADMINS_MANAGE,
+                      Permission.OWN, Permission.STATS_VIEW,
+                      Permission.BALANCE_MANAGE, Permission.PROMO_MANAGE],
         }
         default_role = 'USER'
         async with Database().session() as s:
@@ -68,12 +75,10 @@ class Role(Database.BASE):
                 role.default = (role.name == default_role)
 
     def add_permission(self, perm):
-        if not self.has_permission(perm):
-            self.permissions += perm
+        self.permissions |= perm
 
     def remove_permission(self, perm):
-        if self.has_permission(perm):
-            self.permissions -= perm
+        self.permissions &= ~perm
 
     def reset_permissions(self):
         self.permissions = 0
@@ -293,6 +298,54 @@ class AuditLog(Database.BASE):
 
     def __repr__(self):
         return f'<AuditLog {self.action} user={self.user_id} @ {self.timestamp}>'
+
+
+class PromoCodes(Database.BASE):
+    __tablename__ = 'promo_codes'
+    id = Column(Integer, primary_key=True)
+    code = Column(String(50), unique=True, nullable=False, index=True)
+    discount_type = Column(String(10), nullable=False)  # 'percent' | 'fixed'
+    discount_value = Column(Numeric(12, 2), nullable=False)
+    max_uses = Column(Integer, nullable=False, default=0)  # 0 = unlimited
+    current_uses = Column(Integer, nullable=False, default=0)
+    expires_at = Column(DateTime(timezone=True), nullable=True)
+    category_id = Column(Integer, ForeignKey('categories.id', ondelete='SET NULL'), nullable=True)
+    item_id = Column(Integer, ForeignKey('goods.id', ondelete='SET NULL'), nullable=True)
+    is_active = Column(Boolean, nullable=False, default=True, index=True)
+    created_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
+
+
+class PromoCodeUsages(Database.BASE):
+    __tablename__ = 'promo_code_usages'
+    id = Column(Integer, primary_key=True)
+    promo_id = Column(Integer, ForeignKey('promo_codes.id', ondelete='CASCADE'), nullable=False)
+    user_id = Column(BigInteger, ForeignKey('users.telegram_id', ondelete='CASCADE'), nullable=False)
+    used_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
+    __table_args__ = (UniqueConstraint('promo_id', 'user_id', name='uq_promo_usage_per_user'),)
+
+
+class CartItems(Database.BASE):
+    __tablename__ = 'cart_items'
+    id = Column(Integer, primary_key=True)
+    user_id = Column(BigInteger, ForeignKey('users.telegram_id', ondelete='CASCADE'), nullable=False, index=True)
+    item_name = Column(String(100), nullable=False)
+    promo_code = Column(String(50), nullable=True)
+    added_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
+
+
+
+class Reviews(Database.BASE):
+    __tablename__ = 'reviews'
+    id = Column(Integer, primary_key=True)
+    user_id = Column(BigInteger, ForeignKey('users.telegram_id', ondelete='CASCADE'), nullable=False, index=True)
+    item_name = Column(String(100), nullable=False, index=True)
+    rating = Column(Integer, nullable=False)  # 1-5
+    text = Column(Text, nullable=True)
+    created_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
+    __table_args__ = (
+        UniqueConstraint('user_id', 'item_name', name='uq_review_per_user_item'),
+        CheckConstraint('rating >= 1 AND rating <= 5', name='ck_review_rating_range'),
+    )
 
 
 async def register_models():

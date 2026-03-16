@@ -154,12 +154,25 @@ class CryptoPayAPI:
     Minimal async client for Crypto Bot API used to create and fetch invoices.
     """
 
+    _timeout = aiohttp.ClientTimeout(total=30)
+    _session: Optional[aiohttp.ClientSession] = None
+
     def __init__(self):
         self.token = EnvKeys.CRYPTO_PAY_TOKEN
         self.base_url = "https://pay.crypt.bot/api"
         self.circuit_breaker = _crypto_circuit_breaker
 
-    _timeout = aiohttp.ClientTimeout(total=30)
+    @classmethod
+    def _get_session(cls) -> aiohttp.ClientSession:
+        if cls._session is None or cls._session.closed:
+            cls._session = aiohttp.ClientSession(timeout=cls._timeout)
+        return cls._session
+
+    @classmethod
+    async def close_session(cls):
+        if cls._session and not cls._session.closed:
+            await cls._session.close()
+            cls._session = None
 
     async def _request(self, method: str, params: dict) -> dict:
         if self.circuit_breaker.is_open:
@@ -171,18 +184,17 @@ class CryptoPayAPI:
 
         headers = {"Crypto-Pay-API-Token": self.token}
         url = f"{self.base_url}/{method}"
+        session = self._get_session()
 
         try:
             if method.startswith("get"):
-                async with aiohttp.ClientSession(timeout=self._timeout) as session:
-                    async with session.get(url, params=params, headers=headers) as resp:
-                        resp.raise_for_status()
-                        data = await resp.json()
+                async with session.get(url, params=params, headers=headers) as resp:
+                    resp.raise_for_status()
+                    data = await resp.json()
             else:
-                async with aiohttp.ClientSession(timeout=self._timeout) as session:
-                    async with session.post(url, json=params, headers=headers) as resp:
-                        resp.raise_for_status()
-                        data = await resp.json()
+                async with session.post(url, json=params, headers=headers) as resp:
+                    resp.raise_for_status()
+                    data = await resp.json()
         except CryptoPayAPIError:
             raise
         except Exception:

@@ -88,6 +88,25 @@ class BroadcastMessage(BaseModel):
         return self
 
 
+class PromoCodeRequest(BaseModel):
+    """Validate promo code input"""
+    code: Annotated[str, StringConstraints(min_length=1, max_length=50, strip_whitespace=True)]
+
+    @field_validator('code')
+    @classmethod
+    def validate_code(cls, v: str) -> str:
+        v = v.upper().strip()
+        if re.search(r'[^\w\-]', v):
+            raise ValueError('Promo code can only contain letters, digits, and hyphens')
+        return v
+
+
+class ReviewRequest(BaseModel):
+    """Validate review input"""
+    rating: int = Field(..., ge=1, le=5)
+    text: Optional[Annotated[str, StringConstraints(max_length=500)]] = None
+
+
 class SearchQuery(BaseModel):
     """Validate search queries"""
     query: Annotated[str, StringConstraints(min_length=1, max_length=255, strip_whitespace=True)]
@@ -98,7 +117,7 @@ class SearchQuery(BaseModel):
     def sanitize_query(self, v: str) -> str:
         """Sanitize the search query"""
         # Remove special characters that could break search
-        v = re.sub(r'[^\w\s\-.]', '', self.query)
+        v = re.sub(r'[^\w\s\-.]', '', v)
         return v.strip()
 
 

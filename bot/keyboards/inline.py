@@ -24,9 +24,9 @@ def main_menu(role: int, channel: str | None = None, helper: str | None = None) 
     return kb.as_markup()
 
 
-def profile_keyboard(referral_percent: int, user_items: int = 0) -> InlineKeyboardMarkup:
+def profile_keyboard(referral_percent: int, user_items: int = 0, cart_count: int = 0) -> InlineKeyboardMarkup:
     """
-    Profile keyboard.
+    Profile keyboard with cart, history, subscriptions.
     """
     kb = InlineKeyboardBuilder()
     kb.button(text=localize("btn.replenish"), callback_data="replenish_balance")
@@ -34,6 +34,10 @@ def profile_keyboard(referral_percent: int, user_items: int = 0) -> InlineKeyboa
         kb.button(text=localize("btn.referral"), callback_data="referral_system")
     if user_items != 0:
         kb.button(text=localize("btn.purchased"), callback_data="bought_items")
+    cart_text = localize("btn.cart", count=cart_count) if cart_count > 0 else localize("btn.cart_empty")
+    kb.button(text=cart_text, callback_data="cart")
+    kb.button(text=localize("btn.operation_history"), callback_data="operation_history")
+    kb.button(text=localize("btn.redeem_promo"), callback_data="redeem_promo")
     kb.button(text=localize("btn.back"), callback_data="back_to_menu")
     kb.adjust(1)
     return kb.as_markup()
@@ -44,10 +48,12 @@ def admin_console_keyboard(maintenance_mode: bool = False, role: int = 127) -> I
     Admin panel — shows only buttons the user has permissions for.
     """
     kb = InlineKeyboardBuilder()
-    if role & Permission.SHOP_MANAGE:
+    if role & Permission.CATALOG_MANAGE:
         kb.button(text=localize("admin.menu.shop"), callback_data="shop_management")
         kb.button(text=localize("admin.menu.goods"), callback_data="goods_management")
         kb.button(text=localize("admin.menu.categories"), callback_data="categories_management")
+    if role & Permission.PROMO_MANAGE:
+        kb.button(text=localize("admin.menu.promo"), callback_data="promo_mgmt")
     if role & Permission.USERS_MANAGE:
         kb.button(text=localize("admin.menu.users"), callback_data="user_management")
     if role & Permission.ADMINS_MANAGE:
@@ -125,12 +131,26 @@ async def lazy_paginated_keyboard(
     return kb.as_markup()
 
 
-def item_info(item_name: str, back_data: str) -> InlineKeyboardMarkup:
+def item_info(
+        item_name: str, back_data: str, avg_rating: float = None,
+        review_count: int = 0, has_purchased: bool = False,
+        applied_promo: str = None, reviews_enabled: bool = True,
+) -> InlineKeyboardMarkup:
     """
-    Product card.
+    Product card with buy, cart, promo, review buttons.
     """
     kb = InlineKeyboardBuilder()
     kb.button(text=localize("btn.buy"), callback_data="buy")
+    kb.button(text=localize("btn.add_to_cart"), callback_data="add_to_cart")
+    if applied_promo:
+        kb.button(text=localize("btn.remove_promo"), callback_data="remove_promo")
+    else:
+        kb.button(text=localize("btn.apply_promo"), callback_data="apply_promo")
+    if reviews_enabled:
+        if review_count > 0:
+            kb.button(text=localize("btn.view_reviews", count=review_count), callback_data=f"reviews:{item_name}:0")
+        if has_purchased:
+            kb.button(text=localize("btn.leave_review"), callback_data=f"review:{item_name}")
     kb.button(text=localize("btn.back"), callback_data=back_data)
     kb.adjust(2)
     return kb.as_markup()
@@ -183,6 +203,16 @@ def check_sub(channel_username: str) -> InlineKeyboardMarkup:
     kb.button(text=localize("btn.channel"), url=f"https://t.me/{channel_username}")
     kb.button(text=localize("btn.check_subscription"), callback_data="sub_channel_done")
     kb.adjust(1)
+    return kb.as_markup()
+
+
+def rating_keyboard(item_name: str) -> InlineKeyboardMarkup:
+    """Rating selection keyboard (1-5 stars)."""
+    kb = InlineKeyboardBuilder()
+    for i in range(1, 6):
+        kb.button(text="⭐" * i, callback_data=f"rating:{i}")
+    kb.button(text=localize("btn.back"), callback_data="back_to_menu")
+    kb.adjust(5)
     return kb.as_markup()
 
 

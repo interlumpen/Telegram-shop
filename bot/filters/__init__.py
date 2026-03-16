@@ -1,1 +1,1 @@
-from .main import ValidAmountFilter, HasPermissionFilter
+from .main import ValidAmountFilter, HasPermissionFilter, HasAnyPermissionFilter

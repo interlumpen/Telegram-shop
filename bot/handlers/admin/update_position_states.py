@@ -18,7 +18,7 @@ from bot.states import UpdateItemFSM
 router = Router()
 
 
-@router.callback_query(F.data == 'update_item_amount', HasPermissionFilter(permission=Permission.SHOP_MANAGE))
+@router.callback_query(F.data == 'update_item_amount', HasPermissionFilter(permission=Permission.CATALOG_MANAGE))
 async def update_item_amount_callback_handler(call: CallbackQuery, state):
     """Starts the flow for adding values (stock) to an existing item."""
     await call.message.edit_text(
@@ -151,7 +151,7 @@ async def updating_item_amount(call: CallbackQuery, state):
     await state.clear()
 
 
-@router.callback_query(F.data == 'update_item', HasPermissionFilter(permission=Permission.SHOP_MANAGE))
+@router.callback_query(F.data == 'update_item', HasPermissionFilter(permission=Permission.CATALOG_MANAGE))
 async def update_item_callback_handler(call: CallbackQuery, state):
     """Starts the full update flow."""
     await call.message.edit_text(localize('admin.goods.update.prompt.name'), reply_markup=back("goods_management"))

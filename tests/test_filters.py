@@ -104,12 +104,12 @@ class TestHasPermissionFilter:
         from bot.filters.main import HasPermissionFilter
         from bot.database.models.main import Permission
 
-        f = HasPermissionFilter(permission=Permission.SHOP_MANAGE)
+        f = HasPermissionFilter(permission=Permission.CATALOG_MANAGE)
 
         event = MagicMock()
         event.from_user.id = 111003
 
-        combined = Permission.USE | Permission.SHOP_MANAGE | Permission.BROADCAST
+        combined = Permission.USE | Permission.CATALOG_MANAGE | Permission.BROADCAST
         with patch('bot.filters.main.check_role_cached', new_callable=AsyncMock, return_value=combined):
             result = await f(event)
         assert result is True
@@ -139,7 +139,8 @@ class TestHasPermissionFilter:
         event.from_user.id = 111005
 
         all_perms = Permission.USE | Permission.BROADCAST | Permission.SETTINGS_MANAGE | \
-                    Permission.USERS_MANAGE | Permission.SHOP_MANAGE | Permission.ADMINS_MANAGE | Permission.OWN
+                    Permission.USERS_MANAGE | Permission.CATALOG_MANAGE | Permission.ADMINS_MANAGE | \
+                    Permission.OWN | Permission.STATS_VIEW | Permission.BALANCE_MANAGE | Permission.PROMO_MANAGE
         with patch('bot.filters.main.check_role_cached', new_callable=AsyncMock, return_value=all_perms):
             result = await f(event)
         assert result is True

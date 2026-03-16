@@ -7,6 +7,7 @@ from .shop_management_states import router as shop_management_router
 from .update_position_states import router as update_position_router
 from .user_management_states import router as user_management_router
 from .role_management_states import router as role_management_router
+from .promo_management_states import router as promo_management_router
 
 from aiogram import Router
 
@@ -20,3 +21,4 @@ router.include_router(shop_management_router)
 router.include_router(update_position_router)
 router.include_router(user_management_router)
 router.include_router(role_management_router)
+router.include_router(promo_management_router)
