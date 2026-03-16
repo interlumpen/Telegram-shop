@@ -723,9 +723,7 @@ Available for users with admin permissions (built-in ADMIN/OWNER or custom roles
 
 ## 📊 API Documentation
 
-<details>
-<summary>Core Database Methods</summary>
-
+### Core Database Methods
 
 #### User Management
 
@@ -857,7 +855,6 @@ engine = create_async_engine(
     },
 )
 ```
-</details>
 
 ## 🧪 Testing
 
