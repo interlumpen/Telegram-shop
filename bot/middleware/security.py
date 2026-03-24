@@ -157,7 +157,7 @@ class AuthenticationMiddleware(BaseMiddleware):
         cache = get_cache_manager()
         if cache:
             from bot.database.methods.cache_utils import safe_create_task
-            safe_create_task(cache.set("bot:maintenance_mode", value, ttl=0))
+            safe_create_task(cache.set("bot:maintenance_mode", value, ttl=86400 * 30))
 
     async def __call__(
             self,

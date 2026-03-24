@@ -107,8 +107,11 @@ async def view_cart_handler(call: CallbackQuery, state: FSMContext):
 @router.callback_query(F.data.startswith("cart_remove:"))
 async def remove_cart_item_handler(call: CallbackQuery, state: FSMContext):
     cart_item_id = int(call.data.split(":")[1])
-    await remove_from_cart(cart_item_id)
-    await call.answer(localize("cart.removed"))
+    removed = await remove_from_cart(cart_item_id, user_id=call.from_user.id)
+    if removed:
+        await call.answer(localize("cart.removed"))
+    else:
+        await call.answer(localize("cart.item_not_found"), show_alert=True)
     await _show_cart(call)
 
 
@@ -164,6 +167,7 @@ async def cart_checkout_confirm_handler(call: CallbackQuery, state: FSMContext):
             "cart_items_unavailable": localize("cart.items_unavailable"),
             "insufficient_funds": localize("shop.insufficient_funds"),
             "transaction_error": localize("errors.something_wrong"),
+            "promo_expired_during_checkout": localize("cart.promo_expired"),
         }
         await call.message.edit_text(
             localize("cart.checkout_fail", reason=reason_map.get(msg, msg)),

@@ -2,13 +2,11 @@ from datetime import datetime, timezone
 from decimal import Decimal
 from uuid import uuid4
 
-from sqlalchemy import select, update
+from sqlalchemy import select, update, exists as sa_exists, delete as sa_delete
 from sqlalchemy.exc import IntegrityError
 
-from sqlalchemy import exists as sa_exists_top
-
 from bot.database.models import User, ItemValues, Goods, BoughtGoods, Payments, Operations
-from bot.database.models.main import PromoCodes, PromoCodeUsages, CartItems
+from bot.database.models.main import PromoCodes, PromoCodeUsages, CartItems, ReferralEarnings
 from bot.database import Database
 from bot.misc import EnvKeys
 from bot.database.methods.read import invalidate_user_cache, invalidate_stats_cache, invalidate_item_cache
@@ -21,7 +19,6 @@ async def buy_item_transaction(telegram_id: int, item_name: str, promo_code: str
     Complete transactional purchase of goods with checks and locks.
     Returns: (success, message, purchase_data)
     """
-    from sqlalchemy import exists as sa_exists
     max_retries = 3
     for attempt in range(max_retries):
         async with Database().session() as s:
@@ -110,9 +107,9 @@ async def buy_item_transaction(telegram_id: int, item_name: str, promo_code: str
                     await s.rollback()
                     return False, "insufficient_funds", None
 
-                # 4. Receive and lock the goods for purchase
+                # 4. Receive and lock the goods for purchase (blocking wait for row lock)
                 item_value = (await s.execute(
-                    select(ItemValues).where(ItemValues.item_id == goods.id).with_for_update(skip_locked=True)
+                    select(ItemValues).where(ItemValues.item_id == goods.id).with_for_update()
                 )).scalars().first()
 
                 if not item_value:
@@ -242,8 +239,9 @@ async def process_payment_with_referral(
             s.add(operation)
 
             # 4. Process the referral bonus
-            if referral_percent > 0 and user.referral_id and user.referral_id != user_id:
-                referral_amount = (Decimal(referral_percent) / Decimal(100)) * amount
+            clamped_percent = min(max(referral_percent, 0), 99)
+            if clamped_percent > 0 and user.referral_id and user.referral_id != user_id:
+                referral_amount = (Decimal(clamped_percent) / Decimal(100)) * amount
 
                 if referral_amount > 0:
                     referrer = (await s.execute(
@@ -260,7 +258,6 @@ async def process_payment_with_referral(
                             details=f"paid={amount}, bonus={referral_amount}",
                         )
 
-                        from bot.database.models import ReferralEarnings
                         earning = ReferralEarnings(
                             referrer_id=user.referral_id,
                             referral_id=user_id,
@@ -269,7 +266,7 @@ async def process_payment_with_referral(
                         )
                         s.add(earning)
 
-            referrer_id = user.referral_id if referral_percent > 0 else None
+            referrer_id = user.referral_id if clamped_percent > 0 else None
 
             await s.commit()
 
@@ -302,87 +299,91 @@ async def checkout_cart_transaction(user_id: int) -> tuple[bool, str, list | Non
     Promo codes are read from cart_items.promo_code and validated at checkout time.
     Returns: (success, message, list[purchase_data])
     """
-    from sqlalchemy import delete as sa_delete
-    from sqlalchemy import exists as sa_exists
+    max_retries = 3
+    for attempt in range(max_retries):
+        async with Database().session() as s:
+            try:
+                # 1. Lock user
+                user = (await s.execute(
+                    select(User).where(User.telegram_id == user_id).with_for_update()
+                )).scalars().one_or_none()
+                if not user:
+                    await s.rollback()
+                    return False, "user_not_found", None
 
-    async with Database().session() as s:
-        try:
-            # 1. Lock user
-            user = (await s.execute(
-                select(User).where(User.telegram_id == user_id).with_for_update()
-            )).scalars().one_or_none()
-            if not user:
-                await s.rollback()
-                return False, "user_not_found", None
+                # 2. Get cart items
+                cart_items = (await s.execute(
+                    select(CartItems).where(CartItems.user_id == user_id)
+                )).scalars().all()
 
-            # 2. Get cart items
-            cart_items = (await s.execute(
-                select(CartItems).where(CartItems.user_id == user_id)
-            )).scalars().all()
+                if not cart_items:
+                    await s.rollback()
+                    return False, "cart_empty", None
 
-            if not cart_items:
-                await s.rollback()
-                return False, "cart_empty", None
+                # 3. Resolve items, validate promos, calculate total
+                purchases = []
+                total_price = Decimal(0)
+                items_to_remove = []
+                promos_to_record = []  # (promo_obj, promo_id) for usage tracking
+                claimed_value_ids: set[int] = set()
 
-            # 3. Resolve items, validate promos, calculate total
-            purchases = []
-            total_price = Decimal(0)
-            items_to_remove = []
-            promos_to_record = []  # (promo_obj, promo_id) for usage tracking
-            claimed_value_ids: set[int] = set()
-
-            for ci in cart_items:
-                goods = (await s.execute(
-                    select(Goods).where(Goods.name == ci.item_name).with_for_update()
-                )).scalars().first()
-
-                if not goods:
-                    items_to_remove.append(ci.id)
-                    continue
-
-                query = select(ItemValues).where(ItemValues.item_id == goods.id)
-                if claimed_value_ids:
-                    query = query.where(ItemValues.id.notin_(claimed_value_ids))
-                item_value = (await s.execute(
-                    query.with_for_update(skip_locked=True)
-                )).scalars().first()
-
-                if not item_value:
-                    items_to_remove.append(ci.id)
-                    continue
-
-                claimed_value_ids.add(item_value.id)
-
-                price = Decimal(str(goods.price))
-                final_price = price
-
-                # Validate and apply promo code if stored on cart item
-                if ci.promo_code:
-                    promo = (await s.execute(
-                        select(PromoCodes).where(PromoCodes.code == ci.promo_code.upper()).with_for_update()
+                for ci in cart_items:
+                    goods = (await s.execute(
+                        select(Goods).where(Goods.name == ci.item_name).with_for_update()
                     )).scalars().first()
 
-                    promo_valid = False
-                    if promo and promo.is_active and promo.discount_type != 'balance':
-                        if not (promo.expires_at and promo.expires_at < datetime.now(timezone.utc)):
-                            if not (promo.max_uses > 0 and promo.current_uses >= promo.max_uses):
-                                # Check per-user usage
-                                used = (await s.execute(
-                                    select(sa_exists().where(
-                                        PromoCodeUsages.promo_id == promo.id,
-                                        PromoCodeUsages.user_id == user_id
-                                    ))
-                                )).scalar()
-                                if not used:
-                                    # Check item/category binding
-                                    if promo.item_id and promo.item_id != goods.id:
-                                        pass
-                                    elif promo.category_id and promo.category_id != goods.category_id:
-                                        pass
-                                    else:
-                                        promo_valid = True
+                    if not goods:
+                        items_to_remove.append(ci.id)
+                        continue
 
-                    if promo_valid:
+                    query = select(ItemValues).where(ItemValues.item_id == goods.id)
+                    if claimed_value_ids:
+                        query = query.where(ItemValues.id.notin_(claimed_value_ids))
+                    item_value = (await s.execute(
+                        query.with_for_update()
+                    )).scalars().first()
+
+                    if not item_value:
+                        items_to_remove.append(ci.id)
+                        continue
+
+                    claimed_value_ids.add(item_value.id)
+
+                    price = Decimal(str(goods.price))
+                    final_price = price
+
+                    # Validate and apply promo code if stored on cart item
+                    if ci.promo_code:
+                        promo = (await s.execute(
+                            select(PromoCodes).where(PromoCodes.code == ci.promo_code.upper()).with_for_update()
+                        )).scalars().first()
+
+                        promo_valid = False
+                        if promo and promo.is_active and promo.discount_type != 'balance':
+                            if not (promo.expires_at and promo.expires_at < datetime.now(timezone.utc)):
+                                if not (promo.max_uses > 0 and promo.current_uses >= promo.max_uses):
+                                    # Check per-user usage
+                                    used = (await s.execute(
+                                        select(sa_exists().where(
+                                            PromoCodeUsages.promo_id == promo.id,
+                                            PromoCodeUsages.user_id == user_id
+                                        ))
+                                    )).scalar()
+                                    if not used:
+                                        # Check item/category binding
+                                        if promo.item_id and promo.item_id != goods.id:
+                                            pass
+                                        elif promo.category_id and promo.category_id != goods.category_id:
+                                            pass
+                                        else:
+                                            promo_valid = True
+
+                        if not promo_valid:
+                            # Promo was on cart but is no longer valid — abort instead
+                            # of silently charging full price.
+                            await s.rollback()
+                            return False, "promo_expired_during_checkout", None
+
                         if promo.discount_type == 'percent':
                             final_price = price * (1 - Decimal(str(promo.discount_value)) / 100)
                         else:
@@ -390,87 +391,101 @@ async def checkout_cart_transaction(user_id: int) -> tuple[bool, str, list | Non
                         final_price = final_price.quantize(Decimal("0.01"))
                         promos_to_record.append(promo)
 
-                purchases.append({
-                    'cart_item': ci,
-                    'goods': goods,
-                    'item_value': item_value,
-                    'price': final_price,
-                })
-                total_price += final_price
+                    purchases.append({
+                        'cart_item': ci,
+                        'goods': goods,
+                        'item_value': item_value,
+                        'price': final_price,
+                    })
+                    total_price += final_price
 
-            # Remove invalid cart items
-            if items_to_remove:
+                # Remove invalid cart items
+                if items_to_remove:
+                    await s.execute(
+                        sa_delete(CartItems).where(CartItems.id.in_(items_to_remove))
+                    )
+
+                if not purchases:
+                    await s.commit()
+                    return False, "cart_items_unavailable", None
+
+                # 4. Check balance
+                if user.balance < total_price:
+                    await s.rollback()
+                    return False, "insufficient_funds", None
+
+                # 5. Process each purchase
+                results = []
+                for p in purchases:
+                    if not p['item_value'].is_infinity:
+                        await s.delete(p['item_value'])
+
+                    bought_item = BoughtGoods(
+                        name=p['goods'].name,
+                        value=p['item_value'].value,
+                        price=p['price'],
+                        buyer_id=user_id,
+                        bought_datetime=datetime.now(timezone.utc),
+                        unique_id=uuid4().int >> 65
+                    )
+                    s.add(bought_item)
+                    await s.flush()
+                    results.append({
+                        "item_name": p['goods'].name,
+                        "value": p['item_value'].value,
+                        "price": float(p['price']),
+                        "bought_id": bought_item.id,
+                        "unique_id": bought_item.unique_id,
+                        "bought_datetime": bought_item.bought_datetime.isoformat(),
+                    })
+
+                # 6. Record promo usage
+                for promo in promos_to_record:
+                    promo.current_uses += 1
+                    s.add(PromoCodeUsages(promo_id=promo.id, user_id=user_id))
+
+                # 7. Deduct total
+                user.balance -= total_price
+
+                # 8. Clear cart
                 await s.execute(
-                    sa_delete(CartItems).where(CartItems.id.in_(items_to_remove))
+                    sa_delete(CartItems).where(CartItems.user_id == user_id)
                 )
 
-            if not purchases:
                 await s.commit()
-                return False, "cart_items_unavailable", None
 
-            # 4. Check balance
-            if user.balance < total_price:
+                safe_create_task(invalidate_user_cache(user_id))
+                safe_create_task(invalidate_stats_cache())
+                # Invalidate cache for all purchased items
+                purchased_names = {r["item_name"] for r in results}
+                for name in purchased_names:
+                    safe_create_task(invalidate_item_cache(name))
+
+                return True, "success", results
+
+            except IntegrityError as e:
                 await s.rollback()
-                return False, "insufficient_funds", None
-
-            # 5. Process each purchase
-            results = []
-            for p in purchases:
-                if not p['item_value'].is_infinity:
-                    await s.delete(p['item_value'])
-
-                bought_item = BoughtGoods(
-                    name=p['goods'].name,
-                    value=p['item_value'].value,
-                    price=p['price'],
-                    buyer_id=user_id,
-                    bought_datetime=datetime.now(timezone.utc),
-                    unique_id=uuid4().int >> 65
+                if "unique_id" in str(e).lower() and attempt < max_retries - 1:
+                    continue  # Retry with new unique_ids
+                await log_audit(
+                    "cart_checkout_failed",
+                    level="WARNING",
+                    user_id=user_id,
+                    details=str(e),
                 )
-                s.add(bought_item)
-                await s.flush()
-                results.append({
-                    "item_name": p['goods'].name,
-                    "value": p['item_value'].value,
-                    "price": float(p['price']),
-                    "bought_id": bought_item.id,
-                    "unique_id": bought_item.unique_id,
-                    "bought_datetime": bought_item.bought_datetime.isoformat(),
-                })
+                return False, "transaction_error", None
 
-            # 6. Record promo usage
-            for promo in promos_to_record:
-                promo.current_uses += 1
-                s.add(PromoCodeUsages(promo_id=promo.id, user_id=user_id))
+            except Exception as e:
+                await s.rollback()
+                await log_audit(
+                    "cart_checkout_failed",
+                    level="WARNING",
+                    user_id=user_id,
+                    details=str(e),
+                )
+                return False, "transaction_error", None
 
-            # 7. Deduct total
-            user.balance -= total_price
-
-            # 8. Clear cart
-            await s.execute(
-                sa_delete(CartItems).where(CartItems.user_id == user_id)
-            )
-
-            await s.commit()
-
-            safe_create_task(invalidate_user_cache(user_id))
-            safe_create_task(invalidate_stats_cache())
-            # Invalidate cache for all purchased items
-            purchased_names = {r["item_name"] for r in results}
-            for name in purchased_names:
-                safe_create_task(invalidate_item_cache(name))
-
-            return True, "success", results
-
-        except Exception as e:
-            await s.rollback()
-            await log_audit(
-                "cart_checkout_failed",
-                level="WARNING",
-                user_id=user_id,
-                details=str(e),
-            )
-            return False, "transaction_error", None
+    return False, "transaction_error", None
 
 
 async def admin_balance_change(telegram_id: int, amount: Decimal) -> tuple[bool, str]:
@@ -478,7 +493,6 @@ async def admin_balance_change(telegram_id: int, amount: Decimal) -> tuple[bool,
     Atomic admin balance change (top-up or deduction) with operation record.
     amount > 0 for top-up, amount < 0 for deduction.
     Returns (success, message).
-    Raises ValueError if insufficient funds for deduction.
     """
     async with Database().session() as s:
         try:
@@ -492,7 +506,7 @@ async def admin_balance_change(telegram_id: int, amount: Decimal) -> tuple[bool,
 
             if amount < 0 and user.balance < abs(amount):
                 await s.rollback()
-                raise ValueError("insufficient_funds")
+                return False, "insufficient_funds"
 
             user.balance += amount
 
@@ -509,9 +523,6 @@ async def admin_balance_change(telegram_id: int, amount: Decimal) -> tuple[bool,
             safe_create_task(invalidate_stats_cache())
 
             return True, "success"
-
-        except ValueError:
-            raise
 
         except Exception as e:
             await s.rollback()
@@ -560,7 +571,7 @@ async def redeem_balance_promo(code: str, user_id: int) -> tuple[bool, str, Deci
                 return False, "promo.max_uses_reached", None
 
             used = (await s.execute(
-                select(sa_exists_top().where(
+                select(sa_exists().where(
                     PromoCodeUsages.promo_id == promo.id,
                     PromoCodeUsages.user_id == user_id
                 ))

@@ -154,6 +154,7 @@ class RecoveryManager:
                 from bot.misc.caching.cache import get_cache_manager
                 cache = get_cache_manager()
                 if cache:
+                    await cache.check_health()
                     await cache.set("health:check", "ok", ttl=60)
 
                 me = await self.bot.get_me()

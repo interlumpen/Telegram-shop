@@ -413,8 +413,9 @@ class TestAdminBalanceChange:
     async def test_deduct_insufficient_funds(self, user_factory):
         await user_factory(telegram_id=300003, balance=100)
 
-        with pytest.raises(ValueError, match="insufficient_funds"):
-            await admin_balance_change(300003, -200)
+        success, msg = await admin_balance_change(300003, -200)
+        assert success is False
+        assert msg == "insufficient_funds"
 
         # Balance unchanged
         assert await _get_balance(300003) == 100.0

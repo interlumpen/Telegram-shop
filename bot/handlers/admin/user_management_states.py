@@ -500,7 +500,13 @@ async def process_replenish_user_balance(message: Message, state: FSMContext):
         )
 
         # Apply top-up (atomic: operation + balance in one transaction)
-        await admin_balance_change(user_update.telegram_id, Decimal(int(amount)))
+        success, msg = await admin_balance_change(user_update.telegram_id, Decimal(int(amount)))
+        if not success:
+            await message.answer(
+                localize('errors.something_wrong'),
+                reply_markup=back(f'check-user_{user_id}')
+            )
+            return
 
         user_info = await message.bot.get_chat(user_id)
         await message.answer(
@@ -574,17 +580,22 @@ async def process_deduct_user_balance(message: Message, state: FSMContext):
         )
 
         # Apply deduction (atomic: check + operation + balance in one transaction)
-        try:
-            await admin_balance_change(user_id, Decimal(-int(amount)))
-        except ValueError:
-            db_user = await check_user_cached(user_id)
-            current_balance = int(float(db_user.get('balance', 0))) if db_user else 0
-            await message.answer(
-                localize('admin.users.balance.insufficient',
-                         balance=current_balance,
-                         currency=EnvKeys.PAY_CURRENCY),
-                reply_markup=back(f'check-user_{user_id}')
-            )
+        success, msg = await admin_balance_change(user_id, Decimal(-int(amount)))
+        if not success:
+            if msg == "insufficient_funds":
+                db_user = await check_user_cached(user_id)
+                current_balance = int(float(db_user.get('balance', 0))) if db_user else 0
+                await message.answer(
+                    localize('admin.users.balance.insufficient',
+                             balance=current_balance,
+                             currency=EnvKeys.PAY_CURRENCY),
+                    reply_markup=back(f'check-user_{user_id}')
+                )
+            else:
+                await message.answer(
+                    localize('errors.something_wrong'),
+                    reply_markup=back(f'check-user_{user_id}')
+                )
             return
 
         user_info = await message.bot.get_chat(user_id)

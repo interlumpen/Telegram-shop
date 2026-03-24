@@ -101,6 +101,19 @@ class AdminAuth(AuthenticationBackend):
         return request.session.get("authenticated", False)
 
 
+def _safe_model_repr(model: Any, max_len: int = 500) -> str:
+    """Return a truncated repr that excludes sensitive fields."""
+    _sensitive = {"balance", "password", "secret", "token", "value"}
+    parts = []
+    for col in getattr(model, "__table__", None).columns if hasattr(model, "__table__") else ():
+        if col.name in _sensitive:
+            continue
+        val = getattr(model, col.name, None)
+        parts.append(f"{col.name}={val!r}")
+    result = f"{type(model).__name__}({', '.join(parts)})"
+    return result[:max_len]
+
+
 # Audited base view for mutable models
 class AuditModelView(ModelView):
     async def after_model_change(self, data: dict, model: Any, is_created: bool, request: Request) -> None:
@@ -109,7 +122,7 @@ class AuditModelView(ModelView):
             action,
             resource_type=self.name,
             resource_id=str(getattr(model, 'id', getattr(model, 'name', None))),
-            details=repr(model),
+            details=_safe_model_repr(model),
             ip_address=request.client.host,
         )
 
@@ -118,7 +131,7 @@ class AuditModelView(ModelView):
             "sqladmin_delete",
             resource_type=self.name,
             resource_id=str(getattr(model, 'id', getattr(model, 'name', None))),
-            details=repr(model),
+            details=_safe_model_repr(model),
             ip_address=request.client.host,
         )
 
@@ -372,14 +385,6 @@ async def metrics_json(request: Request) -> JSONResponse:
 
 # App Factory
 def create_admin_app() -> Starlette:
-    if "change-me" in EnvKeys.SECRET_KEY.lower():
-        logger.warning("SECRET_KEY is using default value! Change it in .env for production")
-
-    if EnvKeys.ADMIN_USERNAME == "admin" and EnvKeys.ADMIN_PASSWORD == "admin":
-        logger.warning(
-            "ADMIN_USERNAME and ADMIN_PASSWORD are using default values (admin/admin)! "
-            "Change them in .env for production"
-        )
 
     from bot.web.export import export_routes
 

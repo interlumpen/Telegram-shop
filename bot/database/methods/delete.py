@@ -86,10 +86,13 @@ async def delete_promo_code(promo_id: int) -> bool:
         return False
 
 
-async def remove_from_cart(cart_item_id: int) -> bool:
+async def remove_from_cart(cart_item_id: int, user_id: int = None) -> bool:
     """Remove a single item from cart by CartItems ID."""
     async with Database().session() as s:
-        result = await s.execute(sa_delete(CartItems).where(CartItems.id == cart_item_id))
+        clause = CartItems.id == cart_item_id
+        if user_id is not None:
+            clause = clause & (CartItems.user_id == user_id)
+        result = await s.execute(sa_delete(CartItems).where(clause))
         return result.rowcount > 0
 
 

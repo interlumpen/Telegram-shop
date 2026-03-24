@@ -215,6 +215,7 @@ async def process_replenish_balance(call: CallbackQuery, state: FSMContext):
 
     except Exception as e:
         logger.error(f"Payment processing error: {e}")
+        await state.clear()
         await call.answer(localize("errors.something_wrong"), show_alert=True)
 
 

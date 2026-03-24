@@ -124,14 +124,15 @@ class RateLimiter:
 
         if action and action in self.config.action_limits:
             limit, window = self.config.action_limits[action]
-            requests = self.user_actions[action][user_id]
+            requests = self.user_actions.get(action, {}).get(user_id, [])
             if len(requests) >= limit:
                 oldest_request = min(requests)
                 return int(window - (time.time() - oldest_request))
 
         # Global limit
-        if len(self.user_requests[user_id]) >= self.config.global_limit:
-            oldest_request = min(self.user_requests[user_id])
+        global_reqs = self.user_requests.get(user_id, [])
+        if len(global_reqs) >= self.config.global_limit:
+            oldest_request = min(global_reqs)
             return int(self.config.global_window - (time.time() - oldest_request))
 
         return 0
