@@ -40,12 +40,17 @@ class Role(Database.BASE):
     permissions = Column(Integer)
     users = relationship('User', backref='role', lazy='raise')
 
-    def __init__(self, name: str, permissions=None, **kwargs):
+    def __init__(self, name: str = None, permissions=None, **kwargs):
         super(Role, self).__init__(**kwargs)
-        if self.permissions is None:
+        if name is not None:
+            self.name = name
+        if permissions is not None:
+            self.permissions = permissions
+        elif self.permissions is None:
             self.permissions = 0
-        self.name = name
-        self.permissions = permissions
+
+    def __str__(self):
+        return self.name or ""
 
     @staticmethod
     async def insert_roles():
@@ -119,14 +124,22 @@ class User(Database.BASE):
         lazy='raise',
     )
 
-    def __init__(self, telegram_id: int, registration_date: datetime.datetime, balance=0, referral_id=None,
-                 role_id: int = 1, **kw: Any):
+    def __init__(self, telegram_id: int = None, registration_date: datetime.datetime = None, balance=None,
+                 referral_id=None, role_id: int = None, **kw: Any):
         super().__init__(**kw)
-        self.telegram_id = telegram_id
-        self.role_id = role_id
-        self.balance = balance
-        self.referral_id = referral_id
-        self.registration_date = registration_date
+        if telegram_id is not None:
+            self.telegram_id = telegram_id
+        if role_id is not None:
+            self.role_id = role_id
+        if balance is not None:
+            self.balance = balance
+        if referral_id is not None:
+            self.referral_id = referral_id
+        if registration_date is not None:
+            self.registration_date = registration_date
+
+    def __str__(self):
+        return str(self.telegram_id)
 
 
 class Categories(Database.BASE):
@@ -135,9 +148,13 @@ class Categories(Database.BASE):
     name = Column(String(100), unique=True, nullable=False)
     items = relationship("Goods", back_populates="category", lazy='raise')
 
-    def __init__(self, name: str, **kw: Any):
+    def __init__(self, name: str = None, **kw: Any):
         super().__init__(**kw)
-        self.name = name
+        if name is not None:
+            self.name = name
+
+    def __str__(self):
+        return self.name or ""
 
 
 class Goods(Database.BASE):
@@ -150,12 +167,19 @@ class Goods(Database.BASE):
     category = relationship("Categories", back_populates="items", lazy='raise')
     values = relationship("ItemValues", back_populates="item", lazy='raise')
 
-    def __init__(self, name: str, price, description: str, category_id: int, **kw: Any):
+    def __init__(self, name: str = None, price=None, description: str = None, category_id: int = None, **kw: Any):
         super().__init__(**kw)
-        self.name = name
-        self.price = price
-        self.description = description
-        self.category_id = category_id
+        if name is not None:
+            self.name = name
+        if price is not None:
+            self.price = price
+        if description is not None:
+            self.description = description
+        if category_id is not None:
+            self.category_id = category_id
+
+    def __str__(self):
+        return self.name or ""
 
 
 class ItemValues(Database.BASE):
@@ -171,11 +195,17 @@ class ItemValues(Database.BASE):
         Index('ix_item_values_item_inf', 'item_id', 'is_infinity'),
     )
 
-    def __init__(self, item_id: int, value: str, is_infinity: bool, **kw: Any):
+    def __init__(self, item_id: int = None, value: str = None, is_infinity: bool = None, **kw: Any):
         super().__init__(**kw)
-        self.item_id = item_id
-        self.value = value
-        self.is_infinity = is_infinity
+        if item_id is not None:
+            self.item_id = item_id
+        if value is not None:
+            self.value = value
+        if is_infinity is not None:
+            self.is_infinity = is_infinity
+
+    def __str__(self):
+        return f"#{self.id} ({self.item_id})"
 
 
 class BoughtGoods(Database.BASE):
@@ -194,14 +224,24 @@ class BoughtGoods(Database.BASE):
         Index('ix_bought_goods_buyer_datetime', 'buyer_id', 'bought_datetime'),
     )
 
-    def __init__(self, name: str, value: str, price, bought_datetime, unique_id, buyer_id: int = 0, **kw: Any):
+    def __init__(self, name: str = None, value: str = None, price=None, bought_datetime=None,
+                 unique_id=None, buyer_id: int = None, **kw: Any):
         super().__init__(**kw)
-        self.item_name = name
-        self.value = value
-        self.price = price
-        self.buyer_id = buyer_id
-        self.bought_datetime = bought_datetime
-        self.unique_id = unique_id
+        if name is not None:
+            self.item_name = name
+        if value is not None:
+            self.value = value
+        if price is not None:
+            self.price = price
+        if buyer_id is not None:
+            self.buyer_id = buyer_id
+        if bought_datetime is not None:
+            self.bought_datetime = bought_datetime
+        if unique_id is not None:
+            self.unique_id = unique_id
+
+    def __str__(self):
+        return self.item_name or ""
 
 
 class Operations(Database.BASE):
@@ -216,11 +256,17 @@ class Operations(Database.BASE):
         Index('ix_operations_time', 'operation_time'),
     )
 
-    def __init__(self, user_id: int, operation_value, operation_time, **kw: Any):
+    def __init__(self, user_id: int = None, operation_value=None, operation_time=None, **kw: Any):
         super().__init__(**kw)
-        self.user_id = user_id
-        self.operation_value = operation_value
-        self.operation_time = operation_time
+        if user_id is not None:
+            self.user_id = user_id
+        if operation_value is not None:
+            self.operation_value = operation_value
+        if operation_time is not None:
+            self.operation_time = operation_time
+
+    def __str__(self):
+        return f"#{self.id}"
 
 
 class Payments(Database.BASE):
@@ -239,6 +285,9 @@ class Payments(Database.BASE):
         UniqueConstraint('provider', 'external_id', name='uq_payment_provider_ext'),
         Index('ix_payments_status_created', 'status', 'created_at'),
     )
+
+    def __str__(self):
+        return f"{self.provider}:{self.external_id}"
 
 
 class ReferralEarnings(Database.BASE):
@@ -270,12 +319,19 @@ class ReferralEarnings(Database.BASE):
         Index('ix_referral_earnings_referral_created', 'referral_id', 'created_at'),
     )
 
-    def __init__(self, referrer_id: int, referral_id: int, amount, original_amount, **kw: Any):
+    def __init__(self, referrer_id: int = None, referral_id: int = None, amount=None, original_amount=None, **kw: Any):
         super().__init__(**kw)
-        self.referrer_id = referrer_id
-        self.referral_id = referral_id
-        self.amount = amount
-        self.original_amount = original_amount
+        if referrer_id is not None:
+            self.referrer_id = referrer_id
+        if referral_id is not None:
+            self.referral_id = referral_id
+        if amount is not None:
+            self.amount = amount
+        if original_amount is not None:
+            self.original_amount = original_amount
+
+    def __str__(self):
+        return f"#{self.id}"
 
 
 class AuditLog(Database.BASE):
@@ -299,6 +355,9 @@ class AuditLog(Database.BASE):
     def __repr__(self):
         return f'<AuditLog {self.action} user={self.user_id} @ {self.timestamp}>'
 
+    def __str__(self):
+        return self.action or ""
+
 
 class PromoCodes(Database.BASE):
     __tablename__ = 'promo_codes'
@@ -313,6 +372,9 @@ class PromoCodes(Database.BASE):
     item_id = Column(Integer, ForeignKey('goods.id', ondelete='SET NULL'), nullable=True)
     is_active = Column(Boolean, nullable=False, default=True, index=True)
     created_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
+
+    def __str__(self):
+        return self.code or ""
 
 
 class PromoCodeUsages(Database.BASE):
@@ -332,6 +394,8 @@ class CartItems(Database.BASE):
     promo_code = Column(String(50), nullable=True)
     added_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
 
+    def __str__(self):
+        return self.item_name or ""
 
 
 class Reviews(Database.BASE):
@@ -346,6 +410,9 @@ class Reviews(Database.BASE):
         UniqueConstraint('user_id', 'item_name', name='uq_review_per_user_item'),
         CheckConstraint('rating >= 1 AND rating <= 5', name='ck_review_rating_range'),
     )
+
+    def __str__(self):
+        return f"{self.item_name} ({self.rating}★)"
 
 
 async def register_models():

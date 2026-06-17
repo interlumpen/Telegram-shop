@@ -11,7 +11,8 @@ asyncpg~=0.30.0
 aiosqlite~=0.20.0
 
 # Admin panel
-sqladmin>=0.20
+sqladmin==0.16.1
+WTForms==3.1.2
 starlette
 uvicorn
 itsdangerous

@@ -360,13 +360,13 @@ credentials (`admin`/`admin`) is automatically blocked.
 <details>
 <summary><b>📦 Redis Storage (Optional)</b></summary>
 
-| Variable         | Description                                                    | Default     |
-|------------------|----------------------------------------------------------------|-------------|
-| `REDIS_ENABLED`  | Enable Redis for caching and FSM storage (`1` = on, `0` = off) | `1`         |
-| `REDIS_HOST`     | Redis server address                                           | `localhost` |
-| `REDIS_PORT`     | Redis server port                                              | `6379`      |
-| `REDIS_DB`       | Redis database number                                          | `0`         |
-| `REDIS_PASSWORD` | Redis password (leave empty for Docker)                        | -           |
+| Variable         | Description                                                         | Default               |
+|------------------|---------------------------------------------------------------------|-----------------------|
+| `REDIS_ENABLED`  | Enable Redis for caching and FSM storage (`1` = on, `0` = off)      | `1`                   |
+| `REDIS_HOST`     | Redis server address                                                | `localhost`           |
+| `REDIS_PORT`     | Redis server port                                                   | `6379`                |
+| `REDIS_DB`       | Redis database number                                               | `0`                   |
+| `REDIS_PASSWORD` | Redis password (keep non-empty when using the Docker Redis service) | `changeme_redis_pass` |
 
 **Note**: When `REDIS_ENABLED=0`, the bot uses in-memory storage for FSM states (lost on restart) and all caching is
 disabled. The bot remains fully functional but without caching optimizations.
