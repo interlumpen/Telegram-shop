@@ -1,3 +1,4 @@
+import hmac
 import logging
 import time
 from typing import Any
@@ -17,6 +18,23 @@ from bot.misc import EnvKeys
 from bot.database.methods.audit import log_audit
 
 logger = logging.getLogger(__name__)
+
+
+def _client_ip(request: Request) -> str:
+    """Resolve the real client IP, trusting X-Forwarded-For only from loopback.
+
+    When a reverse proxy on the same host fronts the panel, request.client.host
+    is 127.0.0.1; the original client is then the first hop of X-Forwarded-For.
+    That header ONLY when the socket peer is loopback, so an external
+    client cannot spoof its IP (which would otherwise defeat the default-cred
+    guard and the login rate limiter).
+    """
+    peer = request.client.host if request.client else ""
+    if peer in ("127.0.0.1", "::1"):
+        fwd = request.headers.get("x-forwarded-for", "")
+        if fwd:
+            return fwd.split(",")[0].strip()
+    return peer
 
 
 class LoginRateLimiter:
@@ -61,12 +79,15 @@ from bot.database.models.main import (
 )
 from bot.misc.metrics import get_metrics
 from bot.misc.caching import get_cache_manager
+from bot.database.methods.read import invalidate_user_cache, invalidate_item_cache
+from bot.database.methods.cache_utils import safe_create_task
+from bot.middleware.security import invalidate_auth_caches, clear_role_auth_caches
 
 
 # Authentication
 class AdminAuth(AuthenticationBackend):
     async def login(self, request: Request) -> bool:
-        ip = request.client.host
+        ip = _client_ip(request)
 
         if _login_limiter.is_blocked(ip):
             await log_audit("web_login_blocked", level="WARNING", details=f"ip={ip}", ip_address=ip)
@@ -76,7 +97,13 @@ class AdminAuth(AuthenticationBackend):
         username = form.get("username")
         password = form.get("password")
 
-        if username == EnvKeys.ADMIN_USERNAME and password == EnvKeys.ADMIN_PASSWORD:
+        # Constant-time comparison to avoid leaking credential length/content via
+        # response timing. str() guards against a missing form field (None).
+        creds_ok = (
+            hmac.compare_digest(str(username), str(EnvKeys.ADMIN_USERNAME))
+            and hmac.compare_digest(str(password), str(EnvKeys.ADMIN_PASSWORD))
+        )
+        if creds_ok:
             if (
                 username == "admin" and password == "admin"
                 and ip not in ("127.0.0.1", "::1", "localhost")
@@ -93,7 +120,7 @@ class AdminAuth(AuthenticationBackend):
         return False
 
     async def logout(self, request: Request) -> bool:
-        await log_audit("web_logout", ip_address=request.client.host)
+        await log_audit("web_logout", ip_address=_client_ip(request))
         request.session.clear()
         return True
 
@@ -147,6 +174,23 @@ class UserAdmin(AuditModelView, model=User):
     name_plural = "Users"
     icon = "fa-solid fa-users"
 
+    async def _invalidate(self, model: Any) -> None:
+        # A web edit of balance/role_id/is_blocked would otherwise be served stale
+        # from Redis (user/role, up to 600s) and from the middleware's in-memory
+        # role cache + blocked set (300s / until restart). Clear both.
+        tid = getattr(model, "telegram_id", None)
+        if tid is not None:
+            safe_create_task(invalidate_user_cache(int(tid)))
+            invalidate_auth_caches(int(tid))
+
+    async def after_model_change(self, data: dict, model: Any, is_created: bool, request: Request) -> None:
+        await super().after_model_change(data, model, is_created, request)
+        await self._invalidate(model)
+
+    async def after_model_delete(self, model: Any, request: Request) -> None:
+        await super().after_model_delete(model, request)
+        await self._invalidate(model)
+
 
 _PERM_FLAGS = [
     (1,   "USE"),
@@ -196,6 +240,23 @@ class RoleAdmin(AuditModelView, model=Role):
             ),
         },
     }
+
+    @staticmethod
+    async def _flush_role_caches() -> None:
+        # A Role's permission bitmask affects every user holding that role, so
+        # invalidation cannot be scoped to one id: flush all role caches.
+        clear_role_auth_caches()
+        cache = get_cache_manager()
+        if cache:
+            await cache.invalidate_pattern("role:*")
+
+    async def after_model_change(self, data: dict, model: Any, is_created: bool, request: Request) -> None:
+        await super().after_model_change(data, model, is_created, request)
+        await self._flush_role_caches()
+
+    async def after_model_delete(self, model: Any, request: Request) -> None:
+        await super().after_model_delete(model, request)
+        await self._flush_role_caches()
 
 
 class CategoryAdmin(AuditModelView, model=Categories):

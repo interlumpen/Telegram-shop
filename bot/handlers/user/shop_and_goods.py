@@ -1,5 +1,6 @@
 from decimal import Decimal
 from functools import partial
+from html import escape as html_escape
 
 from aiogram import Router, F
 from aiogram.types import CallbackQuery, Message
@@ -504,10 +505,13 @@ async def view_reviews_handler(call: CallbackQuery, state: FSMContext):
         )
         return
 
-    lines = [localize("review.list_title", name=item_name), ""]
+    lines = [localize("review.list_title", name=html_escape(item_name, quote=False)), ""]
     for r in reviews:
         if r.get('text'):
-            lines.append(localize("review.item", rating=r['rating'], text=r['text'][:100]))
+            lines.append(localize(
+                "review.item", rating=r['rating'],
+                text=html_escape(r['text'][:100], quote=False),
+            ))
         else:
             lines.append(localize("review.item_no_text", rating=r['rating']))
 

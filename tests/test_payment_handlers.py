@@ -1,4 +1,3 @@
-"""Tests for payment handlers (bot/handlers/user/balance_and_payment.py)."""
 import pytest
 from decimal import Decimal
 from unittest.mock import patch, AsyncMock, MagicMock
@@ -165,7 +164,7 @@ class TestBuyItemHandler:
         await user_factory(telegram_id=400020, balance=500)
         await item_factory(name="TestWidget", price=100, values=[("widget_value_1", False)])
 
-        call = make_callback_query(data="buy", user_id=400020)
+        call = make_callback_query(data="buy_item", user_id=400020)
         await fsm_context.update_data(csrf_item="TestWidget")
 
         with patch('bot.main.security_middleware', None), \
@@ -182,7 +181,7 @@ class TestBuyItemHandler:
         await user_factory(telegram_id=400021, balance=10)
         await item_factory(name="ExpensiveItem", price=1000, values=[("val", False)])
 
-        call = make_callback_query(data="buy", user_id=400021)
+        call = make_callback_query(data="buy_item", user_id=400021)
         await fsm_context.update_data(csrf_item="ExpensiveItem")
 
         with patch('bot.main.security_middleware', None), \
@@ -199,7 +198,7 @@ class TestBuyItemHandler:
 
         await user_factory(telegram_id=400022)
 
-        call = make_callback_query(data="buy", user_id=400022)
+        call = make_callback_query(data="buy_item", user_id=400022)
         # No csrf_item in state
 
         await buy_item_callback_handler(call, fsm_context)

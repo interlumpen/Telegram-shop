@@ -1,4 +1,5 @@
 import asyncio
+import hmac
 import logging
 import sys
 import json
@@ -15,7 +16,7 @@ from bot.handlers import register_all_handlers
 from bot.database.models import register_models
 from bot.logger_mesh import configure_logging
 from bot.middleware import setup_rate_limiting, RateLimitConfig
-from bot.middleware.security import SecurityMiddleware, AuthenticationMiddleware
+from bot.middleware.security import SecurityMiddleware, AuthenticationMiddleware, set_auth_middleware
 from bot.misc.caching import init_cache_manager, get_cache_manager
 from bot.misc.caching import CacheScheduler
 from bot.misc.caching import get_redis_storage
@@ -48,6 +49,8 @@ async def __on_start_up(dp: Dispatcher, bot: Bot) -> None:
     global security_middleware, auth_middleware
     security_middleware = SecurityMiddleware()
     auth_middleware = AuthenticationMiddleware()
+    # Expose the instance so the in-process web panel can invalidate its caches.
+    set_auth_middleware(auth_middleware)
     await auth_middleware.load_blocked_users()
 
     # Setting Rate Limiting (shares auth_middleware's role cache)
@@ -290,7 +293,7 @@ async def start_bot() -> None:
                     # Verify secret token
                     if EnvKeys.WEBHOOK_SECRET:
                         token = request.headers.get("X-Telegram-Bot-Api-Secret-Token", "")
-                        if token != EnvKeys.WEBHOOK_SECRET:
+                        if not hmac.compare_digest(str(token), str(EnvKeys.WEBHOOK_SECRET)):
                             return Response(status_code=403)
 
                     body = await request.body()

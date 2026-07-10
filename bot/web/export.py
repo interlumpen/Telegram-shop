@@ -13,9 +13,23 @@ from bot.database.models.main import User, BoughtGoods, Operations, Payments
 
 BATCH_SIZE = 1000
 
+# Leading characters that spreadsheet apps interpret as the start of a formula.
+_INJECTION_PREFIXES = ("=", "+", "-", "@", "\t", "\r")
 
-async def _stream_csv(query, columns, session_maker):
-    """Generic CSV streamer that yields rows in batches."""
+
+def _sanitize_cell(value) -> str:
+    """Neutralize CSV/Excel formula injection by quoting risky leading chars."""
+    if value is None:
+        return ""
+    s = str(value)
+    if s and s[0] in _INJECTION_PREFIXES:
+        return "'" + s
+    return s
+
+
+async def _stream_csv(query, columns, session_maker, keyset_column):
+    """Generic CSV streamer using keyset pagination on ``keyset_column``.
+    """
     output = io.StringIO()
     writer = csv.writer(output)
 
@@ -25,22 +39,31 @@ async def _stream_csv(query, columns, session_maker):
     output.seek(0)
     output.truncate(0)
 
-    offset = 0
+    last_key = None
     while True:
+        batch_query = query
+        if last_key is not None:
+            batch_query = batch_query.where(keyset_column > last_key)
+        batch_query = batch_query.limit(BATCH_SIZE)
+
         async with session_maker() as s:
-            result = await s.execute(query.offset(offset).limit(BATCH_SIZE))
+            result = await s.execute(batch_query)
             rows = result.all()
 
         if not rows:
             break
 
         for row in rows:
-            writer.writerow([getattr(row, c, row[i]) if hasattr(row, c) else row[i] for i, c in enumerate(columns)])
+            values = [getattr(row, c, row[i]) if hasattr(row, c) else row[i] for i, c in enumerate(columns)]
+            writer.writerow([_sanitize_cell(v) for v in values])
 
+        last_key = rows[-1][0]
         yield output.getvalue()
         output.seek(0)
         output.truncate(0)
-        offset += BATCH_SIZE
+
+        if len(rows) < BATCH_SIZE:
+            break
 
 
 def _parse_date_params(request: Request):
@@ -84,7 +107,7 @@ async def export_users(request: Request):
     columns = ["telegram_id", "balance", "role_id", "referral_id", "registration_date", "is_blocked"]
 
     return StreamingResponse(
-        _stream_csv(query, columns, Database().session),
+        _stream_csv(query, columns, Database().session, User.telegram_id),
         media_type="text/csv",
         headers={"Content-Disposition": "attachment; filename=users.csv"},
     )
@@ -108,7 +131,7 @@ async def export_purchases(request: Request):
     columns = ["id", "item_name", "price", "buyer_id", "bought_datetime", "unique_id"]
 
     return StreamingResponse(
-        _stream_csv(query, columns, Database().session),
+        _stream_csv(query, columns, Database().session, BoughtGoods.id),
         media_type="text/csv",
         headers={"Content-Disposition": "attachment; filename=purchases.csv"},
     )
@@ -132,7 +155,7 @@ async def export_operations(request: Request):
     columns = ["id", "user_id", "operation_value", "operation_time"]
 
     return StreamingResponse(
-        _stream_csv(query, columns, Database().session),
+        _stream_csv(query, columns, Database().session, Operations.id),
         media_type="text/csv",
         headers={"Content-Disposition": "attachment; filename=operations.csv"},
     )
@@ -157,7 +180,7 @@ async def export_payments(request: Request):
     columns = ["id", "provider", "external_id", "user_id", "amount", "currency", "status", "created_at"]
 
     return StreamingResponse(
-        _stream_csv(query, columns, Database().session),
+        _stream_csv(query, columns, Database().session, Payments.id),
         media_type="text/csv",
         headers={"Content-Disposition": "attachment; filename=payments.csv"},
     )

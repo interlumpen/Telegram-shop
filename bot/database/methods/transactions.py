@@ -2,8 +2,8 @@ from datetime import datetime, timezone
 from decimal import Decimal
 from uuid import uuid4
 
-from sqlalchemy import select, update, exists as sa_exists, delete as sa_delete
-from sqlalchemy.exc import IntegrityError
+from sqlalchemy import select, exists as sa_exists, delete as sa_delete
+from sqlalchemy.exc import IntegrityError, OperationalError, DBAPIError
 
 from bot.database.models import User, ItemValues, Goods, BoughtGoods, Payments, Operations
 from bot.database.models.main import PromoCodes, PromoCodeUsages, CartItems, ReferralEarnings
@@ -320,17 +320,28 @@ async def checkout_cart_transaction(user_id: int) -> tuple[bool, str, list | Non
                     await s.rollback()
                     return False, "cart_empty", None
 
+                # Lock all distinct goods up front in a deterministic order (by id)
+                # so two concurrent checkouts with overlapping carts acquire the row
+                # locks in the same order and cannot form an AB/BA deadlock cycle.
+                item_names = list({ci.item_name for ci in cart_items})
+                goods_by_name = {
+                    g.name: g for g in (await s.execute(
+                        select(Goods).where(Goods.name.in_(item_names))
+                        .order_by(Goods.id).with_for_update()
+                    )).scalars().all()
+                }
+
                 # 3. Resolve items, validate promos, calculate total
                 purchases = []
                 total_price = Decimal(0)
                 items_to_remove = []
-                promos_to_record = []  # (promo_obj, promo_id) for usage tracking
+                # promo_id -> promo; a promo is redeemed once per checkout even if it
+                # is attached to multiple cart items (avoids uq_promo_usage_per_user).
+                promos_to_record: dict[int, PromoCodes] = {}
                 claimed_value_ids: set[int] = set()
 
                 for ci in cart_items:
-                    goods = (await s.execute(
-                        select(Goods).where(Goods.name == ci.item_name).with_for_update()
-                    )).scalars().first()
+                    goods = goods_by_name.get(ci.item_name)
 
                     if not goods:
                         items_to_remove.append(ci.id)
@@ -389,7 +400,7 @@ async def checkout_cart_transaction(user_id: int) -> tuple[bool, str, list | Non
                         else:
                             final_price = max(price - Decimal(str(promo.discount_value)), Decimal(0))
                         final_price = final_price.quantize(Decimal("0.01"))
-                        promos_to_record.append(promo)
+                        promos_to_record[promo.id] = promo
 
                     purchases.append({
                         'cart_item': ci,
@@ -439,8 +450,8 @@ async def checkout_cart_transaction(user_id: int) -> tuple[bool, str, list | Non
                         "bought_datetime": bought_item.bought_datetime.isoformat(),
                     })
 
-                # 6. Record promo usage
-                for promo in promos_to_record:
+                # 6. Record promo usage (once per distinct promo)
+                for promo in promos_to_record.values():
                     promo.current_uses += 1
                     s.add(PromoCodeUsages(promo_id=promo.id, user_id=user_id))
 
@@ -467,6 +478,22 @@ async def checkout_cart_transaction(user_id: int) -> tuple[bool, str, list | Non
                 await s.rollback()
                 if "unique_id" in str(e).lower() and attempt < max_retries - 1:
                     continue  # Retry with new unique_ids
+                await log_audit(
+                    "cart_checkout_failed",
+                    level="WARNING",
+                    user_id=user_id,
+                    details=str(e),
+                )
+                return False, "transaction_error", None
+
+            except (OperationalError, DBAPIError) as e:
+                await s.rollback()
+                msg = str(e).lower()
+                # Postgres aborts one transaction in a deadlock/serialization cycle;
+                # the victim is safe to retry (lock goods deterministically now).
+                if (("deadlock" in msg or "could not serialize" in msg)
+                        and attempt < max_retries - 1):
+                    continue
                 await log_audit(
                     "cart_checkout_failed",
                     level="WARNING",

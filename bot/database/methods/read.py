@@ -194,6 +194,16 @@ async def get_item_info(item_name: str) -> dict | None:
         return _obj_to_dict(obj, Goods) if obj else None
 
 
+async def get_items_info(item_names: list[str]) -> dict[str, dict]:
+    """Return {name: item_row_dict} for the given names in a single query."""
+    names = [n for n in dict.fromkeys(item_names)]  # dedupe, preserve order
+    if not names:
+        return {}
+    async with Database().session() as s:
+        result = await s.execute(select(Goods).where(Goods.name.in_(names)))
+        return {g.name: _obj_to_dict(g, Goods) for g in result.scalars().all()}
+
+
 async def get_goods_info(item_id: int) -> dict | None:
     """Return item_value row as dict by id, including item_name from Goods."""
     async with Database().session() as s:

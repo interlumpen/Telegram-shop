@@ -140,7 +140,7 @@ def item_info(
     Product card with buy, cart, promo, review buttons.
     """
     kb = InlineKeyboardBuilder()
-    kb.button(text=localize("btn.buy"), callback_data="buy")
+    kb.button(text=localize("btn.buy"), callback_data="buy_item")
     kb.button(text=localize("btn.add_to_cart"), callback_data="add_to_cart")
     if applied_promo:
         kb.button(text=localize("btn.remove_promo"), callback_data="remove_promo")

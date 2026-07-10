@@ -270,3 +270,35 @@ class AuthenticationMiddleware(BaseMiddleware):
             self.blocked_users.discard(user_id)
             await log_audit("unblock_user", user_id=user_id, resource_type="User", resource_id=str(user_id))
         return success
+
+
+_auth_middleware_instance: "AuthenticationMiddleware | None" = None
+
+
+def set_auth_middleware(instance: "AuthenticationMiddleware") -> None:
+    """Register the live AuthenticationMiddleware instance (called at startup)."""
+    global _auth_middleware_instance
+    _auth_middleware_instance = instance
+
+
+def invalidate_auth_caches(user_id: int) -> None:
+    """Drop the in-memory role cache and blocked-set entry for one user.
+
+    Needed after a web-panel edit changes a user's role or unblocks them, so the
+    bot does not keep serving the stale permission/block state until TTL expiry.
+    """
+    inst = _auth_middleware_instance
+    if inst is not None:
+        inst.admin_cache.pop(user_id, None)
+        inst.blocked_users.discard(user_id)
+
+
+def clear_role_auth_caches() -> None:
+    """Flush the entire in-memory role cache.
+
+    A Role's permission bitmask affects every user holding that role, so a Role
+    edit cannot be scoped to a single user id — clear the whole admin_cache.
+    """
+    inst = _auth_middleware_instance
+    if inst is not None:
+        inst.admin_cache.clear()

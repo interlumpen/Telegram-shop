@@ -123,17 +123,19 @@ async def clear_cart_handler(call: CallbackQuery, state: FSMContext):
 
 
 async def _calc_cart_total_with_promos(user_id: int) -> Decimal:
-    """Calculate real cart total considering promo codes on each item."""
-    from bot.database.methods.read import get_item_info
+    """Calculate real cart total considering sales and promo codes on each item."""
+    from bot.database.methods.read import get_items_info
+    from bot.database.methods import effective_price
     items = await get_cart_items(user_id)
+    info_map = await get_items_info([item['item_name'] for item in items])
     total = Decimal(0)
     for item in items:
-        info = await get_item_info(item['item_name'])
+        info = info_map.get(item['item_name'])
         if not info:
             continue
-        price = Decimal(str(info['price']))
-        discounted = await _resolve_promo_price(price, item.get('promo_code'))
-        total += discounted if discounted is not None else price
+        base_price, _on_sale, _original = effective_price(info)
+        discounted = await _resolve_promo_price(base_price, item.get('promo_code'))
+        total += discounted if discounted is not None else base_price
     return total
 
 

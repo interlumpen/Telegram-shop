@@ -30,7 +30,8 @@ async def _notify_referrer_bonus(bot, user_id: int, amount: int, payer_name: str
     if not referral_id or not EnvKeys.REFERRAL_PERCENT:
         return
     try:
-        bonus = int(Decimal(EnvKeys.REFERRAL_PERCENT) / Decimal(100) * Decimal(amount))
+        clamped_percent = min(max(EnvKeys.REFERRAL_PERCENT, 0), 99)
+        bonus = (Decimal(clamped_percent) / Decimal(100) * Decimal(amount)).quantize(Decimal("0.01"))
         if bonus > 0:
             await bot.send_message(
                 referral_id,
@@ -409,7 +410,7 @@ async def successful_payment_handler(message: Message):
         await log_audit("balance_replenish", level="ERROR", user_id=user_id, resource_type="Payment", details=f"log_failed: {e}")
 
 
-@router.callback_query(F.data == "buy")
+@router.callback_query(F.data == "buy_item")
 async def buy_item_callback_handler(call: CallbackQuery, state: FSMContext):
     """Processing the purchase of goods with full transactional security."""
     try:

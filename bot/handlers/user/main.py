@@ -38,8 +38,16 @@ async def start(message: Message, state: FSMContext):
     await state.clear()
 
     owner_max_role = await select_max_role_id()
-    referral_id = message.text[7:] if message.text[7:] != str(user_id) else None
     user_role = owner_max_role if user_id == EnvKeys.OWNER_ID else 1
+
+    referral_id = None
+    parts = message.text.split(maxsplit=1)
+    if len(parts) > 1:
+        payload = parts[1].strip()
+        if payload.isdigit() and payload != str(user_id):
+            candidate = int(payload)
+            if await check_user(candidate) is not None:
+                referral_id = candidate
 
     is_new_user = (await check_user(user_id)) is None
 
@@ -47,7 +55,7 @@ async def start(message: Message, state: FSMContext):
     await create_user(
         telegram_id=int(user_id),
         registration_date=datetime.datetime.now(datetime.timezone.utc),
-        referral_id=int(referral_id) if referral_id else None,
+        referral_id=referral_id,
         role=user_role
     )
 

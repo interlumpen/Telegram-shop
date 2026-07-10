@@ -120,7 +120,7 @@ class TestItemInfoKeyboard:
     def test_has_buy_and_back(self):
         markup = item_info("Widget", "gp_0")
         cbs = _all_callback_data(markup)
-        assert "buy" in cbs
+        assert "buy_item" in cbs
         assert "gp_0" in cbs
 
 
