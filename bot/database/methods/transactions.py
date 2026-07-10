@@ -11,6 +11,7 @@ from bot.database import Database
 from bot.misc import EnvKeys
 from bot.database.methods.read import invalidate_user_cache, invalidate_stats_cache, invalidate_item_cache
 from bot.database.methods.cache_utils import safe_create_task
+from bot.database.methods.pricing import effective_price
 from bot.database.methods.audit import log_audit
 
 
@@ -41,7 +42,10 @@ async def buy_item_transaction(telegram_id: int, item_name: str, promo_code: str
                     await s.rollback()
                     return False, "item_not_found", None
 
-                price = Decimal(str(goods.price))
+                # Sale price (if an active sale exists) is the authoritative base;
+                # a promo code then stacks on top of it. Computed server-side so a
+                # client cannot influence the charged amount.
+                price, _on_sale, _original_price = effective_price(goods)
                 final_price = price
                 discount_info = None
 
@@ -360,7 +364,8 @@ async def checkout_cart_transaction(user_id: int) -> tuple[bool, str, list | Non
 
                     claimed_value_ids.add(item_value.id)
 
-                    price = Decimal(str(goods.price))
+                    # Sale price is the authoritative base; promo stacks on top.
+                    price, _on_sale, _original_price = effective_price(goods)
                     final_price = price
 
                     # Validate and apply promo code if stored on cart item

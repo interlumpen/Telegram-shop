@@ -27,6 +27,7 @@ async def goods_management_callback_handler(call: CallbackQuery, state):
         (localize("admin.goods.add_position"), "add_item"),
         (localize("admin.goods.add_item"), "update_item_amount"),
         (localize("admin.goods.update_position"), "update_item"),
+        (localize("admin.goods.sale_manage"), "manage_sale"),
         (localize("admin.goods.delete_position"), "delete_item"),
         (localize("admin.goods.show_items"), "show__items_in_position"),
         (localize("btn.back"), "console"),

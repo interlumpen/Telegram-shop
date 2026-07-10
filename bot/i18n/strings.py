@@ -210,6 +210,19 @@ TRANSLATIONS: dict[str, dict[str, str]] = {
         "admin.goods.prompt.enter_item_name": "Введите название позиции",
         "admin.goods.menu.title": "⛩️ Меню управления позициями",
 
+        # === Admin: Time-limited sales ===
+        "admin.goods.sale_manage": "🔥 Управление скидкой",
+        "admin.sale.prompt.name": "Введите название позиции, для которой хотите настроить скидку:",
+        "admin.sale.not_found": "❌ Позиция с таким названием не найдена.",
+        "admin.sale.current.active": "ℹ️ Текущая скидка: <b>{percent}%</b> до <b>{until}</b> (UTC).",
+        "admin.sale.current.none": "ℹ️ Сейчас на этой позиции скидки нет.",
+        "admin.sale.prompt.percent": "Введите процент скидки (1–100).\nОтправьте <b>0</b>, чтобы убрать скидку.",
+        "admin.sale.percent.invalid": "⚠️ Некорректный процент. Введите целое число от 0 до 100.",
+        "admin.sale.disabled": "✅ Скидка для позиции «{name}» отключена.",
+        "admin.sale.prompt.days": "На сколько дней установить скидку? Введите целое число (например, 3).",
+        "admin.sale.days.invalid": "⚠️ Некорректный срок. Введите целое число дней больше 0.",
+        "admin.sale.success": "✅ Скидка <b>{percent}%</b> установлена для «{name}» до <b>{until}</b> (UTC).",
+
         # === Admin: Goods / Items Update Flow ===
         "admin.goods.update.amount.prompt.name": "Введите название позиции",
         "admin.goods.update.amount.not_exists": "❌ Товар не может быть добавлен (такой позиции не существует)",
@@ -418,6 +431,7 @@ TRANSLATIONS: dict[str, dict[str, str]] = {
         "promo.enter_redeem_code": "Введите промокод для активации:",
         "promo.balance_redeemed": "✅ Промокод <code>{code}</code> активирован! На баланс начислено {amount} {currency}.",
         "shop.item.price_discounted": "💰 <b>Цена</b>: <s>{original}</s> <b>{discounted}</b> {currency} (промокод {code})",
+        "shop.item.price_sale": "🔥 <b>Цена</b>: <s>{original}</s> <b>{sale}</b> {currency} (скидка {percent}%)",
         "admin.promo.type.balance": "💰 Пополнение баланса",
         "admin.promo.prompt.binding_type": "Привязать промокод к категории или товару?",
         "admin.promo.binding.category": "Категория",
@@ -696,6 +710,19 @@ TRANSLATIONS: dict[str, dict[str, str]] = {
         "admin.goods.prompt.enter_item_name": "Enter the item name",
         "admin.goods.menu.title": "⛩️ Items management menu",
 
+        # === Admin: Time-limited sales ===
+        "admin.goods.sale_manage": "🔥 Manage discount",
+        "admin.sale.prompt.name": "Enter the item name you want to set a discount for:",
+        "admin.sale.not_found": "❌ No item with that name was found.",
+        "admin.sale.current.active": "ℹ️ Current discount: <b>{percent}%</b> until <b>{until}</b> (UTC).",
+        "admin.sale.current.none": "ℹ️ This item currently has no discount.",
+        "admin.sale.prompt.percent": "Enter the discount percent (1–100).\nSend <b>0</b> to remove the discount.",
+        "admin.sale.percent.invalid": "⚠️ Invalid percent. Enter an integer from 0 to 100.",
+        "admin.sale.disabled": "✅ Discount for «{name}» has been removed.",
+        "admin.sale.prompt.days": "For how many days should the discount last? Enter an integer (e.g. 3).",
+        "admin.sale.days.invalid": "⚠️ Invalid duration. Enter an integer number of days greater than 0.",
+        "admin.sale.success": "✅ Discount <b>{percent}%</b> set for «{name}» until <b>{until}</b> (UTC).",
+
         # === Admin: Goods / Items Update Flow ===
         "admin.goods.update.amount.prompt.name": "Enter the item name",
         "admin.goods.update.amount.not_exists": "❌ Unable to add values (item does not exist)",
@@ -904,6 +931,7 @@ TRANSLATIONS: dict[str, dict[str, str]] = {
         "promo.enter_redeem_code": "Enter promo code to redeem:",
         "promo.balance_redeemed": "✅ Promo code <code>{code}</code> redeemed! {amount} {currency} added to your balance.",
         "shop.item.price_discounted": "💰 <b>Price</b>: <s>{original}</s> <b>{discounted}</b> {currency} (promo {code})",
+        "shop.item.price_sale": "🔥 <b>Price</b>: <s>{original}</s> <b>{sale}</b> {currency} ({percent}% off)",
         "admin.promo.type.balance": "💰 Balance top-up",
         "admin.promo.prompt.binding_type": "Bind promo code to category or item?",
         "admin.promo.binding.category": "Category",

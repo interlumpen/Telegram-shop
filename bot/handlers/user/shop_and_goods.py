@@ -9,7 +9,7 @@ from aiogram.exceptions import TelegramBadRequest
 
 from bot.database.methods import (
     get_bought_item_info, check_value, query_categories, query_user_bought_items, get_item_info_cached,
-    select_item_values_amount_cached
+    select_item_values_amount_cached, effective_price
 )
 from bot.database.methods.read import (
     get_item_avg_rating, has_purchased_item, validate_promo_for_item,
@@ -70,8 +70,9 @@ async def _render_item_page(target, state: FSMContext, item_name: str, back_data
 
     applied_promo = data.get('applied_promo')
 
-    # Build price line
-    price = Decimal(str(item_info_data["price"]))
+    # Build price line. Sale price (if any) is the base; a promo stacks on top.
+    sale_price, on_sale, original_price = effective_price(item_info_data)
+    price = sale_price
     if applied_promo:
         promo_data = data.get('applied_promo_data', {})
         if promo_data.get('discount_type') == 'percent':
@@ -81,8 +82,15 @@ async def _render_item_page(target, state: FSMContext, item_name: str, back_data
         discounted = (price - discount).quantize(Decimal("0.01"))
         price_line = localize(
             "shop.item.price_discounted",
-            original=price, discounted=discounted,
+            original=original_price, discounted=discounted,
             currency=EnvKeys.PAY_CURRENCY, code=applied_promo,
+        )
+    elif on_sale:
+        percent = (Decimal(str(item_info_data.get("sale_percent") or 0))).quantize(Decimal("1"))
+        price_line = localize(
+            "shop.item.price_sale",
+            original=original_price, sale=sale_price,
+            currency=EnvKeys.PAY_CURRENCY, percent=percent,
         )
     else:
         price_line = localize("shop.item.price", amount=price, currency=EnvKeys.PAY_CURRENCY)

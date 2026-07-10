@@ -211,6 +211,7 @@ def mock_localize():
             patch('bot.handlers.admin.user_management_states.localize', side_effect=fake_localize), \
             patch('bot.handlers.admin.categories_management_states.localize', side_effect=fake_localize), \
             patch('bot.handlers.admin.goods_management_states.localize', side_effect=fake_localize), \
+            patch('bot.handlers.admin.sale_management_states.localize', side_effect=fake_localize), \
             patch('bot.handlers.admin.role_management_states.localize', side_effect=fake_localize):
         yield m
 

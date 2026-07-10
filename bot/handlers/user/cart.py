@@ -42,25 +42,31 @@ async def _show_cart(call: CallbackQuery):
         )
         return
 
-    from bot.database.methods.read import get_item_info
+    from bot.database.methods.read import get_items_info
+    from bot.database.methods import effective_price
+    info_map = await get_items_info([item['item_name'] for item in items])
     lines = [localize("cart.title"), ""]
     real_total = Decimal(0)
 
     for item in items:
-        info = await get_item_info(item['item_name'])
+        info = info_map.get(item['item_name'])
         if not info:
             lines.append(localize("cart.item", name=item['item_name'], price='?', currency=EnvKeys.PAY_CURRENCY))
             continue
 
-        price = Decimal(str(info['price']))
-        discounted = await _resolve_promo_price(price, item.get('promo_code'))
+        # Sale price is the base; a promo code (if any) stacks on top of it.
+        base_price, on_sale, original = effective_price(info)
+        discounted = await _resolve_promo_price(base_price, item.get('promo_code'))
 
         if discounted is not None:
-            lines.append(f"🏷 <b>{item['item_name']}</b> — <s>{price}</s> {discounted} {EnvKeys.PAY_CURRENCY} ({item['promo_code']})")
+            lines.append(f"🏷 <b>{item['item_name']}</b> — <s>{original}</s> {discounted} {EnvKeys.PAY_CURRENCY} ({item['promo_code']})")
             real_total += discounted
+        elif on_sale:
+            lines.append(f"🔥 <b>{item['item_name']}</b> — <s>{original}</s> {base_price} {EnvKeys.PAY_CURRENCY}")
+            real_total += base_price
         else:
-            lines.append(localize("cart.item", name=item['item_name'], price=price, currency=EnvKeys.PAY_CURRENCY))
-            real_total += price
+            lines.append(localize("cart.item", name=item['item_name'], price=base_price, currency=EnvKeys.PAY_CURRENCY))
+            real_total += base_price
 
     lines.append(localize("cart.total", total=real_total, currency=EnvKeys.PAY_CURRENCY))
 

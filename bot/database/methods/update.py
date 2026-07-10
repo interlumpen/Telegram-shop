@@ -3,7 +3,7 @@ from sqlalchemy import exc, select, update
 from bot.database.methods.read import invalidate_user_cache, invalidate_stats_cache, invalidate_item_cache, \
     invalidate_category_cache
 from bot.database.methods.cache_utils import safe_create_task
-from bot.database.models import User, ItemValues, Goods, Categories, BoughtGoods, Role
+from bot.database.models import User, Goods, Categories, BoughtGoods, Role
 from bot.database.models.main import PromoCodes
 from bot.database import Database
 from bot.i18n import localize
@@ -79,6 +79,25 @@ async def update_item(item_name: str, new_name: str, description: str, price, ca
 
     except exc.SQLAlchemyError as e:
         return False, f"DB Error: {e.__class__.__name__}"
+
+
+async def set_item_sale(item_name: str, sale_percent, sale_until) -> bool:
+    """Set or clear a time-limited sale on a Goods item.
+
+    Pass sale_percent/sale_until = None to disable the sale. Returns True if the
+    item existed. Invalidates the item cache so the price refreshes immediately.
+    """
+    async with Database().session() as s:
+        result = await s.execute(
+            select(Goods).where(Goods.name == item_name).with_for_update()
+        )
+        goods = result.scalars().one_or_none()
+        if not goods:
+            return False
+        goods.sale_percent = sale_percent
+        goods.sale_until = sale_until
+        safe_create_task(invalidate_item_cache(item_name))
+        return True
 
 
 async def set_user_blocked(telegram_id: int, blocked: bool) -> bool:

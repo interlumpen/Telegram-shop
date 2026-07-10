@@ -268,12 +268,40 @@ class CategoryAdmin(AuditModelView, model=Categories):
 
 
 class GoodsAdmin(AuditModelView, model=Goods):
-    column_list = [Goods.id, Goods.name, Goods.price, Goods.description, Goods.category_id]
+    column_list = [Goods.id, Goods.name, Goods.price, Goods.sale_percent,
+                   Goods.sale_until, Goods.description, Goods.category_id]
     column_searchable_list = [Goods.name]
     column_sortable_list = [Goods.id, Goods.name, Goods.price]
     name = "Product"
     name_plural = "Products"
     icon = "fa-solid fa-box"
+    form_args = {
+        "sale_percent": {
+            "description": (
+                "Discount percent (0-100) applied while the sale is active. "
+                "Leave empty to disable the sale."
+            ),
+        },
+        "sale_until": {
+            "description": (
+                "Sale end time (UTC). The discount applies only while this is in "
+                "the future; a past/empty value means no active sale."
+            ),
+        },
+    }
+
+    async def _invalidate(self, model: Any) -> None:
+        name = getattr(model, "name", None)
+        if name:
+            safe_create_task(invalidate_item_cache(name))
+
+    async def after_model_change(self, data: dict, model: Any, is_created: bool, request: Request) -> None:
+        await super().after_model_change(data, model, is_created, request)
+        await self._invalidate(model)
+
+    async def after_model_delete(self, model: Any, request: Request) -> None:
+        await super().after_model_delete(model, request)
+        await self._invalidate(model)
 
 
 class ItemValuesAdmin(AuditModelView, model=ItemValues):

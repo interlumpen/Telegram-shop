@@ -46,3 +46,15 @@ class UpdateItemFSM(StatesGroup):
     waiting_single_value = State()
     waiting_multiple_values = State()
 
+
+class SaleFSM(StatesGroup):
+    """
+    FSM for setting or removing a time-limited sale on an item:
+    1) item name,
+    2) discount percent (0 removes the sale),
+    3) duration in days.
+    """
+    waiting_item_name = State()
+    waiting_percent = State()
+    waiting_days = State()
+
