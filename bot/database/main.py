@@ -2,14 +2,19 @@ import logging
 from contextlib import asynccontextmanager
 
 from sqlalchemy.ext.asyncio import create_async_engine, AsyncEngine, async_sessionmaker, AsyncSession
-from sqlalchemy.orm import declarative_base
+from sqlalchemy.orm import DeclarativeBase
 
 from bot.database.dsn import dsn
 from bot.misc import SingletonMeta
 
 
+class Base(DeclarativeBase):
+    """Typed declarative base (SQLAlchemy 2.0) shared by all ORM models."""
+    pass
+
+
 class Database(metaclass=SingletonMeta):
-    BASE = declarative_base()
+    BASE = Base
 
     def __init__(self):
         self.__engine: AsyncEngine = create_async_engine(

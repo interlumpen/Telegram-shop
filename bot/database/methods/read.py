@@ -3,7 +3,7 @@ from decimal import Decimal
 from functools import wraps
 from typing import Optional, Dict, TypeVar, Callable, Any, Coroutine
 
-from sqlalchemy import func, exists, select
+from sqlalchemy import func, exists, select, inspect as sa_inspect
 
 from bot.database.models import Database, User, ItemValues, Goods, Categories, Role, BoughtGoods, \
     Operations, ReferralEarnings, Permission
@@ -45,9 +45,15 @@ def _day_window(date_str: str) -> tuple[datetime.datetime, datetime.datetime]:
     return start, end
 
 
-def _obj_to_dict(obj, model) -> dict:
-    """Convert an ORM object to a dict of column values."""
-    return {c.key: getattr(obj, c.key) for c in model.__table__.columns}
+def _obj_to_dict(obj, model=None) -> dict:
+    """Convert an ORM object to a dict of its column values.
+
+    Uses the runtime mapper (not ``__table__``) so static type checkers don't
+    complain about a declarative class missing ``__table__``. ``model`` is
+    optional; when omitted the mapper is derived from the instance's class.
+    """
+    mapper = sa_inspect(model if model is not None else type(obj))
+    return {attr.key: getattr(obj, attr.key) for attr in mapper.column_attrs}
 
 
 # --- Async implementations ---

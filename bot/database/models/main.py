@@ -1,12 +1,13 @@
 import datetime
-from typing import Any
+from decimal import Decimal
+from typing import Any, Optional
 
 from sqlalchemy import (
-    Column, Integer, String, BigInteger, ForeignKey, Text, Boolean,
+    Integer, String, BigInteger, ForeignKey, Text, Boolean,
     DateTime, Numeric, Index, UniqueConstraint, CheckConstraint, func, select
 )
+from sqlalchemy.orm import relationship, Mapped, mapped_column
 from bot.database.main import Database
-from sqlalchemy.orm import relationship
 
 
 class Permission:
@@ -34,11 +35,11 @@ class Permission:
 
 class Role(Database.BASE):
     __tablename__ = 'roles'
-    id = Column(Integer, primary_key=True)
-    name = Column(String(64), unique=True)
-    default = Column(Boolean, default=False, index=True)
-    permissions = Column(Integer)
-    users = relationship('User', backref='role', lazy='raise')
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    name: Mapped[Optional[str]] = mapped_column(String(64), unique=True)
+    default: Mapped[Optional[bool]] = mapped_column(Boolean, default=False, index=True)
+    permissions: Mapped[Optional[int]] = mapped_column(Integer)
+    users: Mapped[list["User"]] = relationship('User', backref='role', lazy='raise')
 
     def __init__(self, name: str = None, permissions=None, **kwargs):
         super(Role, self).__init__(**kwargs)
@@ -97,27 +98,32 @@ class Role(Database.BASE):
 
 class User(Database.BASE):
     __tablename__ = 'users'
-    telegram_id = Column(BigInteger, primary_key=True)
-    role_id = Column(Integer, ForeignKey('roles.id', ondelete="RESTRICT"), default=1, index=True)
-    balance = Column(Numeric(12, 2), nullable=False, default=0)
-    referral_id = Column(BigInteger, ForeignKey('users.telegram_id', ondelete="SET NULL"), nullable=True, index=True)
-    registration_date = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
-    is_blocked = Column(Boolean, default=False, index=True)
-    user_operations = relationship("Operations", back_populates="user_telegram_id", lazy='raise')
-    user_goods = relationship("BoughtGoods", back_populates="user_telegram_id", lazy='raise')
+    telegram_id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    role_id: Mapped[Optional[int]] = mapped_column(
+        Integer, ForeignKey('roles.id', ondelete="RESTRICT"), default=1, index=True)
+    balance: Mapped[Decimal] = mapped_column(Numeric(12, 2), nullable=False, default=0)
+    referral_id: Mapped[Optional[int]] = mapped_column(
+        BigInteger, ForeignKey('users.telegram_id', ondelete="SET NULL"), nullable=True, index=True)
+    registration_date: Mapped[datetime.datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now())
+    is_blocked: Mapped[Optional[bool]] = mapped_column(Boolean, default=False, index=True)
+    user_operations: Mapped[list["Operations"]] = relationship(
+        "Operations", back_populates="user_telegram_id", lazy='raise')
+    user_goods: Mapped[list["BoughtGoods"]] = relationship(
+        "BoughtGoods", back_populates="user_telegram_id", lazy='raise')
 
     __table_args__ = (
         CheckConstraint('referral_id != telegram_id', name='ck_users_no_self_referral'),
         Index('ix_users_registration_date', 'registration_date'),
     )
 
-    referral_earnings_received = relationship(
+    referral_earnings_received: Mapped[list["ReferralEarnings"]] = relationship(
         "ReferralEarnings",
         foreign_keys="ReferralEarnings.referrer_id",
         back_populates="referrer",
         lazy='raise',
     )
-    referral_earnings_generated = relationship(
+    referral_earnings_generated: Mapped[list["ReferralEarnings"]] = relationship(
         "ReferralEarnings",
         foreign_keys="ReferralEarnings.referral_id",
         back_populates="referral",
@@ -144,9 +150,9 @@ class User(Database.BASE):
 
 class Categories(Database.BASE):
     __tablename__ = 'categories'
-    id = Column(Integer, primary_key=True)
-    name = Column(String(100), unique=True, nullable=False)
-    items = relationship("Goods", back_populates="category", lazy='raise')
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    name: Mapped[str] = mapped_column(String(100), unique=True, nullable=False)
+    items: Mapped[list["Goods"]] = relationship("Goods", back_populates="category", lazy='raise')
 
     def __init__(self, name: str = None, **kw: Any):
         super().__init__(**kw)
@@ -159,15 +165,19 @@ class Categories(Database.BASE):
 
 class Goods(Database.BASE):
     __tablename__ = 'goods'
-    id = Column(Integer, primary_key=True)
-    name = Column(String(100), unique=True, nullable=False)
-    price = Column(Numeric(12, 2), nullable=False)
-    description = Column(Text, nullable=False)
-    category_id = Column(Integer, ForeignKey('categories.id', ondelete="CASCADE"), nullable=False, index=True)
-    category = relationship("Categories", back_populates="items", lazy='raise')
-    values = relationship("ItemValues", back_populates="item", lazy='raise')
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    name: Mapped[str] = mapped_column(String(100), unique=True, nullable=False)
+    price: Mapped[Decimal] = mapped_column(Numeric(12, 2), nullable=False)
+    description: Mapped[str] = mapped_column(Text, nullable=False)
+    category_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey('categories.id', ondelete="CASCADE"), nullable=False, index=True)
+    sale_percent: Mapped[Optional[Decimal]] = mapped_column(Numeric(5, 2), nullable=True)
+    sale_until: Mapped[Optional[datetime.datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    category: Mapped["Categories"] = relationship("Categories", back_populates="items", lazy='raise')
+    values: Mapped[list["ItemValues"]] = relationship("ItemValues", back_populates="item", lazy='raise')
 
-    def __init__(self, name: str = None, price=None, description: str = None, category_id: int = None, **kw: Any):
+    def __init__(self, name: str = None, price=None, description: str = None, category_id: int = None,
+                 sale_percent=None, sale_until=None, **kw: Any):
         super().__init__(**kw)
         if name is not None:
             self.name = name
@@ -177,6 +187,10 @@ class Goods(Database.BASE):
             self.description = description
         if category_id is not None:
             self.category_id = category_id
+        if sale_percent is not None:
+            self.sale_percent = sale_percent
+        if sale_until is not None:
+            self.sale_until = sale_until
 
     def __str__(self):
         return self.name or ""
@@ -184,11 +198,12 @@ class Goods(Database.BASE):
 
 class ItemValues(Database.BASE):
     __tablename__ = 'item_values'
-    id = Column(Integer, primary_key=True)
-    item_id = Column(Integer, ForeignKey('goods.id', ondelete="CASCADE"), nullable=False, index=True)
-    value = Column(Text, nullable=True)
-    is_infinity = Column(Boolean, nullable=False)
-    item = relationship("Goods", back_populates="values", lazy='raise')
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    item_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey('goods.id', ondelete="CASCADE"), nullable=False, index=True)
+    value: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    is_infinity: Mapped[bool] = mapped_column(Boolean, nullable=False)
+    item: Mapped["Goods"] = relationship("Goods", back_populates="values", lazy='raise')
 
     __table_args__ = (
         UniqueConstraint('item_id', 'value', name='uq_item_value_per_item'),
@@ -210,14 +225,17 @@ class ItemValues(Database.BASE):
 
 class BoughtGoods(Database.BASE):
     __tablename__ = 'bought_goods'
-    id = Column(Integer, primary_key=True)
-    item_name = Column(String(100), nullable=False, index=True)
-    value = Column(Text, nullable=False)
-    price = Column(Numeric(12, 2), nullable=False)
-    buyer_id = Column(BigInteger, ForeignKey('users.telegram_id', ondelete="SET NULL"), nullable=True, index=True)
-    bought_datetime = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
-    unique_id = Column(BigInteger, nullable=False, unique=True)
-    user_telegram_id = relationship("User", back_populates="user_goods", lazy='raise')
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    item_name: Mapped[str] = mapped_column(String(100), nullable=False, index=True)
+    value: Mapped[str] = mapped_column(Text, nullable=False)
+    price: Mapped[Decimal] = mapped_column(Numeric(12, 2), nullable=False)
+    buyer_id: Mapped[Optional[int]] = mapped_column(
+        BigInteger, ForeignKey('users.telegram_id', ondelete="SET NULL"), nullable=True, index=True)
+    bought_datetime: Mapped[datetime.datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now())
+    unique_id: Mapped[int] = mapped_column(BigInteger, nullable=False, unique=True)
+    user_telegram_id: Mapped[Optional["User"]] = relationship(
+        "User", back_populates="user_goods", lazy='raise')
 
     __table_args__ = (
         Index('ix_bought_goods_datetime', 'bought_datetime'),
@@ -246,11 +264,14 @@ class BoughtGoods(Database.BASE):
 
 class Operations(Database.BASE):
     __tablename__ = 'operations'
-    id = Column(Integer, primary_key=True)
-    user_id = Column(BigInteger, ForeignKey('users.telegram_id', ondelete="SET NULL"), nullable=True, index=True)
-    operation_value = Column(Numeric(12, 2), nullable=False)
-    operation_time = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
-    user_telegram_id = relationship("User", back_populates="user_operations", lazy='raise')
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    user_id: Mapped[Optional[int]] = mapped_column(
+        BigInteger, ForeignKey('users.telegram_id', ondelete="SET NULL"), nullable=True, index=True)
+    operation_value: Mapped[Decimal] = mapped_column(Numeric(12, 2), nullable=False)
+    operation_time: Mapped[datetime.datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now())
+    user_telegram_id: Mapped[Optional["User"]] = relationship(
+        "User", back_populates="user_operations", lazy='raise')
 
     __table_args__ = (
         Index('ix_operations_time', 'operation_time'),
@@ -271,15 +292,18 @@ class Operations(Database.BASE):
 
 class Payments(Database.BASE):
     __tablename__ = "payments"
-    id = Column(Integer, primary_key=True)
-    provider = Column(String(32), nullable=False, index=True)
-    external_id = Column(String(128), nullable=False)
-    user_id = Column(BigInteger, ForeignKey('users.telegram_id', ondelete="SET NULL"), nullable=True, index=True)
-    amount = Column(Numeric(12, 2), nullable=False)
-    currency = Column(String(8), nullable=False)
-    status = Column(String(16), nullable=False, default="pending")
-    created_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
-    updated_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now())
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    provider: Mapped[str] = mapped_column(String(32), nullable=False, index=True)
+    external_id: Mapped[str] = mapped_column(String(128), nullable=False)
+    user_id: Mapped[Optional[int]] = mapped_column(
+        BigInteger, ForeignKey('users.telegram_id', ondelete="SET NULL"), nullable=True, index=True)
+    amount: Mapped[Decimal] = mapped_column(Numeric(12, 2), nullable=False)
+    currency: Mapped[str] = mapped_column(String(8), nullable=False)
+    status: Mapped[str] = mapped_column(String(16), nullable=False, default="pending")
+    created_at: Mapped[datetime.datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now())
+    updated_at: Mapped[datetime.datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now())
 
     __table_args__ = (
         UniqueConstraint('provider', 'external_id', name='uq_payment_provider_ext'),
@@ -293,20 +317,23 @@ class Payments(Database.BASE):
 class ReferralEarnings(Database.BASE):
     __tablename__ = 'referral_earnings'
 
-    id = Column(Integer, primary_key=True)
-    referrer_id = Column(BigInteger, ForeignKey('users.telegram_id', ondelete="CASCADE"), nullable=False, index=True)
-    referral_id = Column(BigInteger, ForeignKey('users.telegram_id', ondelete="CASCADE"), nullable=False, index=True)
-    amount = Column(Numeric(12, 2), nullable=False)
-    original_amount = Column(Numeric(12, 2), nullable=False)
-    created_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    referrer_id: Mapped[int] = mapped_column(
+        BigInteger, ForeignKey('users.telegram_id', ondelete="CASCADE"), nullable=False, index=True)
+    referral_id: Mapped[int] = mapped_column(
+        BigInteger, ForeignKey('users.telegram_id', ondelete="CASCADE"), nullable=False, index=True)
+    amount: Mapped[Decimal] = mapped_column(Numeric(12, 2), nullable=False)
+    original_amount: Mapped[Decimal] = mapped_column(Numeric(12, 2), nullable=False)
+    created_at: Mapped[datetime.datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now())
 
-    referrer = relationship(
+    referrer: Mapped["User"] = relationship(
         "User",
         foreign_keys="ReferralEarnings.referrer_id",
         back_populates="referral_earnings_received",
         lazy='raise',
     )
-    referral = relationship(
+    referral: Mapped["User"] = relationship(
         "User",
         foreign_keys="ReferralEarnings.referral_id",
         back_populates="referral_earnings_generated",
@@ -336,15 +363,16 @@ class ReferralEarnings(Database.BASE):
 
 class AuditLog(Database.BASE):
     __tablename__ = 'audit_log'
-    id = Column(Integer, primary_key=True)
-    timestamp = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
-    level = Column(String(8), nullable=False, default="INFO")
-    user_id = Column(BigInteger, nullable=True)
-    action = Column(String(64), nullable=False)
-    resource_type = Column(String(32), nullable=True)
-    resource_id = Column(String(128), nullable=True)
-    details = Column(Text, nullable=True)
-    ip_address = Column(String(45), nullable=True)
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    timestamp: Mapped[datetime.datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now())
+    level: Mapped[str] = mapped_column(String(8), nullable=False, default="INFO")
+    user_id: Mapped[Optional[int]] = mapped_column(BigInteger, nullable=True)
+    action: Mapped[str] = mapped_column(String(64), nullable=False)
+    resource_type: Mapped[Optional[str]] = mapped_column(String(32), nullable=True)
+    resource_id: Mapped[Optional[str]] = mapped_column(String(128), nullable=True)
+    details: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    ip_address: Mapped[Optional[str]] = mapped_column(String(45), nullable=True)
 
     __table_args__ = (
         Index('ix_audit_log_timestamp', 'timestamp'),
@@ -361,17 +389,20 @@ class AuditLog(Database.BASE):
 
 class PromoCodes(Database.BASE):
     __tablename__ = 'promo_codes'
-    id = Column(Integer, primary_key=True)
-    code = Column(String(50), unique=True, nullable=False, index=True)
-    discount_type = Column(String(10), nullable=False)  # 'percent' | 'fixed'
-    discount_value = Column(Numeric(12, 2), nullable=False)
-    max_uses = Column(Integer, nullable=False, default=0)  # 0 = unlimited
-    current_uses = Column(Integer, nullable=False, default=0)
-    expires_at = Column(DateTime(timezone=True), nullable=True)
-    category_id = Column(Integer, ForeignKey('categories.id', ondelete='SET NULL'), nullable=True)
-    item_id = Column(Integer, ForeignKey('goods.id', ondelete='SET NULL'), nullable=True)
-    is_active = Column(Boolean, nullable=False, default=True, index=True)
-    created_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    code: Mapped[str] = mapped_column(String(50), unique=True, nullable=False, index=True)
+    discount_type: Mapped[str] = mapped_column(String(10), nullable=False)  # 'percent' | 'fixed'
+    discount_value: Mapped[Decimal] = mapped_column(Numeric(12, 2), nullable=False)
+    max_uses: Mapped[int] = mapped_column(Integer, nullable=False, default=0)  # 0 = unlimited
+    current_uses: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    expires_at: Mapped[Optional[datetime.datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    category_id: Mapped[Optional[int]] = mapped_column(
+        Integer, ForeignKey('categories.id', ondelete='SET NULL'), nullable=True)
+    item_id: Mapped[Optional[int]] = mapped_column(
+        Integer, ForeignKey('goods.id', ondelete='SET NULL'), nullable=True)
+    is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True, index=True)
+    created_at: Mapped[datetime.datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now())
 
     def __str__(self):
         return self.code or ""
@@ -379,20 +410,25 @@ class PromoCodes(Database.BASE):
 
 class PromoCodeUsages(Database.BASE):
     __tablename__ = 'promo_code_usages'
-    id = Column(Integer, primary_key=True)
-    promo_id = Column(Integer, ForeignKey('promo_codes.id', ondelete='CASCADE'), nullable=False)
-    user_id = Column(BigInteger, ForeignKey('users.telegram_id', ondelete='CASCADE'), nullable=False)
-    used_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    promo_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey('promo_codes.id', ondelete='CASCADE'), nullable=False)
+    user_id: Mapped[int] = mapped_column(
+        BigInteger, ForeignKey('users.telegram_id', ondelete='CASCADE'), nullable=False)
+    used_at: Mapped[datetime.datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now())
     __table_args__ = (UniqueConstraint('promo_id', 'user_id', name='uq_promo_usage_per_user'),)
 
 
 class CartItems(Database.BASE):
     __tablename__ = 'cart_items'
-    id = Column(Integer, primary_key=True)
-    user_id = Column(BigInteger, ForeignKey('users.telegram_id', ondelete='CASCADE'), nullable=False, index=True)
-    item_name = Column(String(100), nullable=False)
-    promo_code = Column(String(50), nullable=True)
-    added_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    user_id: Mapped[int] = mapped_column(
+        BigInteger, ForeignKey('users.telegram_id', ondelete='CASCADE'), nullable=False, index=True)
+    item_name: Mapped[str] = mapped_column(String(100), nullable=False)
+    promo_code: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
+    added_at: Mapped[datetime.datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now())
 
     def __str__(self):
         return self.item_name or ""
@@ -400,12 +436,14 @@ class CartItems(Database.BASE):
 
 class Reviews(Database.BASE):
     __tablename__ = 'reviews'
-    id = Column(Integer, primary_key=True)
-    user_id = Column(BigInteger, ForeignKey('users.telegram_id', ondelete='CASCADE'), nullable=False, index=True)
-    item_name = Column(String(100), nullable=False, index=True)
-    rating = Column(Integer, nullable=False)  # 1-5
-    text = Column(Text, nullable=True)
-    created_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    user_id: Mapped[int] = mapped_column(
+        BigInteger, ForeignKey('users.telegram_id', ondelete='CASCADE'), nullable=False, index=True)
+    item_name: Mapped[str] = mapped_column(String(100), nullable=False, index=True)
+    rating: Mapped[int] = mapped_column(Integer, nullable=False)  # 1-5
+    text: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime.datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now())
     __table_args__ = (
         UniqueConstraint('user_id', 'item_name', name='uq_review_per_user_item'),
         CheckConstraint('rating >= 1 AND rating <= 5', name='ck_review_rating_range'),
