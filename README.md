@@ -57,6 +57,8 @@ via the command line (CLI) without the need for a shell and advanced monitoring 
     - 💳 Telegram Payments (Fiat)
 - **Shopping Cart**: Add multiple items, apply promo codes per item, atomic multi-item checkout with receipt
 - **Promo Codes**: Percent/fixed/balance discount types, category/item binding, usage limits, expiration
+- **Time-Limited Sales**: Per-product percentage discounts with an expiry date; the sale price is computed server-side
+  and stacks with promo codes (promo applies on top of the sale price)
 - **Product Reviews**: 1–5 star ratings with optional text, one review per user per item
 - **Referral System**: Configurable commission rates
 - **Multi-language Support**: Russian and English localization
@@ -74,7 +76,8 @@ via the command line (CLI) without the need for a shell and advanced monitoring 
     - Real-time statistics dashboard
     - User management with balance control
     - Role management: create custom roles, assign roles to users
-    - Product and category management
+    - Product and category management, including time-limited sales (set/remove a per-product discount, from the bot
+      admin menu or the SQLAdmin web panel)
     - Broadcast messaging system
     - Promo code management (create, toggle, delete, view usage stats)
     - CSV data export (users, purchases, payments, operations) with date filtering
@@ -97,12 +100,12 @@ via the command line (CLI) without the need for a shell and advanced monitoring 
     - Async connection pooling with automatic recycling and timeout handling
     - Graceful handling of high-load scenarios
 - **Optional Redis Caching**: Multi-layer caching system for optimal performance (enable with `REDIS_ENABLED=1`)
-    - User role caching (15-minute TTL)
-    - Product catalog caching (5-minute TTL)
-    - Statistics caching (1-minute TTL)
-    - Smart cache invalidation on data updates (purchases, admin item adds, stock changes)
+    - User & role caching (user 10-minute TTL, role 5-minute TTL)
+    - Product caching (product info 15-minute, stock counts 5-minute, categories 30-minute TTL)
+    - Statistics & counters caching (1-minute TTL); review ratings caching (10-minute TTL)
+    - Smart cache invalidation on data updates (purchases, admin item adds, stock changes, sales, web-panel edits)
     - Cache warm-up on startup (categories, user/admin counts)
-    - Cache scheduler: hourly stats refresh, daily cleanup at 3:00 AM
+    - Cache scheduler: hourly stats refresh, daily cache cleanup at 3:00 AM, Redis health monitor every 30s
     - When disabled: bot uses in-memory FSM storage and queries the database directly
 - **Performance Optimizations**: Up to 60% reduction in database queries for read operations (with Redis enabled)
 - **Optimized Queries**: JOIN-based queries instead of N+1 patterns, SQL-level sorting for paginated results
@@ -178,6 +181,10 @@ via the command line (CLI) without the need for a shell and advanced monitoring 
 - Telegram ID-based authentication
 - Permission bitmask access control with 10 granular bits and bitwise subset validation
 - Role caching with TTL for performance
+- Constant-time credential comparison for the admin panel login and webhook secret (`hmac.compare_digest`)
+- Proxy-aware client IP resolution (trusts `X-Forwarded-For` only when the socket peer is loopback)
+- Web-panel edits to a user's role, balance, or block status invalidate the bot's Redis and in-memory caches
+  immediately, so changed permissions take effect without waiting for TTL expiry
 
 #### 4. **Payment Security**
 
@@ -197,8 +204,10 @@ via the command line (CLI) without the need for a shell and advanced monitoring 
 
 - Pydantic models for request validation
 - Decimal precision for monetary calculations
-- HTML sanitization for user-facing text (broadcast, categories)
+- HTML sanitization for user-facing text (broadcast, categories); review text and item names are HTML-escaped on render
 - Control character filtering for item names
+- CSV export hardening: formula-injection neutralization (cells starting with `=`, `+`, `-`, `@` are quoted) and
+  keyset pagination for stable, efficient streaming
 
 ## 🏗️ Architecture
 
@@ -220,7 +229,7 @@ via the command line (CLI) without the need for a shell and advanced monitoring 
 
 - **Users**: Telegram ID, balance, referral tracking
 - **Roles**: Permission-based access control
-- **Products**: Categories, items, stock management
+- **Products**: Categories, items, stock management, optional time-limited sale (`sale_percent` + `sale_until`)
 - **Transactions**: Purchases, payments, operations
 - **Referrals**: Earnings tracking and statistics
 - **Promo Codes**: Discount codes with type, value, usage tracking, and category/item binding
@@ -675,6 +684,8 @@ Available for users with admin permissions (built-in ADMIN/OWNER or custom roles
 #### Categories & Items Management
 
 - Categories, products, stock control
+- Time-limited sales: set a per-product discount (%) with a duration in days, or remove it — via the **🔥 Manage
+  discount** option in the goods management menu (or by editing `sale_percent` / `sale_until` in the web panel)
 
 ![Categories](assets/categories_management_menu_picture.png)
 
@@ -740,7 +751,7 @@ await buy_item_transaction(telegram_id: int, item_name: str, promo_code: str = N
 await checkout_cart_transaction(user_id: int) -> tuple[bool, str, list]
 await process_payment_with_referral(
     user_id: int, amount: Decimal, provider: str, external_id: str, referral_percent: int = 0) -> tuple[bool, str]
-await admin_balance_change(telegram_id: int, amount: int) -> tuple[bool, str]
+await admin_balance_change(telegram_id: int, amount: Decimal) -> tuple[bool, str]
 await redeem_balance_promo(code: str, user_id: int) -> tuple[bool, str, Decimal | None]
 ```
 
@@ -750,6 +761,8 @@ await redeem_balance_promo(code: str, user_id: int) -> tuple[bool, str, Decimal 
 await create_item(item_name: str, item_description: str, item_price: int, category_name: str) -> None
 await add_values_to_item(item_name: str, value: str, is_infinity: bool) -> bool
 await delete_item(item_name: str) -> None
+await set_item_sale(item_name: str, sale_percent: Decimal | None, sale_until: datetime | None) -> bool
+effective_price(goods) -> tuple[Decimal, bool, Decimal]  # (final_price, on_sale, original_price)
 ```
 
 #### Role Management
@@ -824,16 +837,17 @@ await log_audit(
 ### Caching & Performance
 
 ```python
-# Cache configuration examples
-@cache_result(ttl=900, key_prefix="user_roles")  # 15 minutes
-async def get_user_role(telegram_id: int) -> str
+# Cache configuration examples (decorator: async_cached)
+@async_cached(ttl=600, key_prefix="user")  # 10 minutes
+async def check_user_cached(telegram_id: int | str)
 
 
-@cache_result(ttl=300, key_prefix="catalog")  # 5 minutes  
-async def get_products_by_category(category_id: int) -> List[Product]
+@async_cached(ttl=900, key_prefix="item_info")  # 15 minutes
+async def get_item_info_cached(item_name: str)
 
 
-# Cache invalidation (called automatically after purchases, admin item adds, and stock changes)
+# Cache invalidation (called automatically after purchases, admin item adds, stock changes,
+# sales, and web-panel user/role/product edits)
 await invalidate_user_cache(telegram_id)
 await invalidate_item_cache(item_name, category_name)  # category_name is optional
 ```
@@ -845,6 +859,7 @@ from sqlalchemy.ext.asyncio import create_async_engine
 
 engine = create_async_engine(
     DATABASE_URL,  # postgresql+asyncpg://...
+    pool_pre_ping=True,  # Validate connections before use
     pool_size=20,  # Base pool size
     max_overflow=40,  # Additional connections during peaks
     pool_recycle=3600,  # Refresh connections every hour
@@ -858,7 +873,7 @@ engine = create_async_engine(
 
 ## 🧪 Testing
 
-The project includes a comprehensive test suite with **448 tests** covering all major components, business logic, and
+The project includes a comprehensive test suite with **466 tests** covering all major components, business logic, and
 edge cases. Tests use SQLite in-memory with real SQL queries, and a dict-based FakeCacheManager for realistic cache
 behavior. Coverage is measured automatically on every run via `pytest-cov`.
 
@@ -883,14 +898,15 @@ pytest tests/ --cov-report=html
 |------------------------------|---------|-------------------------------------------------------------------|
 | `test_database_crud.py`      | 71      | CRUD: users, roles, categories, items, balance, stats             |
 | `test_role_management.py`    | 53      | Role CRUD, handlers, helpers, Permission bitwise, regressions     |
-| `test_validators.py`         | 44      | Input validation, control chars, XSS, Pydantic models             |
 | `test_middleware.py`         | 45      | Rate limiting, suspicious patterns, critical/replay actions, auth |
+| `test_validators.py`         | 44      | Input validation, control chars, XSS, Pydantic models             |
 | `test_keyboards.py`          | 31      | All inline keyboard generators incl. admin console                |
-| `test_admin_handlers.py`     | 27      | User management, assign role, balance edge cases, categories      |
+| `test_admin_handlers.py`     | 23      | User management, assign role, balance edge cases, categories      |
 | `test_transactions.py`       | 21      | Purchase & payment transactions, idempotency, admin balance       |
-| `test_other_handlers.py`     | 16      | check_sub_channel, payment methods, hash, item name safety        |
+| `test_other_handlers.py`     | 19      | check_sub_channel, payment methods, hash, item name safety        |
+| `test_payment_service.py`    | 18      | currency_to_stars, minor units, Stars/Fiat invoices, CryptoPayAPI |
+| `test_sales.py`              | 18      | effective_price, sale purchase, sale+promo stacking, admin sale FSM |
 | `test_filters.py`            | 15      | ValidAmountFilter, HasPermissionFilter (boundaries, permissions)  |
-| `test_payment_service.py`    | 14      | currency_to_stars, minor units, Stars/Fiat invoices, CryptoPayAPI |
 | `test_metrics.py`            | 14      | MetricsCollector, AnalyticsMiddleware                             |
 | `test_cache_invalidation.py` | 13      | Cache invalidation after DB mutations                             |
 | `test_broadcast.py`          | 11      | BroadcastManager, BroadcastStats                                  |
@@ -903,7 +919,7 @@ pytest tests/ --cov-report=html
 | `test_recovery.py`           | 7       | RecoveryManager lifecycle, payment recovery, timeout, skip        |
 | `test_login_rate_limiter.py` | 6       | LoginRateLimiter: blocking, reset, expiry, IP isolation           |
 | `test_audit.py`              | 4       | log_audit: DB record creation, levels, optional fields            |
-| **Total**                    | **448** | **Complete system coverage**                                      |
+| **Total**                    | **466** | **Complete system coverage**                                      |
 
 ### Test Architecture
 
@@ -923,6 +939,8 @@ The test suite validates:
 * ✅ **Referral bonus calculation** — percentage-based bonus, referrer cache invalidation
 * ✅ **Atomic admin balance operations** — top-up, deduction, insufficient funds check in single transaction
 * ✅ **Cache invalidation after mutations** — stale balance/stats/item count prevention (purchases, admin adds)
+* ✅ **Time-limited sales** — `effective_price` (active/expired/none, percent clamping, ISO-string date from cache),
+  sale price charged on purchase, promo stacking on top of the sale price, and the admin sale FSM (set/disable)
 
 </details>
 
