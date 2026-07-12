@@ -152,7 +152,8 @@ class Categories(Database.BASE):
     __tablename__ = 'categories'
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     name: Mapped[str] = mapped_column(String(100), unique=True, nullable=False)
-    items: Mapped[list["Goods"]] = relationship("Goods", back_populates="category", lazy='raise')
+    items: Mapped[list["Goods"]] = relationship(
+        "Goods", back_populates="category", lazy='raise', passive_deletes=True)
 
     def __init__(self, name: str = None, **kw: Any):
         super().__init__(**kw)
@@ -174,7 +175,8 @@ class Goods(Database.BASE):
     sale_percent: Mapped[Optional[Decimal]] = mapped_column(Numeric(5, 2), nullable=True)
     sale_until: Mapped[Optional[datetime.datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
     category: Mapped["Categories"] = relationship("Categories", back_populates="items", lazy='raise')
-    values: Mapped[list["ItemValues"]] = relationship("ItemValues", back_populates="item", lazy='raise')
+    values: Mapped[list["ItemValues"]] = relationship(
+        "ItemValues", back_populates="item", lazy='raise', passive_deletes=True)
 
     def __init__(self, name: str = None, price=None, description: str = None, category_id: int = None,
                  sale_percent=None, sale_until=None, **kw: Any):

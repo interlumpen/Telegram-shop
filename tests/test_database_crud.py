@@ -179,6 +179,11 @@ class TestCategoryCRUD:
         await delete_category("ToDelete")
         assert await check_category("ToDelete") is None
 
+    async def test_delete_category_with_items_no_crash(self, item_factory):
+        await item_factory(name="test", category="lol", values=[("secret", False)])
+        await delete_category("lol")
+        assert await check_category("lol") is None
+
 
 class TestItemCRUD:
     async def test_create_and_get_item_info(self, item_factory):
