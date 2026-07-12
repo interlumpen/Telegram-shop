@@ -83,11 +83,25 @@ class TestRecoveryManager:
         assert self.manager.running is False
 
     async def test_safe_run_handles_exceptions(self):
-        async def failing_coro():
-            raise ValueError("test error")
+        """_safe_run should swallow a task crash, back off, and restart the loop."""
+        self.manager.running = True
+        call_count = 0
 
-        # Should not raise
-        await self.manager._safe_run(failing_coro())
+        async def flaky():
+            nonlocal call_count
+            call_count += 1
+            if call_count == 1:
+                raise ValueError("test error")
+            # Second iteration: stop the loop so the test terminates.
+            self.manager.running = False
+
+        # Patch the 30s backoff so the retry happens immediately.
+        with patch("bot.misc.services.recovery.asyncio.sleep", new=AsyncMock()) as mock_sleep:
+            # Pass the coroutine *function* (as start() does), not a coroutine object.
+            await self.manager._safe_run(flaky)
+
+        assert call_count == 2  # crashed once, then retried
+        mock_sleep.assert_awaited_once()  # backed off between attempts
 
     async def test_check_and_process_api_timeout(self, user_factory):
         """API timeout should not crash the recovery manager."""

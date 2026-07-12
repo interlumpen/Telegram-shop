@@ -49,6 +49,7 @@ async def delete_category(category_name: str) -> None:
                 resource_type="Category",
                 resource_id=category_name,
                 details=f"deleted items: {item_names}",
+                session=s,
             )
         await s.delete(cat)
 

@@ -1,7 +1,6 @@
 import asyncio
 import hmac
 import logging
-import sys
 import json
 from pathlib import Path
 from aiogram import Bot, Dispatcher
@@ -225,14 +224,7 @@ async def start_bot() -> None:
     logging.getLogger("aiogram.middlewares").setLevel(logging.WARNING)
     logging.getLogger("uvicorn").setLevel(logging.WARNING)
 
-    # Checking critical environment variables
-    if not EnvKeys.TOKEN:
-        logging.critical("Bot token not set! Please set TOKEN environment variable.")
-        sys.exit(1)
-
-    if not EnvKeys.OWNER_ID:
-        logging.critical("Owner ID not set! Please set OWNER_ID environment variable.")
-        sys.exit(1)
+    EnvKeys.validate()
 
     # Retrieve storage (Redis or Memory)
     storage = get_redis_storage() or MemoryStorage()

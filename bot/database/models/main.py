@@ -456,6 +456,5 @@ class Reviews(Database.BASE):
 
 
 async def register_models():
-    async with Database().engine.begin() as conn:
-        await conn.run_sync(Database.BASE.metadata.create_all)
+    """Seed the built-in roles (USER/ADMIN/OWNER)."""
     await Role.insert_roles()

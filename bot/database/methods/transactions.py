@@ -245,7 +245,10 @@ async def process_payment_with_referral(
             # 4. Process the referral bonus
             clamped_percent = min(max(referral_percent, 0), 99)
             if clamped_percent > 0 and user.referral_id and user.referral_id != user_id:
-                referral_amount = (Decimal(clamped_percent) / Decimal(100)) * amount
+                # Quantize to 2 dp to round on write
+                referral_amount = (
+                    (Decimal(clamped_percent) / Decimal(100)) * amount
+                ).quantize(Decimal("0.01"))
 
                 if referral_amount > 0:
                     referrer = (await s.execute(
@@ -260,6 +263,7 @@ async def process_payment_with_referral(
                             resource_type="User",
                             resource_id=str(user_id),
                             details=f"paid={amount}, bonus={referral_amount}",
+                            session=s,
                         )
 
                         earning = ReferralEarnings(
