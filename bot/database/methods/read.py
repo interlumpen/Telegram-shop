@@ -46,24 +46,23 @@ def _day_window(date_str: str) -> tuple[datetime.datetime, datetime.datetime]:
 
 
 def _obj_to_dict(obj, model=None) -> dict:
-    """Convert an ORM object to a dict of its column values.
-
-    Uses the runtime mapper (not ``__table__``) so static type checkers don't
-    complain about a declarative class missing ``__table__``. ``model`` is
-    optional; when omitted the mapper is derived from the instance's class.
-    """
+    """Convert an ORM object to a dict of its column values."""
     mapper = sa_inspect(model if model is not None else type(obj))
     return {attr.key: getattr(obj, attr.key) for attr in mapper.column_attrs}
+
+
+async def _fetch_one_dict(model, *whereclauses) -> dict | None:
+    """Fetch a single 'model' row matching the where-clauses as a dict, or None."""
+    async with Database().session() as s:
+        obj = (await s.execute(select(model).where(*whereclauses))).scalars().first()
+        return _obj_to_dict(obj, model) if obj else None
 
 
 # --- Async implementations ---
 
 async def check_user(telegram_id: int | str) -> Optional[dict]:
     """Return user by Telegram ID or None if not found."""
-    async with Database().session() as s:
-        result = await s.execute(select(User).where(User.telegram_id == telegram_id))
-        user = result.scalars().one_or_none()
-        return _obj_to_dict(user, User) if user else None
+    return await _fetch_one_dict(User, User.telegram_id == telegram_id)
 
 
 async def check_role(telegram_id: int) -> int:
@@ -186,18 +185,12 @@ async def get_all_users() -> list[tuple[int]]:
 
 async def get_bought_item_info(item_id: int) -> dict | None:
     """Return bought item row as dict by row id, or None."""
-    async with Database().session() as s:
-        result = await s.execute(select(BoughtGoods).where(BoughtGoods.id == item_id))
-        obj = result.scalars().first()
-        return _obj_to_dict(obj, BoughtGoods) if obj else None
+    return await _fetch_one_dict(BoughtGoods, BoughtGoods.id == item_id)
 
 
 async def get_item_info(item_name: str) -> dict | None:
     """Return item (position) row as dict by name, or None."""
-    async with Database().session() as s:
-        result = await s.execute(select(Goods).where(Goods.name == item_name))
-        obj = result.scalars().first()
-        return _obj_to_dict(obj, Goods) if obj else None
+    return await _fetch_one_dict(Goods, Goods.name == item_name)
 
 
 async def get_items_info(item_names: list[str]) -> dict[str, dict]:
@@ -228,10 +221,7 @@ async def get_goods_info(item_id: int) -> dict | None:
 
 async def check_category(category_name: str) -> dict | None:
     """Return category as dict by name, or None."""
-    async with Database().session() as s:
-        result = await s.execute(select(Categories).where(Categories.name == category_name))
-        obj = result.scalars().first()
-        return _obj_to_dict(obj, Categories) if obj else None
+    return await _fetch_one_dict(Categories, Categories.name == category_name)
 
 
 async def select_item_values_amount(item_name: str) -> int:
@@ -266,10 +256,7 @@ async def select_user_items(buyer_id: int | str) -> int:
 
 async def select_bought_item(unique_id: int) -> dict | None:
     """Return one bought item by unique_id as dict, or None."""
-    async with Database().session() as s:
-        result = await s.execute(select(BoughtGoods).where(BoughtGoods.unique_id == unique_id))
-        obj = result.scalars().first()
-        return _obj_to_dict(obj, BoughtGoods) if obj else None
+    return await _fetch_one_dict(BoughtGoods, BoughtGoods.unique_id == unique_id)
 
 
 async def select_count_items() -> int:
@@ -433,10 +420,7 @@ async def get_referral_earnings_stats(referrer_id: int) -> Dict:
 
 async def get_one_referral_earning(earning_id: int) -> dict | None:
     """Get one user referral earning info."""
-    async with Database().session() as s:
-        result = await s.execute(select(ReferralEarnings).where(ReferralEarnings.id == earning_id))
-        obj = result.scalars().first()
-        return _obj_to_dict(obj, ReferralEarnings) if obj else None
+    return await _fetch_one_dict(ReferralEarnings, ReferralEarnings.id == earning_id)
 
 
 # --- Cached versions ---
@@ -528,10 +512,7 @@ async def invalidate_stats_cache():
 
 async def get_promo_code(code: str) -> dict | None:
     """Return promo code by code string, or None."""
-    async with Database().session() as s:
-        result = await s.execute(select(PromoCodes).where(PromoCodes.code == code.upper()))
-        obj = result.scalars().first()
-        return _obj_to_dict(obj, PromoCodes) if obj else None
+    return await _fetch_one_dict(PromoCodes, PromoCodes.code == code.upper())
 
 
 async def validate_promo_for_item(
@@ -632,15 +613,9 @@ async def has_purchased_item(user_id: int, item_name: str) -> bool:
 
 async def get_user_review(user_id: int, item_name: str) -> dict | None:
     """Return user's review for an item, or None."""
-    async with Database().session() as s:
-        result = await s.execute(
-            select(Reviews).where(
-                Reviews.user_id == user_id,
-                Reviews.item_name == item_name
-            )
-        )
-        obj = result.scalars().first()
-        return _obj_to_dict(obj, Reviews) if obj else None
+    return await _fetch_one_dict(
+        Reviews, Reviews.user_id == user_id, Reviews.item_name == item_name
+    )
 
 
 async def invalidate_rating_cache(item_name: str):
