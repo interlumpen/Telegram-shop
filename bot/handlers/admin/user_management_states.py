@@ -635,14 +635,6 @@ async def process_deduct_user_balance(message: Message, state: FSMContext):
         )
 
 
-@router.callback_query(F.data.startswith('check-user_'), HasPermissionFilter(permission=Permission.USERS_MANAGE))
-async def check_user_profile_again(call: CallbackQuery):
-    """
-    Re-uses user_profile_view to show the profile again.
-    """
-    await user_profile_view(call)
-
-
 @router.callback_query(F.data.startswith('block-user_'), HasPermissionFilter(Permission.USERS_MANAGE))
 async def block_user_handler(call: CallbackQuery):
     """

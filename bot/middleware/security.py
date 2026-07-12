@@ -138,16 +138,6 @@ class AuthenticationMiddleware(BaseMiddleware):
 
     @property
     def maintenance_mode(self) -> bool:
-        from bot.misc.caching import get_cache_manager
-        import asyncio
-        cache = get_cache_manager()
-        if cache:
-            try:
-                loop = asyncio.get_running_loop()
-                # In async context, return cached in-memory value (updated via setter)
-                return self._maintenance_mode
-            except RuntimeError:
-                return self._maintenance_mode
         return self._maintenance_mode
 
     @maintenance_mode.setter
