@@ -499,6 +499,9 @@ TRANSLATIONS: dict[str, dict[str, str]] = {
         "errors.channel.telegram_not_found": "Я не могу писать в канал. Добавьте меня админом канала для заливов @{channel} с правом публиковать сообщения.",
         "errors.channel.telegram_forbidden_error": "Канал не найден. Проверьте username канала для заливов @{channel}.",
         "errors.channel.telegram_bad_request": "Не удалось отправить в канал для заливов: {e}",
+        "errors.general_error": "❌ Ошибка: {e}",
+        "errors.invalid_item_name": "❌ Некорректное название товара",
+        "errors.invalid_user": "❌ Некорректный пользователь",
     },
 
     "en": {
@@ -794,8 +797,8 @@ TRANSLATIONS: dict[str, dict[str, str]] = {
         "broadcast.prompt": "Send a message to broadcast:",
         "broadcast.creating": "📤 Starting the newsletter...\n👥 Total users: {ids}",
         "broadcast.progress": (
-            "📤 Broadcasting in progress...\n\n\n"
-            "📊 Progress: {progress:.1f}%{n}"
+            "📤 Broadcasting in progress...\n\n"
+            "📊 Progress: {progress:.1f}%\n"
             "✅ Sent: {sent}/{total}\n"
             "❌ Errors: {failed}\n"
             "⏱ Time elapsed: {time} sec"),
@@ -1000,5 +1003,7 @@ TRANSLATIONS: dict[str, dict[str, str]] = {
         "errors.channel.telegram_forbidden_error": "Channel not found. Check the channel username for uploads @{channel}.",
         "errors.channel.telegram_bad_request": "Failed to send to the channel for uploads: {e}",
         "errors.general_error": "❌ Error: {e}",
+        "errors.invalid_item_name": "❌ Invalid item name",
+        "errors.invalid_user": "❌ Invalid user",
     },
 }

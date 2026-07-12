@@ -1,5 +1,5 @@
 import asyncio
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from bot.misc.caching import get_cache_manager
 from bot.logger_mesh import logger
 
@@ -34,11 +34,11 @@ async def invalidate_stats_periodically():
 async def daily_cleanup():
     """Daily cleaning of outdated data"""
     while True:
-        # Wait until 3 o'clock in the morning
-        now = datetime.now()
+        # Wait until 3 o'clock in the morning (UTC)
+        now = datetime.now(timezone.utc)
         next_run = now.replace(hour=3, minute=0, second=0, microsecond=0)
         if now >= next_run:
-            next_run = next_run.replace(day=next_run.day + 1)
+            next_run = next_run + timedelta(days=1)
 
         wait_seconds = (next_run - now).total_seconds()
         await asyncio.sleep(wait_seconds)

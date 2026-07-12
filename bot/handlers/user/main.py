@@ -232,7 +232,7 @@ async def _show_operations_page(call: CallbackQuery, state: FSMContext, user_id:
     if page > 0:
         nav_buttons.append(InlineKeyboardButton(text="◀️", callback_data=f"ops-page_{page - 1}"))
     if total_pages > 1:
-        nav_buttons.append(InlineKeyboardButton(text=f"{page + 1}/{total_pages}", callback_data="noop"))
+        nav_buttons.append(InlineKeyboardButton(text=f"{page + 1}/{total_pages}", callback_data="dummy_button"))
     if page < total_pages - 1:
         nav_buttons.append(InlineKeyboardButton(text="▶️", callback_data=f"ops-page_{page + 1}"))
     if nav_buttons:

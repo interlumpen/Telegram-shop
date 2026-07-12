@@ -13,13 +13,13 @@ aiosqlite~=0.20.0
 # Admin panel
 sqladmin==0.16.1
 WTForms==3.1.2
-starlette
-uvicorn
-itsdangerous
+starlette~=1.3.1
+uvicorn~=0.49.0
+itsdangerous~=2.2.0
 
 # Validation & Security
 pydantic~=2.5.0
-cryptography~=41.0.7
+cryptography~=44.0
 
 # Utils
 python-dateutil~=2.8.2

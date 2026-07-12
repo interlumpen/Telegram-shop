@@ -240,6 +240,7 @@ async def items_list_callback_handler(call: CallbackQuery, state: FSMContext):
         goods_paginator=paginator.get_state(),
         current_category=category_name,
         goods_page_items=list(page_items),
+        categories_last_viewed_page=cat_page,
     )
     await state.set_state(ShopStates.viewing_goods)
 
@@ -531,7 +532,7 @@ async def view_reviews_handler(call: CallbackQuery, state: FSMContext):
     if page > 0:
         nav_buttons.append(InlineKeyboardButton(text="◀️", callback_data=f"reviews:{item_name}:{page - 1}"))
     if total_pages > 1:
-        nav_buttons.append(InlineKeyboardButton(text=f"{page + 1}/{total_pages}", callback_data="noop"))
+        nav_buttons.append(InlineKeyboardButton(text=f"{page + 1}/{total_pages}", callback_data="dummy_button"))
     if page < total_pages - 1:
         nav_buttons.append(InlineKeyboardButton(text="▶️", callback_data=f"reviews:{item_name}:{page + 1}"))
     if nav_buttons:
