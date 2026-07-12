@@ -15,6 +15,7 @@ F = TypeVar('F', bound=Callable[..., Coroutine[Any, Any, Any]])
 
 def async_cached(ttl: int = 300, key_prefix: str = "") -> Callable[[F], F]:
     """Decorator for async functions with caching."""
+
     def decorator(async_func: F) -> F:
         @wraps(async_func)
         async def async_wrapper(*args, **kwargs):
@@ -515,8 +516,70 @@ async def get_promo_code(code: str) -> dict | None:
     return await _fetch_one_dict(PromoCodes, PromoCodes.code == code.upper())
 
 
+async def promo_rule_error(s, promo, user_id, *, goods=None, require_balance=False) -> str | None:
+    """Shared promo-code business rules; returns a canonical error code or None if valid.
+
+    Canonical codes: not_found, inactive, wrong_type, expired, max_uses, already_used, wrong_item, wrong_category
+    each caller maps them to its own user-facing keys.
+
+    - ``promo``: the already-fetched PromoCodes row (or None).
+    - ``goods``: the Goods row the promo applies to, for item/category binding (ignored when ``require_balance`` is True).
+    - ``require_balance``: True for balance-type redemption, False for discount promos.
+    ``s`` is the caller's open session (so the per-user usage check joins the same transaction / row locks).
+    """
+    if not promo:
+        return "not_found"
+    if not promo.is_active:
+        return "inactive"
+    # discount promos must NOT be balance-type; balance redemption requires it.
+    if require_balance != (promo.discount_type == "balance"):
+        return "wrong_type"
+
+    expires_at = promo.expires_at
+    if expires_at is not None:
+        # SQLite returns naive datetimes for DateTime(timezone=True); treat naive as
+        # UTC so the comparison is valid on every backend (mirrors coerce_sale_until).
+        if expires_at.tzinfo is None:
+            expires_at = expires_at.replace(tzinfo=datetime.timezone.utc)
+        if expires_at < datetime.datetime.now(datetime.timezone.utc):
+            return "expired"
+
+    if 0 < promo.max_uses <= promo.current_uses:
+        return "max_uses"
+
+    used = (await s.execute(
+        select(exists().where(
+            PromoCodeUsages.promo_id == promo.id,
+            PromoCodeUsages.user_id == user_id,
+        ))
+    )).scalar()
+    if used:
+        return "already_used"
+
+    if not require_balance:
+        if promo.item_id and (goods is None or promo.item_id != goods.id):
+            return "wrong_item"
+        if promo.category_id and (goods is None or promo.category_id != goods.category_id):
+            return "wrong_category"
+
+    return None
+
+
+# Canonical promo error code -> user-facing key for the read-side validator.
+_VALIDATE_PROMO_ERRORS = {
+    "not_found": "promo.not_found",
+    "inactive": "promo.inactive",
+    "wrong_type": "promo.not_balance_type",
+    "expired": "promo.expired",
+    "max_uses": "promo.max_uses_reached",
+    "already_used": "promo.already_used",
+    "wrong_item": "promo.wrong_item",
+    "wrong_category": "promo.wrong_category",
+}
+
+
 async def validate_promo_for_item(
-    code: str, item_name: str, user_id: int
+        code: str, item_name: str, user_id: int
 ) -> tuple[bool, str, dict]:
     """
     Validate a promo code for a specific item and user.
@@ -526,45 +589,13 @@ async def validate_promo_for_item(
         promo = (await s.execute(
             select(PromoCodes).where(PromoCodes.code == code.upper())
         )).scalars().first()
+        goods = (await s.execute(
+            select(Goods).where(Goods.name == item_name)
+        )).scalars().first()
 
-        if not promo:
-            return False, "promo.not_found", {}
-        if not promo.is_active:
-            return False, "promo.inactive", {}
-        if promo.discount_type == "balance":
-            return False, "promo.not_balance_type", {}
-
-        from datetime import datetime, timezone
-        if promo.expires_at and promo.expires_at < datetime.now(timezone.utc):
-            return False, "promo.expired", {}
-
-        if promo.max_uses > 0 and promo.current_uses >= promo.max_uses:
-            return False, "promo.max_uses_reached", {}
-
-        # Check per-user usage
-        used = (await s.execute(
-            select(exists().where(
-                PromoCodeUsages.promo_id == promo.id,
-                PromoCodeUsages.user_id == user_id
-            ))
-        )).scalar()
-        if used:
-            return False, "promo.already_used", {}
-
-        # Check item/category binding
-        if promo.item_id:
-            item = (await s.execute(
-                select(Goods).where(Goods.name == item_name)
-            )).scalars().first()
-            if not item or item.id != promo.item_id:
-                return False, "promo.wrong_item", {}
-
-        if promo.category_id:
-            item = (await s.execute(
-                select(Goods).where(Goods.name == item_name)
-            )).scalars().first()
-            if not item or item.category_id != promo.category_id:
-                return False, "promo.wrong_category", {}
+        err = await promo_rule_error(s, promo, user_id, goods=goods, require_balance=False)
+        if err:
+            return False, _VALIDATE_PROMO_ERRORS[err], {}
 
         return True, "", _obj_to_dict(promo, PromoCodes)
 

@@ -2,17 +2,39 @@ from datetime import datetime, timezone
 from decimal import Decimal
 from uuid import uuid4
 
-from sqlalchemy import select, exists as sa_exists, delete as sa_delete
+from sqlalchemy import select, delete as sa_delete
 from sqlalchemy.exc import IntegrityError, OperationalError, DBAPIError
 
 from bot.database.models import User, ItemValues, Goods, BoughtGoods, Payments, Operations
 from bot.database.models.main import PromoCodes, PromoCodeUsages, CartItems, ReferralEarnings
 from bot.database import Database
 from bot.misc import EnvKeys
-from bot.database.methods.read import invalidate_user_cache, invalidate_stats_cache, invalidate_item_cache
+from bot.database.methods.read import (
+    invalidate_user_cache, invalidate_stats_cache, invalidate_item_cache, promo_rule_error,
+)
 from bot.database.methods.cache_utils import safe_create_task
 from bot.database.methods.pricing import effective_price
 from bot.database.methods.audit import log_audit
+
+# Canonical promo error code (from promo_rule_error) -> user-facing key per call site.
+_BUY_PROMO_ERRORS = {
+    "not_found": "promo_invalid",
+    "inactive": "promo_invalid",
+    "wrong_type": "promo_invalid",
+    "expired": "promo_expired",
+    "max_uses": "promo_max_uses",
+    "already_used": "promo_already_used",
+    "wrong_item": "promo_wrong_item",
+    "wrong_category": "promo_wrong_category",
+}
+_REDEEM_PROMO_ERRORS = {
+    "not_found": "promo.not_found",
+    "inactive": "promo.inactive",
+    "wrong_type": "promo.not_balance_type",
+    "expired": "promo.expired",
+    "max_uses": "promo.max_uses_reached",
+    "already_used": "promo.already_used",
+}
 
 
 async def buy_item_transaction(telegram_id: int, item_name: str, promo_code: str = None) -> tuple[bool, str, dict | None]:
@@ -55,40 +77,10 @@ async def buy_item_transaction(telegram_id: int, item_name: str, promo_code: str
                         select(PromoCodes).where(PromoCodes.code == promo_code.upper()).with_for_update()
                     )).scalars().first()
 
-                    if not promo or not promo.is_active:
+                    err = await promo_rule_error(s, promo, telegram_id, goods=goods)
+                    if err:
                         await s.rollback()
-                        return False, "promo_invalid", None
-
-                    if promo.discount_type == "balance":
-                        await s.rollback()
-                        return False, "promo_invalid", None
-
-                    if promo.expires_at and promo.expires_at < datetime.now(timezone.utc):
-                        await s.rollback()
-                        return False, "promo_expired", None
-
-                    if promo.max_uses > 0 and promo.current_uses >= promo.max_uses:
-                        await s.rollback()
-                        return False, "promo_max_uses", None
-
-                    # Check per-user usage
-                    used = (await s.execute(
-                        select(sa_exists().where(
-                            PromoCodeUsages.promo_id == promo.id,
-                            PromoCodeUsages.user_id == telegram_id
-                        ))
-                    )).scalar()
-                    if used:
-                        await s.rollback()
-                        return False, "promo_already_used", None
-
-                    # Check item/category binding
-                    if promo.item_id and promo.item_id != goods.id:
-                        await s.rollback()
-                        return False, "promo_wrong_item", None
-                    if promo.category_id and promo.category_id != goods.category_id:
-                        await s.rollback()
-                        return False, "promo_wrong_category", None
+                        return False, _BUY_PROMO_ERRORS[err], None
 
                     # Apply discount
                     if promo.discount_type == 'percent':
@@ -378,29 +370,9 @@ async def checkout_cart_transaction(user_id: int) -> tuple[bool, str, list | Non
                             select(PromoCodes).where(PromoCodes.code == ci.promo_code.upper()).with_for_update()
                         )).scalars().first()
 
-                        promo_valid = False
-                        if promo and promo.is_active and promo.discount_type != 'balance':
-                            if not (promo.expires_at and promo.expires_at < datetime.now(timezone.utc)):
-                                if not (promo.max_uses > 0 and promo.current_uses >= promo.max_uses):
-                                    # Check per-user usage
-                                    used = (await s.execute(
-                                        select(sa_exists().where(
-                                            PromoCodeUsages.promo_id == promo.id,
-                                            PromoCodeUsages.user_id == user_id
-                                        ))
-                                    )).scalar()
-                                    if not used:
-                                        # Check item/category binding
-                                        if promo.item_id and promo.item_id != goods.id:
-                                            pass
-                                        elif promo.category_id and promo.category_id != goods.category_id:
-                                            pass
-                                        else:
-                                            promo_valid = True
-
-                        if not promo_valid:
-                            # Promo was on cart but is no longer valid — abort instead
-                            # of silently charging full price.
+                        # Any invalidity aborts checkout instead of silently charging
+                        # full price (the promo was attached to the cart earlier).
+                        if await promo_rule_error(s, promo, user_id, goods=goods):
                             await s.rollback()
                             return False, "promo_expired_during_checkout", None
 
@@ -590,31 +562,10 @@ async def redeem_balance_promo(code: str, user_id: int) -> tuple[bool, str, Deci
                 select(PromoCodes).where(PromoCodes.code == code.upper()).with_for_update()
             )).scalars().first()
 
-            if not promo:
+            err = await promo_rule_error(s, promo, user_id, require_balance=True)
+            if err:
                 await s.rollback()
-                return False, "promo.not_found", None
-            if not promo.is_active:
-                await s.rollback()
-                return False, "promo.inactive", None
-            if promo.discount_type != "balance":
-                await s.rollback()
-                return False, "promo.not_balance_type", None
-            if promo.expires_at and promo.expires_at < datetime.now(timezone.utc):
-                await s.rollback()
-                return False, "promo.expired", None
-            if promo.max_uses > 0 and promo.current_uses >= promo.max_uses:
-                await s.rollback()
-                return False, "promo.max_uses_reached", None
-
-            used = (await s.execute(
-                select(sa_exists().where(
-                    PromoCodeUsages.promo_id == promo.id,
-                    PromoCodeUsages.user_id == user_id
-                ))
-            )).scalar()
-            if used:
-                await s.rollback()
-                return False, "promo.already_used", None
+                return False, _REDEEM_PROMO_ERRORS[err], None
 
             amount = Decimal(str(promo.discount_value))
             user.balance += amount
