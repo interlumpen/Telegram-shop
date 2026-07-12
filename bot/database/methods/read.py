@@ -13,7 +13,7 @@ from bot.misc.caching import get_cache_manager
 F = TypeVar('F', bound=Callable[..., Coroutine[Any, Any, Any]])
 
 
-def async_cached(ttl: int = 300, key_prefix: str = "") -> Callable[[F], F]:
+def async_cached(ttl: int = 300, key_prefix: str = "", cache_empty: bool = True) -> Callable[[F], F]:
     """Decorator for async functions with caching."""
 
     def decorator(async_func: F) -> F:
@@ -29,7 +29,7 @@ def async_cached(ttl: int = 300, key_prefix: str = "") -> Callable[[F], F]:
 
             result = await async_func(*args, **kwargs)
 
-            if cache and result is not None:
+            if cache and result is not None and (cache_empty or result):
                 await cache.set(cache_key, result, ttl)
 
             return result
@@ -432,9 +432,9 @@ async def check_user_cached(telegram_id: int | str):
     return await check_user(telegram_id)
 
 
-@async_cached(ttl=300, key_prefix="role")
+@async_cached(ttl=300, key_prefix="role", cache_empty=False)
 async def check_role_cached(telegram_id: int):
-    """Cached Role Verification"""
+    """Cached Role Verification. role 0 (unknown user) is intentionally not cached."""
     return await check_role(telegram_id)
 
 

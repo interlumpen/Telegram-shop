@@ -215,8 +215,9 @@ class AuthenticationMiddleware(BaseMiddleware):
         from bot.database.methods import check_role
         role = await check_role(user_id) or 0
 
-        # Refresh cache
-        self.admin_cache[user_id] = (role, time.time())
+        # Only cache real users. role == 0 means the user does not exist in the DB
+        if role:
+            self.admin_cache[user_id] = (role, time.time())
 
         return role
 
