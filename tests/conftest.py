@@ -125,12 +125,17 @@ async def db_cleanup(setup_test_database):
     from bot.database.main import Database
     from bot.database.models.main import (
         ReferralEarnings, BoughtGoods, Operations, Payments,
-        ItemValues, Goods, Categories, User, Role
+        ItemValues, Goods, Categories, User, Role,
+        Reviews, CartItems, PromoCodeUsages, PromoCodes,
     )
 
     db = Database()
     async with db.session() as s:
-        # Delete in FK order
+        # Delete in FK order.
+        await s.execute(delete(Reviews))
+        await s.execute(delete(CartItems))
+        await s.execute(delete(PromoCodeUsages))
+        await s.execute(delete(PromoCodes))
         await s.execute(delete(ReferralEarnings))
         await s.execute(delete(BoughtGoods))
         await s.execute(delete(Operations))

@@ -611,12 +611,20 @@ async def validate_promo_for_item(
 # --- Cart ---
 
 async def get_cart_items(user_id: int) -> list[dict]:
-    """Return all cart items for user."""
+    """Return all cart items for user; each dict includes the current item_name for display."""
     async with Database().session() as s:
         result = await s.execute(
-            select(CartItems).where(CartItems.user_id == user_id).order_by(CartItems.added_at.desc())
+            select(CartItems, Goods.name.label('item_name'))
+            .join(Goods, Goods.id == CartItems.item_id)
+            .where(CartItems.user_id == user_id)
+            .order_by(CartItems.added_at.desc())
         )
-        return [_obj_to_dict(item, CartItems) for item in result.scalars().all()]
+        items = []
+        for ci, item_name in result.all():
+            d = _obj_to_dict(ci, CartItems)
+            d['item_name'] = item_name
+            items.append(d)
+        return items
 
 
 async def get_cart_count(user_id: int) -> int:
@@ -634,7 +642,9 @@ async def get_item_avg_rating(item_name: str) -> float | None:
     """Return average rating for an item, or None if no reviews."""
     async with Database().session() as s:
         result = (await s.execute(
-            select(func.avg(Reviews.rating)).where(Reviews.item_name == item_name)
+            select(func.avg(Reviews.rating))
+            .join(Goods, Goods.id == Reviews.item_id)
+            .where(Goods.name == item_name)
         )).scalar()
         return round(float(result), 1) if result else None
 
@@ -652,9 +662,13 @@ async def has_purchased_item(user_id: int, item_name: str) -> bool:
 
 async def get_user_review(user_id: int, item_name: str) -> dict | None:
     """Return user's review for an item, or None."""
-    return await _fetch_one_dict(
-        Reviews, Reviews.user_id == user_id, Reviews.item_name == item_name
-    )
+    async with Database().session() as s:
+        obj = (await s.execute(
+            select(Reviews)
+            .join(Goods, Goods.id == Reviews.item_id)
+            .where(Reviews.user_id == user_id, Goods.name == item_name)
+        )).scalars().first()
+        return _obj_to_dict(obj, Reviews) if obj else None
 
 
 async def invalidate_rating_cache(item_name: str):

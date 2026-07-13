@@ -173,35 +173,35 @@ async def add_to_cart(user_id: int, item_name: str, promo_code: str = None) -> t
         if count >= CART_MAX_ITEMS:
             return False, "cart_full"
 
-        # Check item exists
-        item_exists = (await s.execute(
-            select(exists().where(Goods.name == item_name))
+        # Resolve to the goods id (also serves as the existence check).
+        item_id = (await s.execute(
+            select(Goods.id).where(Goods.name == item_name)
         )).scalar()
-        if not item_exists:
+        if not item_id:
             return False, "item_not_found"
 
-        s.add(CartItems(user_id=user_id, item_name=item_name, promo_code=promo_code))
+        s.add(CartItems(user_id=user_id, item_id=item_id, promo_code=promo_code))
         return True, "success"
 
 
 
 async def create_review(user_id: int, item_name: str, rating: int, text: str = None) -> int | None:
-    """Create a review. Returns ID or None if already reviewed."""
+    """Create a review. Returns ID, or None if the item is unknown or already reviewed."""
     async with Database().session() as s:
+        item_id = (await s.execute(
+            select(Goods.id).where(Goods.name == item_name)
+        )).scalar()
+        if not item_id:
+            return None
         existing = (await s.execute(
             select(exists().where(
                 Reviews.user_id == user_id,
-                Reviews.item_name == item_name
+                Reviews.item_id == item_id,
             ))
         )).scalar()
         if existing:
             return None
-        review = Reviews(
-            user_id=user_id,
-            item_name=item_name,
-            rating=rating,
-            text=text,
-        )
+        review = Reviews(user_id=user_id, item_id=item_id, rating=rating, text=text)
         s.add(review)
         await s.flush()
         return review.id

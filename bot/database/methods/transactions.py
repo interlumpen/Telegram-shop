@@ -323,10 +323,10 @@ async def checkout_cart_transaction(user_id: int) -> tuple[bool, str, list | Non
                 # Lock all distinct goods up front in a deterministic order (by id)
                 # so two concurrent checkouts with overlapping carts acquire the row
                 # locks in the same order and cannot form an AB/BA deadlock cycle.
-                item_names = list({ci.item_name for ci in cart_items})
-                goods_by_name = {
-                    g.name: g for g in (await s.execute(
-                        select(Goods).where(Goods.name.in_(item_names))
+                item_ids = list({ci.item_id for ci in cart_items})
+                goods_by_id = {
+                    g.id: g for g in (await s.execute(
+                        select(Goods).where(Goods.id.in_(item_ids))
                         .order_by(Goods.id).with_for_update()
                     )).scalars().all()
                 }
@@ -341,7 +341,7 @@ async def checkout_cart_transaction(user_id: int) -> tuple[bool, str, list | Non
                 claimed_value_ids: set[int] = set()
 
                 for ci in cart_items:
-                    goods = goods_by_name.get(ci.item_name)
+                    goods = goods_by_id.get(ci.item_id)
 
                     if not goods:
                         items_to_remove.append(ci.id)

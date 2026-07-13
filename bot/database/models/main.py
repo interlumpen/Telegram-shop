@@ -427,13 +427,14 @@ class CartItems(Database.BASE):
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     user_id: Mapped[int] = mapped_column(
         BigInteger, ForeignKey('users.telegram_id', ondelete='CASCADE'), nullable=False, index=True)
-    item_name: Mapped[str] = mapped_column(String(100), nullable=False)
+    item_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey('goods.id', ondelete='CASCADE'), nullable=False, index=True)
     promo_code: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
     added_at: Mapped[datetime.datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now())
 
     def __str__(self):
-        return self.item_name or ""
+        return f"cart#{self.id} item={self.item_id}"
 
 
 class Reviews(Database.BASE):
@@ -441,18 +442,19 @@ class Reviews(Database.BASE):
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     user_id: Mapped[int] = mapped_column(
         BigInteger, ForeignKey('users.telegram_id', ondelete='CASCADE'), nullable=False, index=True)
-    item_name: Mapped[str] = mapped_column(String(100), nullable=False, index=True)
+    item_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey('goods.id', ondelete='CASCADE'), nullable=False, index=True)
     rating: Mapped[int] = mapped_column(Integer, nullable=False)  # 1-5
     text: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime.datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now())
     __table_args__ = (
-        UniqueConstraint('user_id', 'item_name', name='uq_review_per_user_item'),
+        UniqueConstraint('user_id', 'item_id', name='uq_review_per_user_item'),
         CheckConstraint('rating >= 1 AND rating <= 5', name='ck_review_rating_range'),
     )
 
     def __str__(self):
-        return f"{self.item_name} ({self.rating}★)"
+        return f"item {self.item_id} ({self.rating}★)"
 
 
 async def register_models():

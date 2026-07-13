@@ -249,7 +249,11 @@ async def query_item_reviews(item_name: str, offset: int = 0, limit: int = 10,
                              count_only: bool = False) -> Any:
     """Query reviews for an item with pagination"""
     async with Database().session() as s:
-        base = select(Reviews).where(Reviews.item_name == item_name)
+        base = (
+            select(Reviews)
+            .join(Goods, Goods.id == Reviews.item_id)
+            .where(Goods.name == item_name)
+        )
         if count_only:
             count_q = select(func.count()).select_from(base.subquery())
             return (await s.execute(count_q)).scalar() or 0

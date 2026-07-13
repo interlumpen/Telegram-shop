@@ -7,7 +7,7 @@ from sqladmin import Admin, ModelView
 from sqladmin.authentication import AuthenticationBackend
 from starlette.applications import Starlette
 from starlette.requests import Request
-from starlette.responses import JSONResponse, PlainTextResponse
+from starlette.responses import JSONResponse, PlainTextResponse, RedirectResponse
 from starlette.middleware.sessions import SessionMiddleware
 from starlette.routing import Route
 from sqlalchemy import text
@@ -272,6 +272,7 @@ class GoodsAdmin(AuditModelView, model=Goods):
                    Goods.sale_until, Goods.description, Goods.category_id]
     column_searchable_list = [Goods.name]
     column_sortable_list = [Goods.id, Goods.name, Goods.price]
+    form_excluded_columns = [Goods.values]
     name = "Product"
     name_plural = "Products"
     icon = "fa-solid fa-box"
@@ -399,8 +400,8 @@ class PromoCodeAdmin(AuditModelView, model=PromoCodes):
 
 
 class CartItemsAdmin(ModelView, model=CartItems):
-    column_list = [CartItems.id, CartItems.user_id, CartItems.item_name, CartItems.added_at]
-    column_searchable_list = [CartItems.user_id, CartItems.item_name]
+    column_list = [CartItems.id, CartItems.user_id, CartItems.item_id, CartItems.added_at]
+    column_searchable_list = [CartItems.user_id, CartItems.item_id]
     column_sortable_list = [CartItems.id, CartItems.added_at]
     column_default_sort = (CartItems.id, True)
     can_create = False
@@ -413,9 +414,9 @@ class CartItemsAdmin(ModelView, model=CartItems):
 
 
 class ReviewsAdmin(AuditModelView, model=Reviews):
-    column_list = [Reviews.id, Reviews.user_id, Reviews.item_name,
+    column_list = [Reviews.id, Reviews.user_id, Reviews.item_id,
                    Reviews.rating, Reviews.text, Reviews.created_at]
-    column_searchable_list = [Reviews.user_id, Reviews.item_name]
+    column_searchable_list = [Reviews.user_id, Reviews.item_id]
     column_sortable_list = [Reviews.id, Reviews.rating, Reviews.created_at]
     column_default_sort = (Reviews.id, True)
     name = "Review"
@@ -477,7 +478,11 @@ def create_admin_app() -> Starlette:
 
     from bot.web.export import export_routes
 
+    async def root_redirect(request: Request) -> RedirectResponse:
+        return RedirectResponse(url="/admin")
+
     routes = [
+        Route("/", root_redirect),
         Route("/health", health_check),
         Route("/metrics", metrics_json),
         Route("/metrics/prometheus", prometheus_metrics),
