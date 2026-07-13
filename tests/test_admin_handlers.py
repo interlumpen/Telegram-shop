@@ -342,3 +342,20 @@ class TestGoodsManagement:
         msg.answer.assert_called_once()
         text = msg.answer.call_args[0][0]
         assert "not_found" in text
+
+
+class TestUpdateItemFlow:
+    async def test_update_flow_stores_category_name_not_id(self, make_message, fsm_context, item_factory):
+        from bot.handlers.admin.update_position_states import check_item_name_for_update
+        from bot.database.methods.update import update_item
+
+        await item_factory(name="UpdMe", price=10, category="MyCat", values=[("v", False)])
+        msg = make_message(text="UpdMe", user_id=900060)
+
+        await check_item_name_for_update(msg, fsm_context)
+
+        data = await fsm_context.get_data()
+        assert data["item_category"] == "MyCat"
+
+        ok, err = await update_item("UpdMe", "UpdMe", "new desc", 20, data["item_category"])
+        assert (ok, err) == (True, None)

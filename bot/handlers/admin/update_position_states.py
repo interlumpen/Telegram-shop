@@ -5,7 +5,8 @@ from aiogram.exceptions import TelegramForbiddenError, TelegramBadRequest, Teleg
 from aiogram.types import CallbackQuery, Message
 
 from bot.database.models import Permission
-from bot.database.methods import get_item_info_cached, add_values_to_item, update_item, check_value, delete_only_items
+from bot.database.methods import get_item_info_cached, add_values_to_item, update_item, check_value, \
+    delete_only_items, get_category_name_by_id
 from bot.handlers.other import _parse_channel_username
 
 from bot.keyboards.inline import back, question_buttons, simple_buttons
@@ -16,6 +17,22 @@ from bot.i18n import localize
 from bot.states import UpdateItemFSM
 
 router = Router()
+
+# Stable update_item error codes -> localization keys (update_item returns codes, not messages).
+_UPDATE_ITEM_ERRORS = {
+    "position_invalid": "admin.goods.update.position.invalid",
+    "position_exists": "admin.goods.update.position.exists",
+    "db_error": "errors.something_wrong",
+}
+
+
+async def _show_update_item_error(send, error_code) -> None:
+    """Send the localized message for an update_item failure.
+
+    ``send`` is the bound sender to use (call.message.edit_text or message.answer).
+    """
+    key = _UPDATE_ITEM_ERRORS.get(error_code, "errors.something_wrong")
+    await send(localize(key), reply_markup=back('goods_management'))
 
 
 @router.callback_query(F.data == 'update_item_amount', HasPermissionFilter(permission=Permission.CATALOG_MANAGE))
@@ -170,7 +187,8 @@ async def check_item_name_for_update(message: Message, state):
         )
         return
 
-    await state.update_data(item_old_name=item_name, item_category=item['category_id'])
+    category_name = await get_category_name_by_id(item['category_id'])
+    await state.update_data(item_old_name=item_name, item_category=category_name)
     await message.answer(localize('admin.goods.update.prompt.new_name'), reply_markup=back('goods_management'))
     await state.set_state(UpdateItemFSM.waiting_item_new_name)
 
@@ -241,7 +259,11 @@ async def update_item_process(call: CallbackQuery, state):
 
     if decision_yesno == 'no':
         # No type change (keep infinity/regular), update meta only
-        await update_item(item_old_name, item_new_name, item_description, price, category)
+        ok, err = await update_item(item_old_name, item_new_name, item_description, price, category)
+        if not ok:
+            await _show_update_item_error(call.message.edit_text, err)
+            await state.clear()
+            return
         await call.message.edit_text(localize('admin.goods.update.success'), reply_markup=back('goods_management'))
         admin_info = await call.message.bot.get_chat(call.from_user.id)
         await log_audit("update_item", user_id=call.from_user.id, resource_type="Item", resource_id=item_new_name,
@@ -284,7 +306,11 @@ async def update_item_infinity(message: Message, state):
 
     await delete_only_items(item_old_name)
     await add_values_to_item(item_old_name, value, True)
-    await update_item(item_old_name, item_new_name, item_description, price, category)
+    ok, err = await update_item(item_old_name, item_new_name, item_description, price, category)
+    if not ok:
+        await _show_update_item_error(message.answer, err)
+        await state.clear()
+        return
 
     await message.answer(localize('admin.goods.update.success'), reply_markup=back('goods_management'))
     admin_info = await message.bot.get_chat(message.from_user.id)
@@ -355,7 +381,11 @@ async def update_item_no_infinity(call: CallbackQuery, state):
             skipped_db_dup += 1
 
     # Update meta after values are in place
-    await update_item(item_old_name, item_new_name, item_description, price, category)
+    ok, err = await update_item(item_old_name, item_new_name, item_description, price, category)
+    if not ok:
+        await _show_update_item_error(call.message.edit_text, err)
+        await state.clear()
+        return
 
     text_lines = [
         localize('admin.goods.update.success'),

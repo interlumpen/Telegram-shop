@@ -6,7 +6,7 @@ from bot.database.methods.cache_utils import safe_create_task
 from bot.database.models import User, Goods, Categories, BoughtGoods, Role
 from bot.database.models.main import PromoCodes
 from bot.database import Database
-from bot.i18n import localize
+from bot.logger_mesh import logger
 
 
 async def set_role(telegram_id: int, role: int) -> None:
@@ -31,8 +31,10 @@ async def update_balance(telegram_id: int, summ: int) -> None:
 
 
 async def update_item(item_name: str, new_name: str, description: str, price, category: str) -> tuple[bool, str | None]:
-    """
-    Update a Goods record with proper locking. Now uses integer PKs.
+    """Update a Goods record with proper locking.
+
+    Returns ``(success, error_code)``. The error code is a stable key
+    ("position_invalid", "position_exists", "db_error")
     """
     try:
         async with Database().session() as s:
@@ -42,13 +44,13 @@ async def update_item(item_name: str, new_name: str, description: str, price, ca
             goods = result.scalars().one_or_none()
 
             if not goods:
-                return False, localize("admin.goods.update.position.invalid")
+                return False, "position_invalid"
 
             cat_id = (await s.execute(
                 select(Categories.id).where(Categories.name == category)
             )).scalar()
             if not cat_id:
-                return False, localize("admin.goods.update.position.invalid")
+                return False, "position_invalid"
 
             if new_name == item_name:
                 goods.description = description
@@ -60,7 +62,7 @@ async def update_item(item_name: str, new_name: str, description: str, price, ca
                 select(Goods).where(Goods.name == new_name)
             )).scalars().first()
             if existing:
-                return False, localize("admin.goods.update.position.exists")
+                return False, "position_exists"
 
             goods.name = new_name
             goods.description = description
@@ -77,8 +79,11 @@ async def update_item(item_name: str, new_name: str, description: str, price, ca
 
             return True, None
 
-    except exc.SQLAlchemyError as e:
-        return False, f"DB Error: {e.__class__.__name__}"
+    except exc.SQLAlchemyError:
+        # Log the real cause — this branch previously swallowed the error silently,
+        # leaving a "something went wrong" with nothing in the logs to diagnose.
+        logger.error("update_item(%r -> %r) failed", item_name, new_name, exc_info=True)
+        return False, "db_error"
 
 
 async def set_item_sale(item_name: str, sale_percent, sale_until) -> bool:

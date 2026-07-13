@@ -225,6 +225,14 @@ async def check_category(category_name: str) -> dict | None:
     return await _fetch_one_dict(Categories, Categories.name == category_name)
 
 
+async def get_category_name_by_id(category_id: int) -> str | None:
+    """Return a category's name by its id, or None."""
+    async with Database().session() as s:
+        return (await s.execute(
+            select(Categories.name).where(Categories.id == category_id)
+        )).scalar()
+
+
 async def select_item_values_amount(item_name: str) -> int:
     """Return count of item_values for an item (by item name)."""
     async with Database().session() as s:

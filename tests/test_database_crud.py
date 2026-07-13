@@ -256,7 +256,14 @@ class TestItemCRUD:
 
     async def test_update_item_not_found(self):
         ok, err = await update_item("Ghost", "Ghost2", "d", 1, "c")
-        assert ok is False
+        assert (ok, err) == (False, "position_invalid")
+
+    async def test_update_item_rename_conflict(self, item_factory):
+        await item_factory(name="Keep", price=10, category="ConflictCat")
+        await item_factory(name="Taken", price=10, category="ConflictCat")
+        ok, err = await update_item("Keep", "Taken", "d", 10, "ConflictCat")
+        assert (ok, err) == (False, "position_exists")
+        assert await get_item_info("Keep") is not None
 
     async def test_delete_item(self, item_factory):
         await item_factory(name="DelItem", category="DelCat", values=[("dv", False)])
