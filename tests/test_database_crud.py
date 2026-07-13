@@ -459,7 +459,7 @@ class TestStats:
         from bot.database.models import BoughtGoods
         async with DB().session() as s:
             s.add(BoughtGoods(
-                name="Sold1", value="val", price=150,
+                item_name="Sold1", value="val", price=150,
                 bought_datetime=NOW, unique_id=90001, buyer_id=11001,
             ))
         total = await select_today_orders(TODAY_STR)
@@ -471,11 +471,11 @@ class TestStats:
         from bot.database.models import BoughtGoods
         async with DB().session() as s:
             s.add(BoughtGoods(
-                name="SoldA", value="v1", price=100,
+                item_name="SoldA", value="v1", price=100,
                 bought_datetime=NOW, unique_id=90002, buyer_id=11002,
             ))
             s.add(BoughtGoods(
-                name="SoldB", value="v2", price=200,
+                item_name="SoldB", value="v2", price=200,
                 bought_datetime=NOW, unique_id=90003, buyer_id=11002,
             ))
         total = await select_all_orders()
@@ -487,11 +487,11 @@ class TestStats:
         from bot.database.models import BoughtGoods
         async with DB().session() as s:
             s.add(BoughtGoods(
-                name="B1", value="v", price=10,
+                item_name="B1", value="v", price=10,
                 bought_datetime=NOW, unique_id=90004, buyer_id=11003,
             ))
             s.add(BoughtGoods(
-                name="B2", value="v", price=20,
+                item_name="B2", value="v", price=20,
                 bought_datetime=NOW, unique_id=90005, buyer_id=11003,
             ))
         assert await select_user_items(11003) == 2

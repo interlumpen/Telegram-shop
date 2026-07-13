@@ -244,11 +244,11 @@ class BoughtGoods(Database.BASE):
         Index('ix_bought_goods_buyer_datetime', 'buyer_id', 'bought_datetime'),
     )
 
-    def __init__(self, name: str = None, value: str = None, price=None, bought_datetime=None,
+    def __init__(self, item_name: str = None, value: str = None, price=None, bought_datetime=None,
                  unique_id=None, buyer_id: int = None, **kw: Any):
         super().__init__(**kw)
-        if name is not None:
-            self.item_name = name
+        if item_name is not None:
+            self.item_name = item_name
         if value is not None:
             self.value = value
         if price is not None:

@@ -121,7 +121,7 @@ async def buy_item_transaction(telegram_id: int, item_name: str, promo_code: str
 
                 # 7. Create a purchase record
                 bought_item = BoughtGoods(
-                    name=item_name,
+                    item_name=item_name,
                     value=item_value.value,
                     price=final_price,
                     buyer_id=telegram_id,
@@ -413,7 +413,7 @@ async def checkout_cart_transaction(user_id: int) -> tuple[bool, str, list | Non
                         await s.delete(p['item_value'])
 
                     bought_item = BoughtGoods(
-                        name=p['goods'].name,
+                        item_name=p['goods'].name,
                         value=p['item_value'].value,
                         price=p['price'],
                         buyer_id=user_id,
