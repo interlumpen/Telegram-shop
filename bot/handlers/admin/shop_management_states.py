@@ -23,6 +23,7 @@ from bot.database.methods.read import (
 )
 from bot.keyboards import back, simple_buttons, lazy_paginated_keyboard
 from bot.filters import HasPermissionFilter, HasAnyPermissionFilter
+from bot.handlers.admin._common import user_profile_lines
 from bot.database.methods.audit import log_audit
 from bot.misc import EnvKeys, LazyPaginator, sanitize_html, SearchQuery, StatsCache, get_cache_manager
 from bot.i18n import localize
@@ -184,59 +185,38 @@ _PERM_LABELS = {
 }
 
 
-@router.callback_query(F.data == "users_list", HasPermissionFilter(Permission.USERS_MANAGE))
-async def users_callback_handler(call: CallbackQuery, state: FSMContext):
-    """
-    Show list of all users with lazy loading pagination.
-    """
-    # Create paginator
-    paginator = LazyPaginator(query_all_users, per_page=10)
-
-    markup = await lazy_paginated_keyboard(
-        paginator=paginator,
-        item_text=lambda user_id: str(user_id),
-        item_callback=lambda user_id: f"show-user_user-{user_id}",
-        page=0,
-        back_cb="shop_management",
-        nav_cb_prefix="users-page_",
-    )
-
-    await call.message.edit_text(localize("admin.shop.users.title"), reply_markup=markup)
-
-    # Save state
-    await state.update_data(users_paginator=paginator.get_state())
-
-
-@router.callback_query(F.data.startswith("users-page_"), HasPermissionFilter(Permission.USERS_MANAGE))
-async def navigate_users(call: CallbackQuery, state: FSMContext):
-    """
-    Pagination for users list with lazy loading.
-    """
-    try:
-        current_index = int(call.data.split("_")[1])
-    except Exception:
-        current_index = 0
-
-    # Get saved state
-    data = await state.get_data()
-    paginator_state = data.get('users_paginator')
-
-    # Create paginator with cached state
+async def _show_users_page(call: CallbackQuery, state: FSMContext, page: int):
+    """Render one page of the all-users list (shared by the view and paginate handlers)."""
+    paginator_state = (await state.get_data()).get('users_paginator') if page > 0 else None
     paginator = LazyPaginator(query_all_users, per_page=10, state=paginator_state)
 
     markup = await lazy_paginated_keyboard(
         paginator=paginator,
         item_text=lambda user_id: str(user_id),
         item_callback=lambda user_id: f"show-user_user-{user_id}",
-        page=current_index,
+        page=page,
         back_cb="shop_management",
         nav_cb_prefix="users-page_",
     )
 
     await call.message.edit_text(localize("admin.shop.users.title"), reply_markup=markup)
-
-    # Update state
     await state.update_data(users_paginator=paginator.get_state())
+
+
+@router.callback_query(F.data == "users_list", HasPermissionFilter(Permission.USERS_MANAGE))
+async def users_callback_handler(call: CallbackQuery, state: FSMContext):
+    """Show list of all users with lazy loading pagination."""
+    await _show_users_page(call, state, 0)
+
+
+@router.callback_query(F.data.startswith("users-page_"), HasPermissionFilter(Permission.USERS_MANAGE))
+async def navigate_users(call: CallbackQuery, state: FSMContext):
+    """Pagination for users list with lazy loading."""
+    try:
+        page = int(call.data.split("_")[1])
+    except Exception:
+        page = 0
+    await _show_users_page(call, state, page)
 
 
 @router.callback_query(F.data.startswith("show-user_"), HasPermissionFilter(permission=Permission.USERS_MANAGE))
@@ -256,17 +236,11 @@ async def show_user_info(call: CallbackQuery):
     role = await check_role_name_by_id(user.get('role_id'))
     referrals = await check_user_referrals(user.get('telegram_id'))
 
-    text = (
-        f"{localize('profile.caption', name=user_info.first_name, id=user_id)}\n\n"
-        f"{localize('profile.id', id=user_id)}\n"
-        f"{localize('profile.balance', amount=user.get('balance'), currency=EnvKeys.PAY_CURRENCY)}\n"
-        f"{localize('profile.total_topup', amount=overall_balance, currency=EnvKeys.PAY_CURRENCY)}\n"
-        f"{localize('profile.purchased_count', count=items)}\n\n"
-        f"{localize('profile.referral_id', id=user.get('referral_id'))}\n"
-        f"{localize('admin.users.referrals', count=referrals)}\n"
-        f"{localize('admin.users.role', role=role)}\n"
-        f"{localize('profile.registration_date', dt=user.get('registration_date'))}\n"
-    )
+    text = '\n'.join(user_profile_lines(
+        user, user_info.first_name, user_id,
+        overall_balance=overall_balance, items_count=items,
+        role=role, referrals=referrals, include_referral_id=True,
+    )) + '\n'
 
     await call.message.edit_text(text, parse_mode="HTML", reply_markup=back("users_list"))
 

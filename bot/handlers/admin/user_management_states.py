@@ -17,6 +17,7 @@ from bot.database.methods import (
 from bot.keyboards import back, close, simple_buttons, lazy_paginated_keyboard
 from bot.database.methods.audit import log_audit
 from bot.filters import HasPermissionFilter
+from bot.handlers.admin._common import user_profile_lines
 from bot.states import UserMgmtStates
 
 import datetime
@@ -74,18 +75,11 @@ async def _build_user_profile(bot, target_id: int, caller_perms: int = 0):
     actions.append((localize('btn.back'), "user_management"))
     markup = simple_buttons(actions, per_row=1)
 
-    lines = [
-        localize('profile.caption', name=user_info.first_name, id=target_id),
-        '',
-        localize('profile.id', id=target_id),
-        localize('profile.balance', amount=user.get('balance'), currency=EnvKeys.PAY_CURRENCY),
-        localize('profile.total_topup', amount=overall_balance, currency=EnvKeys.PAY_CURRENCY),
-        localize('profile.purchased_count', count=items_count),
-        '',
-        localize('admin.users.referrals', count=referrals),
-        localize('admin.users.role', role=role),
-        localize('profile.registration_date', dt=user.get('registration_date')),
-    ]
+    lines = user_profile_lines(
+        user, user_info.first_name, target_id,
+        overall_balance=overall_balance, items_count=items_count,
+        role=role, referrals=referrals, include_referral_id=False,
+    )
 
     if await is_user_blocked(target_id):
         lines.append(localize('admin.users.status.blocked'))
@@ -165,73 +159,17 @@ async def user_profile_view(call: CallbackQuery):
     await call.message.edit_text(text, parse_mode='HTML', reply_markup=markup)
 
 
-@router.callback_query(F.data.startswith('admin-view-referrals_'), HasPermissionFilter(Permission.USERS_MANAGE))
-async def admin_view_referrals_handler(call: CallbackQuery, state: FSMContext):
-    """
-    Show a list of all referrals for selected user with lazy loading (admin view).
-    """
-    try:
-        user_id = int(call.data.split('_')[-1])
-    except (ValueError, IndexError):
-        await call.answer(localize('errors.invalid_data'))
-        return
+async def _show_referrals_page(call: CallbackQuery, state: FSMContext, user_id: int, page: int):
+    """Render one page of a user's referral list (shared by view + paginate handlers)."""
+    paginator_state = (await state.get_data()).get('admin_referrals_paginator') if page > 0 else None
+    paginator = LazyPaginator(partial(query_user_referrals, user_id), per_page=10, state=paginator_state)
 
-    # Create paginator
-    query_func = partial(query_user_referrals, user_id)
-    paginator = LazyPaginator(query_func, per_page=10)
-
-    # Check if there are any referrals
-    total = await paginator.get_total_count()
-    if total == 0:
+    if page == 0 and await paginator.get_total_count() == 0:
         await call.message.edit_text(
             localize("referrals.list.empty"),
             reply_markup=back(f"check-user_{user_id}")
         )
         return
-
-    markup = await lazy_paginated_keyboard(
-        paginator=paginator,
-        item_text=lambda referral_data: localize("referrals.item.format",
-                                                 telegram_id=referral_data['telegram_id'],
-                                                 total_earned=int(referral_data['total_earned']),
-                                                 currency=EnvKeys.PAY_CURRENCY),
-        item_callback=lambda referral_data: f"admin-ref-earnings_{user_id}_{referral_data['telegram_id']}",
-        page=0,
-        back_cb=f"check-user_{user_id}",
-        nav_cb_prefix=f"admin-refs-page_{user_id}_"
-    )
-
-    user_info = await call.message.bot.get_chat(user_id)
-    await call.message.edit_text(
-        localize(
-            "referrals.list.title") + f"\n(<a href='tg://user?id={user_id}'>{user_info.first_name}</a> - {user_id})",
-        reply_markup=markup
-    )
-
-    # Save state
-    await state.update_data(admin_referrals_paginator=paginator.get_state())
-
-
-@router.callback_query(F.data.startswith("admin-refs-page_"), HasPermissionFilter(Permission.USERS_MANAGE))
-async def admin_referrals_pagination_handler(call: CallbackQuery, state: FSMContext):
-    """
-    Pagination processing for the referral list with lazy loading (admin view).
-    """
-    try:
-        parts = call.data.split("_")
-        user_id = int(parts[1])
-        page = int(parts[2])
-    except (ValueError, IndexError):
-        await call.answer(localize("errors.pagination_invalid"))
-        return
-
-    # Get saved state
-    data = await state.get_data()
-    paginator_state = data.get('admin_referrals_paginator')
-
-    # Create paginator with cached state
-    query_func = partial(query_user_referrals, user_id)
-    paginator = LazyPaginator(query_func, per_page=10, state=paginator_state)
 
     markup = await lazy_paginated_keyboard(
         paginator=paginator,
@@ -251,9 +189,31 @@ async def admin_referrals_pagination_handler(call: CallbackQuery, state: FSMCont
             "referrals.list.title") + f"\n(<a href='tg://user?id={user_id}'>{user_info.first_name}</a> - {user_id})",
         reply_markup=markup
     )
-
-    # Update state
     await state.update_data(admin_referrals_paginator=paginator.get_state())
+
+
+@router.callback_query(F.data.startswith('admin-view-referrals_'), HasPermissionFilter(Permission.USERS_MANAGE))
+async def admin_view_referrals_handler(call: CallbackQuery, state: FSMContext):
+    """Show a list of all referrals for selected user with lazy loading (admin view)."""
+    try:
+        user_id = int(call.data.split('_')[-1])
+    except (ValueError, IndexError):
+        await call.answer(localize('errors.invalid_data'))
+        return
+    await _show_referrals_page(call, state, user_id, 0)
+
+
+@router.callback_query(F.data.startswith("admin-refs-page_"), HasPermissionFilter(Permission.USERS_MANAGE))
+async def admin_referrals_pagination_handler(call: CallbackQuery, state: FSMContext):
+    """Pagination processing for the referral list with lazy loading (admin view)."""
+    try:
+        parts = call.data.split("_")
+        user_id = int(parts[1])
+        page = int(parts[2])
+    except (ValueError, IndexError):
+        await call.answer(localize("errors.pagination_invalid"))
+        return
+    await _show_referrals_page(call, state, user_id, page)
 
 
 @router.callback_query(F.data.startswith("admin-ref-earnings_"), HasPermissionFilter(Permission.USERS_MANAGE))
@@ -304,73 +264,22 @@ async def admin_referral_earnings_handler(call: CallbackQuery, state: FSMContext
     await state.update_data(admin_ref_earnings_paginator=paginator.get_state())
 
 
-@router.callback_query(F.data.startswith('admin-view-earnings_'), HasPermissionFilter(Permission.USERS_MANAGE))
-async def admin_view_all_earnings_handler(call: CallbackQuery, state: FSMContext):
-    """
-    Show all referral earnings for selected user with lazy loading (admin view).
-    """
-    try:
-        user_id = int(call.data.split('_')[-1])
-    except (ValueError, IndexError):
-        await call.answer(localize('errors.invalid_data'))
-        return
+async def _show_all_earnings_page(call: CallbackQuery, state: FSMContext, user_id: int, page: int):
+    """Render one page of a user's full earnings list (shared by view + paginate handlers)."""
+    paginator_state = (await state.get_data()).get('admin_all_earnings_paginator') if page > 0 else None
+    paginator = LazyPaginator(partial(query_all_referral_earnings, user_id), per_page=10, state=paginator_state)
 
-    # Create paginator
-    query_func = partial(query_all_referral_earnings, user_id)
-    paginator = LazyPaginator(query_func, per_page=10)
-
-    # Check if there are any earnings
-    total = await paginator.get_total_count()
-    if total == 0:
+    if page == 0 and await paginator.get_total_count() == 0:
         await call.message.edit_text(
             localize("all.earnings.empty"),
             reply_markup=back(f"check-user_{user_id}")
         )
         return
 
-    markup = await lazy_paginated_keyboard(
-        paginator=paginator,
-        item_text=lambda earning: localize("all.earning.format",
-                                           amount=int(earning.amount),
-                                           currency=EnvKeys.PAY_CURRENCY,
-                                           referral_id=earning.referral_id,
-                                           date=earning.created_at.strftime("%d.%m.%Y %H:%M")),
-        item_callback=lambda earning: f"admin-earning-detail:{earning.id}:admin-view-earnings_{user_id}",
-        page=0,
-        back_cb=f"check-user_{user_id}",
-        nav_cb_prefix=f"admin-all-earn_{user_id}_page_"
-    )
-
-    user_info = await call.message.bot.get_chat(user_id)
-    await call.message.edit_text(
-        localize("all.earnings.title") + f"\n(<a href='tg://user?id={user_id}'>{user_info.first_name}</a> - {user_id})",
-        reply_markup=markup
-    )
-
-    # Save state
-    await state.update_data(admin_all_earnings_paginator=paginator.get_state())
-
-
-@router.callback_query(F.data.startswith("admin-all-earn_"), HasPermissionFilter(Permission.USERS_MANAGE))
-async def admin_all_earnings_pagination_handler(call: CallbackQuery, state: FSMContext):
-    """
-    Pagination processing for all referral earnings with lazy loading (admin view).
-    """
-    try:
-        parts = call.data.split("_")
-        user_id = int(parts[1])
-        page = int(parts[3])
-    except (ValueError, IndexError):
-        await call.answer(localize("errors.pagination_invalid"))
-        return
-
-    # Get saved state
-    data = await state.get_data()
-    paginator_state = data.get('admin_all_earnings_paginator')
-
-    # Create paginator with cached state
-    query_func = partial(query_all_referral_earnings, user_id)
-    paginator = LazyPaginator(query_func, per_page=10, state=paginator_state)
+    # The earning-detail back target preserves the current page; page 0 returns to
+    # the view callback (identical behavior to the previous two handlers).
+    detail_back = (f"admin-view-earnings_{user_id}" if page == 0
+                   else f"admin-all-earn_{user_id}_page_{page}")
 
     markup = await lazy_paginated_keyboard(
         paginator=paginator,
@@ -379,7 +288,7 @@ async def admin_all_earnings_pagination_handler(call: CallbackQuery, state: FSMC
                                            currency=EnvKeys.PAY_CURRENCY,
                                            referral_id=earning.referral_id,
                                            date=earning.created_at.strftime("%d.%m.%Y %H:%M")),
-        item_callback=lambda earning: f"admin-earning-detail:{earning.id}:admin-all-earn_{user_id}_page_{page}",
+        item_callback=lambda earning: f"admin-earning-detail:{earning.id}:{detail_back}",
         page=page,
         back_cb=f"check-user_{user_id}",
         nav_cb_prefix=f"admin-all-earn_{user_id}_page_"
@@ -390,9 +299,31 @@ async def admin_all_earnings_pagination_handler(call: CallbackQuery, state: FSMC
         localize("all.earnings.title") + f"\n(<a href='tg://user?id={user_id}'>{user_info.first_name}</a> - {user_id})",
         reply_markup=markup
     )
-
-    # Update state
     await state.update_data(admin_all_earnings_paginator=paginator.get_state())
+
+
+@router.callback_query(F.data.startswith('admin-view-earnings_'), HasPermissionFilter(Permission.USERS_MANAGE))
+async def admin_view_all_earnings_handler(call: CallbackQuery, state: FSMContext):
+    """Show all referral earnings for selected user with lazy loading (admin view)."""
+    try:
+        user_id = int(call.data.split('_')[-1])
+    except (ValueError, IndexError):
+        await call.answer(localize('errors.invalid_data'))
+        return
+    await _show_all_earnings_page(call, state, user_id, 0)
+
+
+@router.callback_query(F.data.startswith("admin-all-earn_"), HasPermissionFilter(Permission.USERS_MANAGE))
+async def admin_all_earnings_pagination_handler(call: CallbackQuery, state: FSMContext):
+    """Pagination processing for all referral earnings with lazy loading (admin view)."""
+    try:
+        parts = call.data.split("_")
+        user_id = int(parts[1])
+        page = int(parts[3])
+    except (ValueError, IndexError):
+        await call.answer(localize("errors.pagination_invalid"))
+        return
+    await _show_all_earnings_page(call, state, user_id, page)
 
 
 @router.callback_query(F.data.startswith("admin-earning-detail:"), HasPermissionFilter(Permission.USERS_MANAGE))

@@ -125,57 +125,12 @@ async def _render_item_page(target, state: FSMContext, item_name: str, back_data
 
 # --- Shop / categories / items ---
 
-@router.callback_query(F.data == "shop")
-async def shop_callback_handler(call: CallbackQuery, state: FSMContext):
-    """
-    Show list of shop categories with lazy loading.
-    """
-    metrics = get_metrics()
-    if metrics:
-        metrics.track_conversion("purchase_funnel", "view_shop", call.from_user.id)
+async def _show_categories_page(call: CallbackQuery, state: FSMContext, page: int):
+    """Render one page of the category list (shared by the shop entry + paginate handlers)."""
+    paginator_state = (await state.get_data()).get('categories_paginator') if page > 0 else None
+    paginator = LazyPaginator(query_categories, per_page=10, state=paginator_state)
 
-    paginator = LazyPaginator(query_categories, per_page=10)
-
-    # Pre-fetch page items to build index map and store in state
-    page_items = await paginator.get_page(0)
-    items_index = {cat: idx for idx, cat in enumerate(page_items)}
-
-    markup = await lazy_paginated_keyboard(
-        paginator=paginator,
-        item_text=lambda cat: cat,
-        item_callback=lambda cat: f"cat:{items_index[cat]}:{0}",
-        page=0,
-        back_cb="back_to_menu",
-        nav_cb_prefix="categories-page_",
-    )
-
-    await call.message.edit_text(localize("shop.categories.title"), reply_markup=markup)
-
-    await state.update_data(
-        categories_paginator=paginator.get_state(),
-        category_page_items=list(page_items),
-    )
-    await state.set_state(ShopStates.viewing_categories)
-
-
-@router.callback_query(F.data.startswith('categories-page_'))
-async def navigate_categories(call: CallbackQuery, state: FSMContext):
-    """
-    Pagination across shop categories with cache.
-    """
-    parts = call.data.split('_', 1)
-    page = int(parts[1]) if len(parts) > 1 and parts[1].isdigit() else 0
-
-    data = await state.get_data()
-    paginator_state = data.get('categories_paginator')
-
-    paginator = LazyPaginator(
-        query_categories,
-        per_page=10,
-        state=paginator_state
-    )
-
-    # Pre-fetch page items to build index map and store in state
+    # Pre-fetch page items to build the index map used by the item_callback.
     page_items = await paginator.get_page(page)
     items_index = {cat: idx for idx, cat in enumerate(page_items)}
 
@@ -185,15 +140,63 @@ async def navigate_categories(call: CallbackQuery, state: FSMContext):
         item_callback=lambda cat: f"cat:{items_index[cat]}:{page}",
         page=page,
         back_cb="back_to_menu",
-        nav_cb_prefix="categories-page_"
+        nav_cb_prefix="categories-page_",
     )
 
-    await call.message.edit_text(localize('shop.categories.title'), reply_markup=markup)
-
+    await call.message.edit_text(localize("shop.categories.title"), reply_markup=markup)
     await state.update_data(
         categories_paginator=paginator.get_state(),
         category_page_items=list(page_items),
     )
+
+
+@router.callback_query(F.data == "shop")
+async def shop_callback_handler(call: CallbackQuery, state: FSMContext):
+    """Show list of shop categories with lazy loading."""
+    metrics = get_metrics()
+    if metrics:
+        metrics.track_conversion("purchase_funnel", "view_shop", call.from_user.id)
+
+    await _show_categories_page(call, state, 0)
+    await state.set_state(ShopStates.viewing_categories)
+
+
+@router.callback_query(F.data.startswith('categories-page_'))
+async def navigate_categories(call: CallbackQuery, state: FSMContext):
+    """Pagination across shop categories with cache."""
+    parts = call.data.split('_', 1)
+    page = int(parts[1]) if len(parts) > 1 and parts[1].isdigit() else 0
+    await _show_categories_page(call, state, page)
+
+
+async def _show_goods_page(call: CallbackQuery, state: FSMContext,
+                           category_name: str, cat_page: int, page: int):
+    """Render one page of goods inside a category (shared by category-open + paginate)."""
+    from bot.database.methods.lazy_queries import query_items_in_category
+
+    paginator_state = (await state.get_data()).get('goods_paginator') if page > 0 else None
+    paginator = LazyPaginator(partial(query_items_in_category, category_name), per_page=10, state=paginator_state)
+
+    page_items = await paginator.get_page(page)
+    items_index = {item: i for i, item in enumerate(page_items)}
+
+    markup = await lazy_paginated_keyboard(
+        paginator=paginator,
+        item_text=lambda item: item,
+        item_callback=lambda item: f"itm:{items_index[item]}:{page}",
+        page=page,
+        back_cb=f"categories-page_{cat_page}",
+        nav_cb_prefix="gp_",
+    )
+
+    await call.message.edit_text(localize("shop.goods.choose"), reply_markup=markup)
+    await state.update_data(
+        goods_paginator=paginator.get_state(),
+        current_category=category_name,
+        goods_page_items=list(page_items),
+        categories_last_viewed_page=cat_page,
+    )
+    await state.set_state(ShopStates.viewing_goods)
 
 
 @router.callback_query(F.data.startswith('cat:'))
@@ -213,36 +216,7 @@ async def items_list_callback_handler(call: CallbackQuery, state: FSMContext):
         await call.answer(localize("shop.item.not_found"), show_alert=True)
         return
 
-    category_name = category_page_items[idx]
-    back_data = f"categories-page_{cat_page}"
-
-    from bot.database.methods.lazy_queries import query_items_in_category
-
-    query_func = partial(query_items_in_category, category_name)
-    paginator = LazyPaginator(query_func, per_page=10)
-
-    # Pre-fetch page items to build index map and store in state
-    page_items = await paginator.get_page(0)
-    items_index = {item: i for i, item in enumerate(page_items)}
-
-    markup = await lazy_paginated_keyboard(
-        paginator=paginator,
-        item_text=lambda item: item,
-        item_callback=lambda item: f"itm:{items_index[item]}:0",
-        page=0,
-        back_cb=back_data,
-        nav_cb_prefix="gp_",
-    )
-
-    await call.message.edit_text(localize("shop.goods.choose"), reply_markup=markup)
-
-    await state.update_data(
-        goods_paginator=paginator.get_state(),
-        current_category=category_name,
-        goods_page_items=list(page_items),
-        categories_last_viewed_page=cat_page,
-    )
-    await state.set_state(ShopStates.viewing_goods)
+    await _show_goods_page(call, state, category_page_items[idx], cat_page, 0)
 
 
 @router.callback_query(F.data.startswith('gp_'), ShopStates.viewing_goods)
@@ -251,38 +225,13 @@ async def navigate_goods(call: CallbackQuery, state: FSMContext):
     Pagination for items inside selected category.
     Format: gp_{page}
     """
-    current_index = int(call.data[3:])
-
+    page = int(call.data[3:])
     data = await state.get_data()
-    paginator_state = data.get('goods_paginator')
-    category_name = data.get('current_category', '')
-
-    categories_page = data.get('categories_last_viewed_page', 0)
-    back_data = f"categories-page_{categories_page}"
-
-    from bot.database.methods.lazy_queries import query_items_in_category
-
-    query_func = partial(query_items_in_category, category_name)
-    paginator = LazyPaginator(query_func, per_page=10, state=paginator_state)
-
-    # Pre-fetch page items to build index map and store in state
-    page_items = await paginator.get_page(current_index)
-    items_index = {item: i for i, item in enumerate(page_items)}
-
-    markup = await lazy_paginated_keyboard(
-        paginator=paginator,
-        item_text=lambda item: item,
-        item_callback=lambda item: f"itm:{items_index[item]}:{current_index}",
-        page=current_index,
-        back_cb=back_data,
-        nav_cb_prefix="gp_",
-    )
-
-    await call.message.edit_text(localize("shop.goods.choose"), reply_markup=markup)
-
-    await state.update_data(
-        goods_paginator=paginator.get_state(),
-        goods_page_items=list(page_items),
+    await _show_goods_page(
+        call, state,
+        data.get('current_category', ''),
+        data.get('categories_last_viewed_page', 0),
+        page,
     )
 
 
