@@ -238,7 +238,9 @@ deleting a product keeps carts, reviews, and purchase history consistent automat
 
 ### Monitoring endpoints
 
-- `/health` — database/Redis status (public; returns 503 when the DB is down).
+- `/health` — liveness probe. Public callers get only `{"status": "healthy"}` / 503
+  (503 when the DB is down); the full component breakdown (Redis, uptime) is returned only
+  to an authenticated session.
 - `/metrics`, `/metrics/prometheus` — metrics (auth required).
 - `/export/{users,purchases,operations,payments}` — CSV export with optional date filtering.
 

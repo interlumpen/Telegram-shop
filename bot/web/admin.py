@@ -433,19 +433,26 @@ class ReviewsAdmin(AuditModelView, model=Reviews):
 
 # Health & Metrics Endpoints
 async def health_check(request: Request) -> JSONResponse:
-    health_status = {
-        "status": "healthy",
-        "checks": {},
-    }
-
+    db_ok = True
     try:
         async with Database().session() as s:
             await s.execute(text("SELECT 1"))
-        health_status["checks"]["database"] = "ok"
     except Exception as e:
         logger.error(f"Health check database error: {e}")
-        health_status["checks"]["database"] = "error"
-        health_status["status"] = "unhealthy"
+        db_ok = False
+
+    status_code = 200 if db_ok else 503
+    if not request.session.get("authenticated"):
+        return JSONResponse(
+            {"status": "healthy" if db_ok else "unhealthy"},
+            status_code=status_code,
+        )
+
+    # Authenticated operators get the full diagnostic view.
+    health_status = {
+        "status": "healthy" if db_ok else "unhealthy",
+        "checks": {"database": "ok" if db_ok else "error"},
+    }
 
     cache = get_cache_manager()
     if cache:
@@ -458,7 +465,6 @@ async def health_check(request: Request) -> JSONResponse:
         health_status["checks"]["metrics"] = "ok"
         health_status["uptime"] = metrics.get_metrics_summary()["uptime_seconds"]
 
-    status_code = 200 if health_status["status"] == "healthy" else 503
     return JSONResponse(health_status, status_code=status_code)
 
 

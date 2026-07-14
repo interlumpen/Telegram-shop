@@ -319,6 +319,10 @@ async def pre_checkout_handler(query: PreCheckoutQuery):
         await query.answer(ok=False, error_message="Invalid amount")
         return
 
+    if amount < int(EnvKeys.MIN_AMOUNT):
+        await query.answer(ok=False, error_message="Amount below minimum")
+        return
+
     if amount > int(EnvKeys.MAX_AMOUNT):
         await query.answer(ok=False, error_message="Amount exceeds maximum")
         return
