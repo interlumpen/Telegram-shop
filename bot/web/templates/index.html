@@ -1,0 +1,111 @@
+{% extends "layout.html" %}
+{% block content %}
+<div class="container-xl py-3">
+
+  <div class="mb-3">
+    <h2 class="mb-1">Telegram Shop — Admin Panel</h2>
+    <div class="text-muted">
+      Quick reference for the panel. Every create/edit/delete here is audit-logged,
+      and the bot's caches are refreshed automatically after a change.
+    </div>
+  </div>
+
+  <div class="row row-cards">
+
+    <!-- Selling goods -->
+    <div class="col-lg-6">
+      <div class="card">
+        <div class="card-header"><h3 class="card-title">📦 Selling goods (product + stock)</h3></div>
+        <div class="card-body">
+          <p>A <b>Product</b> is the listing (name, price, description, category, optional
+             sale). Its sellable units live separately as <b>Stock Items</b>.</p>
+          <ol class="mb-2">
+            <li>Create a <b>Category</b> (if needed).</li>
+            <li>Create a <b>Product</b> — set name, price, description, category. Sale is optional.</li>
+            <li>Add <b>Stock Items</b> for that product — this is what buyers actually receive.</li>
+          </ol>
+          <p class="mb-1"><b>Stock Item</b> fields:</p>
+          <ul class="mb-2">
+            <li><code>item</code> — which product this unit belongs to.</li>
+            <li><code>value</code> — the delivered content (account, key, license text…).</li>
+            <li><code>is_infinity</code> —
+              <b>off</b>: a limited unit, consumed on purchase (add one row per unit);
+              <b>on</b>: unlimited — the same <code>value</code> is delivered on every purchase and never runs out.</li>
+          </ul>
+          <p class="text-muted mb-0">Renaming or deleting a product keeps carts, reviews and
+             purchase history consistent automatically.</p>
+        </div>
+      </div>
+    </div>
+
+    <!-- Permissions -->
+    <div class="col-lg-6">
+      <div class="card">
+        <div class="card-header"><h3 class="card-title">🔐 Roles &amp; permissions</h3></div>
+        <div class="card-body">
+          <p>A role's <code>permissions</code> is a <b>bitmask</b>: add up the values of the
+             abilities you want. Built-in roles: <b>USER</b> (1), <b>ADMIN</b>, <b>OWNER</b>
+             (all bits). You can only grant permissions you hold yourself.</p>
+          <div class="table-responsive">
+            <table class="table table-sm table-vcenter mb-2">
+              <thead><tr><th>Bit</th><th>Value</th><th>Grants</th></tr></thead>
+              <tbody>
+                <tr><td>USE</td><td>1</td><td>Basic bot access</td></tr>
+                <tr><td>BROADCAST</td><td>2</td><td>Mass messaging</td></tr>
+                <tr><td>SETTINGS</td><td>4</td><td>Maintenance mode</td></tr>
+                <tr><td>USERS</td><td>8</td><td>View / block users, referrals, purchases</td></tr>
+                <tr><td>CATALOG</td><td>16</td><td>Categories, products, stock</td></tr>
+                <tr><td>ADMINS</td><td>32</td><td>Create roles, assign roles</td></tr>
+                <tr><td>OWNER</td><td>64</td><td>Owner-only operations</td></tr>
+                <tr><td>STATS</td><td>128</td><td>Statistics, logs, item search</td></tr>
+                <tr><td>BALANCE</td><td>256</td><td>Top-up / deduct balance</td></tr>
+                <tr><td>PROMO</td><td>512</td><td>Promo-code management</td></tr>
+              </tbody>
+            </table>
+          </div>
+          <p class="mb-0"><b>Example:</b> a catalog manager who also sees stats =
+             USE + CATALOG + STATS = 1 + 16 + 128 = <code>145</code>.
+             <span class="text-muted">Prefer the bot's role menu for a click-to-toggle UI.</span></p>
+        </div>
+      </div>
+    </div>
+
+    <!-- What each section does -->
+    <div class="col-lg-6">
+      <div class="card">
+        <div class="card-header"><h3 class="card-title">🧭 What each section is for</h3></div>
+        <div class="card-body">
+          <ul class="mb-0">
+            <li><b>Users</b> — balance, role, block status (edits take effect immediately).</li>
+            <li><b>Roles</b> — permission bitmasks (see the table).</li>
+            <li><b>Categories / Products / Stock Items</b> — the catalog.</li>
+            <li><b>Promo Codes</b> — percent / fixed / balance codes, limits, expiry.</li>
+            <li><b>Purchases / Payments / Operations</b> — read-only financial history.</li>
+            <li><b>Reviews</b> — 1–5★ product reviews.</li>
+            <li><b>Audit Logs</b> — read-only record of every admin action.</li>
+          </ul>
+        </div>
+      </div>
+    </div>
+
+    <!-- Tips -->
+    <div class="col-lg-6">
+      <div class="card">
+        <div class="card-header"><h3 class="card-title">💡 Good to know</h3></div>
+        <div class="card-body">
+          <ul class="mb-0">
+            <li>Financial tables (purchases, payments, operations) and audit logs are
+                <b>read-only</b> by design.</li>
+            <li>Prices/balances use exact decimals — enter plain numbers (e.g. <code>199.99</code>).</li>
+            <li>A promo code's <code>discount_type</code> is one of
+                <code>percent</code>, <code>fixed</code>, or <code>balance</code>.</li>
+            <li>Most day-to-day tasks are also available in the bot's in-chat admin menu,
+                which is often quicker for catalog and role edits.</li>
+          </ul>
+        </div>
+      </div>
+    </div>
+
+  </div>
+</div>
+{% endblock %}

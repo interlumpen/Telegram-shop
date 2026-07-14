@@ -1,5 +1,6 @@
 import hmac
 import logging
+import os
 import time
 from typing import Any
 
@@ -170,6 +171,10 @@ class UserAdmin(AuditModelView, model=User):
     column_searchable_list = [User.telegram_id]
     column_sortable_list = [User.telegram_id, User.balance, User.registration_date]
     column_default_sort = (User.registration_date, True)
+    form_excluded_columns = [
+        User.user_operations, User.user_goods,
+        User.referral_earnings_received, User.referral_earnings_generated,
+    ]
     name = "User"
     name_plural = "Users"
     icon = "fa-solid fa-users"
@@ -224,6 +229,7 @@ def _format_perms_html(model, name):
 class RoleAdmin(AuditModelView, model=Role):
     column_list = [Role.id, Role.name, Role.default, Role.permissions]
     column_details_exclude_list = ["users"]
+    form_excluded_columns = [Role.users]
     column_sortable_list = [Role.id, Role.name]
     name = "Role"
     name_plural = "Roles"
@@ -262,6 +268,7 @@ class RoleAdmin(AuditModelView, model=Role):
 class CategoryAdmin(AuditModelView, model=Categories):
     column_list = [Categories.name]
     column_searchable_list = [Categories.name]
+    form_excluded_columns = [Categories.items]
     name = "Category"
     name_plural = "Categories"
     icon = "fa-solid fa-folder"
@@ -497,6 +504,8 @@ def create_admin_app() -> Starlette:
         engine=Database().engine,
         authentication_backend=auth_backend,
         title="Telegram Shop Admin",
+        # Override the (blank) SQLAdmin index page with our help/cheat-sheet.
+        templates_dir=os.path.join(os.path.dirname(__file__), "templates"),
     )
 
     admin.add_view(UserAdmin)
