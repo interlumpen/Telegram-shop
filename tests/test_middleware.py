@@ -3,7 +3,7 @@ import time
 import pytest
 
 from bot.middleware.security import check_suspicious_patterns, SecurityMiddleware, AuthenticationMiddleware
-from bot.middleware.rate_limit import RateLimiter, RateLimitConfig
+from bot.middleware.rate_limit import RateLimiter, RateLimitConfig, RedisRateLimiter
 
 
 class TestSuspiciousPatterns:
@@ -182,6 +182,144 @@ class TestAuthenticationMiddleware:
     async def test_block_nonexistent_user(self):
         result = await self.auth.block_user(999999999)
         assert result is False
+
+
+class _FakeRedis:
+    def __init__(self, fail: bool = False):
+        self.zsets: dict = {}
+        self.kv: dict = {}
+        self.fail = fail
+
+    def _boom(self):
+        if self.fail:
+            raise ConnectionError("redis down")
+
+    async def zremrangebyscore(self, key, mn, mx):
+        self._boom()
+        z = self.zsets.get(key, {})
+        for m in [m for m, s in z.items() if mn <= s <= mx]:
+            del z[m]
+        self.zsets[key] = z
+
+    async def zcard(self, key):
+        self._boom()
+        return len(self.zsets.get(key, {}))
+
+    async def zadd(self, key, mapping):
+        self._boom()
+        self.zsets.setdefault(key, {}).update(mapping)
+
+    async def zrange(self, key, start, end, withscores=False):
+        self._boom()
+        items = sorted(self.zsets.get(key, {}).items(), key=lambda kv: kv[1])
+        end = len(items) - 1 if end == -1 else end
+        sel = items[start:end + 1]
+        return [(m, s) for m, s in sel] if withscores else [m for m, s in sel]
+
+    async def pexpire(self, key, ms):
+        self._boom()
+        return True
+
+    async def set(self, key, value, ex=None):
+        self._boom()
+        self.kv[key] = (value, (time.time() + ex) if ex else None)
+
+    async def exists(self, key):
+        self._boom()
+        v = self.kv.get(key)
+        if not v:
+            return 0
+        _, exp = v
+        if exp is not None and time.time() > exp:
+            del self.kv[key]
+            return 0
+        return 1
+
+    async def ttl(self, key):
+        self._boom()
+        v = self.kv.get(key)
+        if not v:
+            return -2
+        _, exp = v
+        return -1 if exp is None else max(0, int(exp - time.time()))
+
+    async def delete(self, key):
+        self.zsets.pop(key, None)
+        self.kv.pop(key, None)
+
+
+class TestRedisRateLimiter:
+
+    def setup_method(self):
+        self.config = RateLimitConfig(
+            global_limit=2, global_window=60,
+            action_limits={"payment": (1, 60)}, ban_duration=300,
+        )
+        self.fallback = RateLimiter(self.config)
+
+    def _limiter(self, fail=False):
+        return RedisRateLimiter(self.config, _FakeRedis(fail=fail), self.fallback)
+
+    async def test_global_limit_allows_then_blocks(self):
+        r = self._limiter()
+        assert await r.check_global_limit(1) is True
+        assert await r.check_global_limit(1) is True
+        assert await r.check_global_limit(1) is False
+
+    async def test_global_limit_is_per_user(self):
+        r = self._limiter()
+        await r.check_global_limit(1)
+        await r.check_global_limit(1)
+        assert await r.check_global_limit(2) is True
+
+    async def test_action_limit_blocks_over_limit(self):
+        r = self._limiter()
+        assert await r.check_action_limit(1, "payment") is True
+        assert await r.check_action_limit(1, "payment") is False
+
+    async def test_unknown_action_always_passes(self):
+        r = self._limiter()
+        for _ in range(10):
+            assert await r.check_action_limit(1, "unknown") is True
+
+    async def test_ban_sets_and_reports(self):
+        r = self._limiter()
+        assert await r.is_banned(1) is False
+        await r.ban_user(1)
+        assert await r.is_banned(1) is True
+        wait = await r.get_wait_time(1)
+        assert 0 < wait <= 300
+
+    async def test_falls_back_to_memory_on_redis_error(self):
+        r = self._limiter(fail=True)
+        # Redis raises -> in-memory fallback answers (allowed within its limit).
+        assert await r.check_global_limit(5) is True
+        assert 5 in self.fallback.user_requests
+
+
+class TestRoleCacheRedis:
+
+    async def test_read_through_and_write_through(self, user_factory, fake_cache):
+        fake_cache._healthy = True
+        await user_factory(telegram_id=210001)  # default USER role, perms == 1
+        auth = AuthenticationMiddleware()
+
+        assert await auth.get_user_role_cached(210001) == 1
+        # Written through to the shared cache...
+        assert "auth:role:210001" in fake_cache.store
+        # ...and read from it first: overwrite Redis and expect the new value,
+        # even though the in-memory admin_cache still holds the old one.
+        fake_cache.store["auth:role:210001"] = 999
+        assert await auth.get_user_role_cached(210001) == 999
+
+    async def test_falls_back_to_memory_when_cache_unhealthy(self, user_factory, fake_cache):
+        fake_cache._healthy = False
+        await user_factory(telegram_id=210002)
+        auth = AuthenticationMiddleware()
+
+        assert await auth.get_user_role_cached(210002) == 1
+        assert 210002 in auth.admin_cache
+        assert "auth:role:210002" not in fake_cache.store
 
 
 class TestPermissionHasAnyAdminPerm:

@@ -9,6 +9,8 @@ from bot.logger_mesh import logger
 class MetricsCollector:
     """Metrics builder for analytics"""
 
+    MAX_CONVERSION_USERS = 50_000
+
     def __init__(self):
         # Initializing all attributes
         self.events: Dict[str, int] = defaultdict(int)
@@ -43,7 +45,10 @@ class MetricsCollector:
         if funnel not in self.conversions:
             self.conversions[funnel] = defaultdict(set)
 
-        self.conversions[funnel][step].add(user_id)
+        bucket = self.conversions[funnel][step]
+        # Bound memory: stop growing once the cap is hit. Prevents an unbounded per-user set over long uptimes.
+        if user_id in bucket or len(bucket) < self.MAX_CONVERSION_USERS:
+            bucket.add(user_id)
 
     def get_metrics_summary(self) -> Dict[str, Any]:
         """Getting a metrics summary"""

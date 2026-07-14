@@ -39,6 +39,22 @@ class TestMetricsCollector:
         assert len(self.m.conversions["purchase_funnel"]["view_shop"]) == 2
         assert len(self.m.conversions["purchase_funnel"]["purchase"]) == 1
 
+    def test_track_conversion_is_bounded(self):
+        # Cap the per-step set so a long-running process can't grow it forever.
+        self.m.MAX_CONVERSION_USERS = 3
+        for uid in range(10):
+            self.m.track_conversion("purchase_funnel", "view_shop", uid)
+        assert len(self.m.conversions["purchase_funnel"]["view_shop"]) == 3
+
+    def test_track_conversion_still_counts_seen_users_at_cap(self):
+        # Re-tracking an already-seen user at the cap must not be rejected.
+        self.m.MAX_CONVERSION_USERS = 2
+        self.m.track_conversion("f", "s", 1)
+        self.m.track_conversion("f", "s", 2)  # cap reached
+        self.m.track_conversion("f", "s", 1)  # already present -> allowed
+        self.m.track_conversion("f", "s", 99)  # new -> dropped
+        assert self.m.conversions["f"]["s"] == {1, 2}
+
     def test_get_metrics_summary(self):
         self.m.track_event("test_event")
         self.m.track_timing("test_op", 0.5)

@@ -16,8 +16,8 @@ and optional Redis caching.
 ## 🎬 Demo
 
 <div align="center">
-  <img src="assets/admin_pov.gif" alt="Admin interface" width="400"/>
-  <img src="assets/user_pov.gif" alt="User interface" width="400"/>
+  <img src="assets/admin_pov.gif" alt="Admin interface" width="420"/>
+  <img src="assets/user_pov.gif" alt="User interface" width="420"/>
 </div>
 
 ## 📋 Table of Contents
@@ -68,11 +68,13 @@ Implemented, and described honestly so you know what to rely on:
   the database layer** (row locks + stock removal + idempotent records), not by trusting the
   client.
 - **Access control** — Telegram‑ID authentication; a 10‑bit permission bitmask with bitwise
-  *subset* validation (you cannot create or assign a role exceeding your own); role/permission
-  caches are invalidated immediately when you edit a user in the web panel.
-- **Rate limiting** — global and per‑action limits with temporary bans, plus a web‑panel login
-  limiter (5 attempts / 15 min per IP) and 30‑minute sessions. *In‑memory, per process* — sized
-  for a single bot instance, not shared across multiple workers.
+  *subset* validation (you cannot create or assign a role exceeding your own); the role/permission
+  cache is shared through Redis (when enabled) so a web‑panel edit invalidates it across every
+  worker, falling back to a per‑process cache when Redis is off.
+- **Rate limiting** — global and per‑action limits with temporary bans. When Redis is enabled the
+  limiter state is shared across workers (sliding‑window sorted sets + TTL bans); without Redis it
+  degrades to a per‑process in‑memory limiter. The web‑panel login limiter (5 attempts / 15 min per
+  IP) and 30‑minute sessions remain per‑process.
 - **Web panel** — constant‑time credential/secret comparison; proxy‑aware client IP (trusts
   `X‑Forwarded‑For` only when the socket peer is loopback, so an external client can't spoof it);
   remote login with the default `admin`/`admin` is blocked; every create/edit/delete is
@@ -402,7 +404,7 @@ You can do all the same things in SQLAdmin!
 
 ## 🧪 Testing
 
-**519 tests** (`pytest`). The data layer runs against a real in‑memory async SQLite database
+**529 tests** (`pytest`). The data layer runs against a real in‑memory async SQLite database
 (real SQL, transactions, and constraints) — only external services are mocked (Telegram Bot
 API, CryptoPay, Redis). What's covered:
 
@@ -423,5 +425,4 @@ API, CryptoPay, Redis). What's covered:
 
 ```bash
 pytest                     # full suite (coverage runs automatically)
-pytest tests/test_transactions.py -v
 ```
