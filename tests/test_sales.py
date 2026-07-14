@@ -185,7 +185,7 @@ class TestSaleAdminFlow:
 
     async def test_fsm_sets_sale(self, item_factory, make_message, fsm_context):
         from bot.database.methods.read import get_item_info
-        from bot.handlers.admin.sale_management_states import sale_item_name, sale_percent, sale_days
+        from bot.handlers.admin.sale_management import sale_item_name, sale_percent, sale_days
         await item_factory(name="FsmSale", price=100, values=[("v", False)])
 
         await sale_item_name(make_message(text="FsmSale", user_id=1), fsm_context)
@@ -199,7 +199,7 @@ class TestSaleAdminFlow:
 
     async def test_fsm_zero_percent_disables(self, item_factory, make_message, fsm_context):
         from bot.database.methods.read import get_item_info
-        from bot.handlers.admin.sale_management_states import sale_item_name, sale_percent
+        from bot.handlers.admin.sale_management import sale_item_name, sale_percent
         await item_factory(name="FsmOff", price=100, values=[("v", False)])
         await _set_sale("FsmOff", Decimal("40"), _future())
 
@@ -211,7 +211,7 @@ class TestSaleAdminFlow:
         assert on_sale is False
 
     async def test_fsm_invalid_percent_rejected(self, item_factory, make_message, fsm_context):
-        from bot.handlers.admin.sale_management_states import sale_item_name, sale_percent
+        from bot.handlers.admin.sale_management import sale_item_name, sale_percent
         await item_factory(name="FsmBad", price=100, values=[("v", False)])
 
         await sale_item_name(make_message(text="FsmBad", user_id=1), fsm_context)

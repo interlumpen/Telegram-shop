@@ -92,7 +92,7 @@ async def create_category(category_name: str) -> None:
 async def create_operation(user_id: int, value: int, operation_time: datetime) -> None:
     """Record completed balance operation; commit."""
     async with Database().session() as s:
-        s.add(Operations(user_id, value, operation_time))
+        s.add(Operations(user_id=user_id, operation_value=value, operation_time=operation_time))
 
 
 async def create_pending_payment(provider: str, external_id: str, user_id: int, amount: int, currency: str) -> None:

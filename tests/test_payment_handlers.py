@@ -167,8 +167,7 @@ class TestBuyItemHandler:
         call = make_callback_query(data="buy_item", user_id=400020)
         await fsm_context.update_data(csrf_item="TestWidget")
 
-        with patch('bot.main.security_middleware', None), \
-             patch('bot.handlers.user.balance_and_payment.EnvKeys') as env:
+        with patch('bot.handlers.user.balance_and_payment.EnvKeys') as env:
             env.PAY_CURRENCY = "RUB"
             await buy_item_callback_handler(call, fsm_context)
 
@@ -184,8 +183,7 @@ class TestBuyItemHandler:
         call = make_callback_query(data="buy_item", user_id=400021)
         await fsm_context.update_data(csrf_item="ExpensiveItem")
 
-        with patch('bot.main.security_middleware', None), \
-             patch('bot.handlers.user.balance_and_payment.EnvKeys') as env:
+        with patch('bot.handlers.user.balance_and_payment.EnvKeys') as env:
             env.PAY_CURRENCY = "RUB"
             await buy_item_callback_handler(call, fsm_context)
 

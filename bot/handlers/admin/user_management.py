@@ -18,6 +18,7 @@ from bot.keyboards import back, close, simple_buttons, lazy_paginated_keyboard
 from bot.database.methods.audit import log_audit
 from bot.filters import HasPermissionFilter
 from bot.handlers.admin._common import user_profile_lines
+from bot.middleware.security import get_auth_middleware
 from bot.states import UserMgmtStates
 
 import datetime
@@ -588,9 +589,9 @@ async def block_user_handler(call: CallbackQuery):
         await call.answer(localize('admin.users.cannot_block_owner'), show_alert=True)
         return
 
-    from bot.main import auth_middleware
-    if auth_middleware:
-        success = await auth_middleware.block_user(user_id)
+    mw = get_auth_middleware()
+    if mw:
+        success = await mw.block_user(user_id)
         if not success:
             await call.answer(localize('errors.something_wrong'), show_alert=True)
             return
@@ -617,9 +618,9 @@ async def unblock_user_handler(call: CallbackQuery):
         await call.answer(localize('errors.invalid_data'), show_alert=True)
         return
 
-    from bot.main import auth_middleware
-    if auth_middleware:
-        success = await auth_middleware.unblock_user(user_id)
+    mw = get_auth_middleware()
+    if mw:
+        success = await mw.unblock_user(user_id)
         if not success:
             await call.answer(localize('errors.something_wrong'), show_alert=True)
             return

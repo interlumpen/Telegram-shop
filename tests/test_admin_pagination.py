@@ -2,12 +2,12 @@ import datetime
 
 from bot.database.methods.create import create_user, create_referral_earning
 
-from bot.handlers.admin.user_management_states import (
+from bot.handlers.admin.user_management import (
     admin_view_referrals_handler, admin_referrals_pagination_handler,
     admin_view_all_earnings_handler, admin_all_earnings_pagination_handler,
     user_profile_view,
 )
-from bot.handlers.admin.shop_management_states import (
+from bot.handlers.admin.shop_management import (
     users_callback_handler, navigate_users, show_user_info,
 )
 from bot.handlers.user.shop_and_goods import (

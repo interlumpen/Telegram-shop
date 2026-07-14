@@ -16,8 +16,8 @@ and optional Redis caching.
 ## 🎬 Demo
 
 <div align="center">
-  <img src="assets/admin_pov.gif" alt="Admin interface" width="420"/>
-  <img src="assets/user_pov.gif" alt="User interface" width="420"/>
+  <img src="assets/admin_pov.gif" alt="Admin interface" width="400"/>
+  <img src="assets/user_pov.gif" alt="User interface" width="400"/>
 </div>
 
 ## 📋 Table of Contents

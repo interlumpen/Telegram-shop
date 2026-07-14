@@ -213,11 +213,11 @@ def mock_localize():
             patch('bot.handlers.user.balance_and_payment.localize', side_effect=fake_localize), \
             patch('bot.handlers.user.shop_and_goods.localize', side_effect=fake_localize), \
             patch('bot.handlers.user.referral_system.localize', side_effect=fake_localize), \
-            patch('bot.handlers.admin.user_management_states.localize', side_effect=fake_localize), \
-            patch('bot.handlers.admin.categories_management_states.localize', side_effect=fake_localize), \
-            patch('bot.handlers.admin.goods_management_states.localize', side_effect=fake_localize), \
-            patch('bot.handlers.admin.sale_management_states.localize', side_effect=fake_localize), \
-            patch('bot.handlers.admin.role_management_states.localize', side_effect=fake_localize):
+            patch('bot.handlers.admin.user_management.localize', side_effect=fake_localize), \
+            patch('bot.handlers.admin.categories_management.localize', side_effect=fake_localize), \
+            patch('bot.handlers.admin.goods_management.localize', side_effect=fake_localize), \
+            patch('bot.handlers.admin.sale_management.localize', side_effect=fake_localize), \
+            patch('bot.handlers.admin.role_management.localize', side_effect=fake_localize):
         yield m
 
 

@@ -37,6 +37,14 @@ _REDEEM_PROMO_ERRORS = {
 }
 
 
+class _Abort(Exception):
+    """Abort the current transaction with a user-facing failure code."""
+
+    def __init__(self, code: str):
+        self.code = code
+        super().__init__(code)
+
+
 async def buy_item_transaction(telegram_id: int, item_name: str, promo_code: str = None) -> tuple[
     bool, str, dict | None]:
     """
@@ -45,16 +53,15 @@ async def buy_item_transaction(telegram_id: int, item_name: str, promo_code: str
     """
     max_retries = 3
     for attempt in range(max_retries):
-        async with Database().session() as s:
-            try:
+        try:
+            async with Database().session() as s:
                 # 1. Lock the user to check the balance
                 user = (await s.execute(
                     select(User).where(User.telegram_id == telegram_id).with_for_update()
                 )).scalars().one_or_none()
 
                 if not user:
-                    await s.rollback()
-                    return False, "user_not_found", None
+                    raise _Abort("user_not_found")
 
                 # 2. Get information about the product
                 goods = (await s.execute(
@@ -62,12 +69,10 @@ async def buy_item_transaction(telegram_id: int, item_name: str, promo_code: str
                 )).scalars().one_or_none()
 
                 if not goods:
-                    await s.rollback()
-                    return False, "item_not_found", None
+                    raise _Abort("item_not_found")
 
                 # Sale price (if an active sale exists) is the authoritative base;
-                # a promo code then stacks on top of it. Computed server-side so a
-                # client cannot influence the charged amount.
+                # a promo code then stacks on top of it. Computed server-side so a client cannot influence the charged amount.
                 price, _on_sale, _original_price = effective_price(goods)
                 final_price = price
                 discount_info = None
@@ -80,8 +85,7 @@ async def buy_item_transaction(telegram_id: int, item_name: str, promo_code: str
 
                     err = await promo_rule_error(s, promo, telegram_id, goods=goods)
                     if err:
-                        await s.rollback()
-                        return False, _BUY_PROMO_ERRORS[err], None
+                        raise _Abort(_BUY_PROMO_ERRORS[err])
 
                     # Apply discount
                     if promo.discount_type == 'percent':
@@ -101,8 +105,7 @@ async def buy_item_transaction(telegram_id: int, item_name: str, promo_code: str
 
                 # 3. Checking the balance
                 if user.balance < final_price:
-                    await s.rollback()
-                    return False, "insufficient_funds", None
+                    raise _Abort("insufficient_funds")
 
                 # 4. Receive and lock the goods for purchase (blocking wait for row lock)
                 item_value = (await s.execute(
@@ -110,8 +113,9 @@ async def buy_item_transaction(telegram_id: int, item_name: str, promo_code: str
                 )).scalars().first()
 
                 if not item_value:
-                    await s.rollback()
-                    return False, "out_of_stock", None
+                    raise _Abort("out_of_stock")
+
+                delivered_value = item_value.value
 
                 # 5. If the product is not endless, we remove it
                 if not item_value.is_infinity:
@@ -123,7 +127,7 @@ async def buy_item_transaction(telegram_id: int, item_name: str, promo_code: str
                 # 7. Create a purchase record
                 bought_item = BoughtGoods(
                     item_name=item_name,
-                    value=item_value.value,
+                    value=delivered_value,
                     price=final_price,
                     buyer_id=telegram_id,
                     bought_datetime=datetime.now(timezone.utc),
@@ -132,16 +136,10 @@ async def buy_item_transaction(telegram_id: int, item_name: str, promo_code: str
                 s.add(bought_item)
                 await s.flush()
 
-                # 8. Commit the transaction
-                await s.commit()
-
-                safe_create_task(invalidate_user_cache(telegram_id))
-                safe_create_task(invalidate_stats_cache())
-                safe_create_task(invalidate_item_cache(item_name))
-
+                # Build the result before the session block commits on exit.
                 result_data = {
                     "item_name": item_name,
-                    "value": item_value.value,
+                    "value": delivered_value,
                     "price": float(final_price),
                     "new_balance": float(user.balance),
                     "unique_id": bought_item.unique_id,
@@ -151,33 +149,38 @@ async def buy_item_transaction(telegram_id: int, item_name: str, promo_code: str
                 if discount_info:
                     result_data["discount"] = discount_info
 
-                return True, "success", result_data
+        except _Abort as e:
+            return False, e.code, None
 
-            except IntegrityError as e:
-                await s.rollback()
-                if "unique_id" in str(e).lower() and attempt < max_retries - 1:
-                    continue  # Retry with a new unique_id
-                await log_audit(
-                    "purchase_failed",
-                    level="WARNING",
-                    user_id=telegram_id,
-                    resource_type="Item",
-                    resource_id=item_name,
-                    details=str(e),
-                )
-                return False, "transaction_error", None
+        except IntegrityError as e:
+            if "unique_id" in str(e).lower() and attempt < max_retries - 1:
+                continue  # Retry with a new unique_id
+            await log_audit(
+                "purchase_failed",
+                level="WARNING",
+                user_id=telegram_id,
+                resource_type="Item",
+                resource_id=item_name,
+                details=str(e),
+            )
+            return False, "transaction_error", None
 
-            except Exception as e:
-                await s.rollback()
-                await log_audit(
-                    "purchase_failed",
-                    level="WARNING",
-                    user_id=telegram_id,
-                    resource_type="Item",
-                    resource_id=item_name,
-                    details=str(e),
-                )
-                return False, "transaction_error", None
+        except Exception as e:
+            await log_audit(
+                "purchase_failed",
+                level="WARNING",
+                user_id=telegram_id,
+                resource_type="Item",
+                resource_id=item_name,
+                details=str(e),
+            )
+            return False, "transaction_error", None
+
+        # Invalidate caches only after the commit succeeded.
+        safe_create_task(invalidate_user_cache(telegram_id))
+        safe_create_task(invalidate_stats_cache())
+        safe_create_task(invalidate_item_cache(item_name))
+        return True, "success", result_data
 
     return False, "transaction_error", None
 
@@ -194,8 +197,8 @@ async def process_payment_with_referral(
     Returns (success, message)
     """
 
-    async with Database().session() as s:
-        try:
+    try:
+        async with Database().session() as s:
             # 1. Check the idempotency of the payment
             existing_payment = (await s.execute(
                 select(Payments).where(
@@ -206,8 +209,7 @@ async def process_payment_with_referral(
 
             if existing_payment:
                 if existing_payment.status == "succeeded":
-                    await s.rollback()
-                    return False, "already_processed"
+                    raise _Abort("already_processed")
                 existing_payment.status = "succeeded"
             else:
                 payment = Payments(
@@ -269,29 +271,29 @@ async def process_payment_with_referral(
 
             referrer_id = user.referral_id if clamped_percent > 0 else None
 
-            await s.commit()
+    except _Abort as e:
+        return False, e.code
 
-            safe_create_task(invalidate_user_cache(user_id))
-            safe_create_task(invalidate_stats_cache())
-            if referrer_id:
-                safe_create_task(invalidate_user_cache(referrer_id))
+    except IntegrityError:
+        # Lost the unique(provider, external_id) race — already credited once.
+        return False, "already_processed"
 
-            return True, "success"
+    except Exception as e:
+        await log_audit(
+            "payment_failed",
+            level="WARNING",
+            user_id=user_id,
+            resource_type="Payment",
+            details=f"provider={provider}, amount={amount}, error={e}",
+        )
+        return False, "payment_error"
 
-        except IntegrityError:
-            await s.rollback()
-            return False, "already_processed"
+    safe_create_task(invalidate_user_cache(user_id))
+    safe_create_task(invalidate_stats_cache())
+    if referrer_id:
+        safe_create_task(invalidate_user_cache(referrer_id))
 
-        except Exception as e:
-            await s.rollback()
-            await log_audit(
-                "payment_failed",
-                level="WARNING",
-                user_id=user_id,
-                resource_type="Payment",
-                details=f"provider={provider}, amount={amount}, error={e}",
-            )
-            return False, "payment_error"
+    return True, "success"
 
 
 async def checkout_cart_transaction(user_id: int) -> tuple[bool, str, list | None]:
@@ -302,15 +304,15 @@ async def checkout_cart_transaction(user_id: int) -> tuple[bool, str, list | Non
     """
     max_retries = 3
     for attempt in range(max_retries):
-        async with Database().session() as s:
-            try:
+        outcome: tuple[bool, str, list | None] | None = None
+        try:
+            async with Database().session() as s:
                 # 1. Lock user
                 user = (await s.execute(
                     select(User).where(User.telegram_id == user_id).with_for_update()
                 )).scalars().one_or_none()
                 if not user:
-                    await s.rollback()
-                    return False, "user_not_found", None
+                    raise _Abort("user_not_found")
 
                 # 2. Get cart items
                 cart_items = (await s.execute(
@@ -318,8 +320,7 @@ async def checkout_cart_transaction(user_id: int) -> tuple[bool, str, list | Non
                 )).scalars().all()
 
                 if not cart_items:
-                    await s.rollback()
-                    return False, "cart_empty", None
+                    raise _Abort("cart_empty")
 
                 # Lock all distinct goods up front in a deterministic order (by id)
                 # so two concurrent checkouts with overlapping carts acquire the row
@@ -377,8 +378,7 @@ async def checkout_cart_transaction(user_id: int) -> tuple[bool, str, list | Non
                         # Any invalidity aborts checkout instead of silently charging
                         # full price (the promo was attached to the cart earlier).
                         if await promo_rule_error(s, promo, user_id, goods=goods):
-                            await s.rollback()
-                            return False, "promo_expired_during_checkout", None
+                            raise _Abort("promo_expired_during_checkout")
 
                         if promo.discount_type == 'percent':
                             final_price = price * (1 - Decimal(str(promo.discount_value)) / 100)
@@ -402,100 +402,98 @@ async def checkout_cart_transaction(user_id: int) -> tuple[bool, str, list | Non
                     )
 
                 if not purchases:
-                    await s.commit()
-                    return False, "cart_items_unavailable", None
+                    # Commit the invalid-item cleanup above, but report failure.
+                    outcome = (False, "cart_items_unavailable", None)
+                else:
+                    # 4. Check balance
+                    if user.balance < total_price:
+                        raise _Abort("insufficient_funds")
 
-                # 4. Check balance
-                if user.balance < total_price:
-                    await s.rollback()
-                    return False, "insufficient_funds", None
+                    # 5. Process each purchase
+                    results = []
+                    for p in purchases:
+                        if not p['item_value'].is_infinity:
+                            await s.delete(p['item_value'])
 
-                # 5. Process each purchase
-                results = []
-                for p in purchases:
-                    if not p['item_value'].is_infinity:
-                        await s.delete(p['item_value'])
+                        bought_item = BoughtGoods(
+                            item_name=p['goods'].name,
+                            value=p['item_value'].value,
+                            price=p['price'],
+                            buyer_id=user_id,
+                            bought_datetime=datetime.now(timezone.utc),
+                            unique_id=uuid4().int >> 65
+                        )
+                        s.add(bought_item)
+                        await s.flush()
+                        results.append({
+                            "item_name": p['goods'].name,
+                            "value": p['item_value'].value,
+                            "price": float(p['price']),
+                            "bought_id": bought_item.id,
+                            "unique_id": bought_item.unique_id,
+                            "bought_datetime": bought_item.bought_datetime.isoformat(),
+                        })
 
-                    bought_item = BoughtGoods(
-                        item_name=p['goods'].name,
-                        value=p['item_value'].value,
-                        price=p['price'],
-                        buyer_id=user_id,
-                        bought_datetime=datetime.now(timezone.utc),
-                        unique_id=uuid4().int >> 65
+                    # 6. Record promo usage (once per distinct promo)
+                    for promo in promos_to_record.values():
+                        promo.current_uses += 1
+                        s.add(PromoCodeUsages(promo_id=promo.id, user_id=user_id))
+
+                    # 7. Deduct total
+                    user.balance -= total_price
+
+                    # 8. Clear cart
+                    await s.execute(
+                        sa_delete(CartItems).where(CartItems.user_id == user_id)
                     )
-                    s.add(bought_item)
-                    await s.flush()
-                    results.append({
-                        "item_name": p['goods'].name,
-                        "value": p['item_value'].value,
-                        "price": float(p['price']),
-                        "bought_id": bought_item.id,
-                        "unique_id": bought_item.unique_id,
-                        "bought_datetime": bought_item.bought_datetime.isoformat(),
-                    })
 
-                # 6. Record promo usage (once per distinct promo)
-                for promo in promos_to_record.values():
-                    promo.current_uses += 1
-                    s.add(PromoCodeUsages(promo_id=promo.id, user_id=user_id))
+                    outcome = (True, "success", results)
 
-                # 7. Deduct total
-                user.balance -= total_price
+        except _Abort as e:
+            return False, e.code, None
 
-                # 8. Clear cart
-                await s.execute(
-                    sa_delete(CartItems).where(CartItems.user_id == user_id)
-                )
+        except IntegrityError as e:
+            if "unique_id" in str(e).lower() and attempt < max_retries - 1:
+                continue  # Retry with new unique_ids
+            await log_audit(
+                "cart_checkout_failed",
+                level="WARNING",
+                user_id=user_id,
+                details=str(e),
+            )
+            return False, "transaction_error", None
 
-                await s.commit()
+        except (OperationalError, DBAPIError) as e:
+            msg = str(e).lower()
+            # Postgres aborts one transaction in a deadlock/serialization cycle;
+            # the victim is safe to retry (lock goods deterministically now).
+            if (("deadlock" in msg or "could not serialize" in msg)
+                    and attempt < max_retries - 1):
+                continue
+            await log_audit(
+                "cart_checkout_failed",
+                level="WARNING",
+                user_id=user_id,
+                details=str(e),
+            )
+            return False, "transaction_error", None
 
-                safe_create_task(invalidate_user_cache(user_id))
-                safe_create_task(invalidate_stats_cache())
-                # Invalidate cache for all purchased items
-                purchased_names = {r["item_name"] for r in results}
-                for name in purchased_names:
-                    safe_create_task(invalidate_item_cache(name))
+        except Exception as e:
+            await log_audit(
+                "cart_checkout_failed",
+                level="WARNING",
+                user_id=user_id,
+                details=str(e),
+            )
+            return False, "transaction_error", None
 
-                return True, "success", results
-
-            except IntegrityError as e:
-                await s.rollback()
-                if "unique_id" in str(e).lower() and attempt < max_retries - 1:
-                    continue  # Retry with new unique_ids
-                await log_audit(
-                    "cart_checkout_failed",
-                    level="WARNING",
-                    user_id=user_id,
-                    details=str(e),
-                )
-                return False, "transaction_error", None
-
-            except (OperationalError, DBAPIError) as e:
-                await s.rollback()
-                msg = str(e).lower()
-                # Postgres aborts one transaction in a deadlock/serialization cycle;
-                # the victim is safe to retry (lock goods deterministically now).
-                if (("deadlock" in msg or "could not serialize" in msg)
-                        and attempt < max_retries - 1):
-                    continue
-                await log_audit(
-                    "cart_checkout_failed",
-                    level="WARNING",
-                    user_id=user_id,
-                    details=str(e),
-                )
-                return False, "transaction_error", None
-
-            except Exception as e:
-                await s.rollback()
-                await log_audit(
-                    "cart_checkout_failed",
-                    level="WARNING",
-                    user_id=user_id,
-                    details=str(e),
-                )
-                return False, "transaction_error", None
+        # Clean commit. Invalidate caches only on a successful checkout.
+        if outcome[0]:
+            safe_create_task(invalidate_user_cache(user_id))
+            safe_create_task(invalidate_stats_cache())
+            for name in {r["item_name"] for r in outcome[2]}:
+                safe_create_task(invalidate_item_cache(name))
+        return outcome
 
     return False, "transaction_error", None
 
@@ -506,19 +504,17 @@ async def admin_balance_change(telegram_id: int, amount: Decimal) -> tuple[bool,
     amount > 0 for top-up, amount < 0 for deduction.
     Returns (success, message).
     """
-    async with Database().session() as s:
-        try:
+    try:
+        async with Database().session() as s:
             user = (await s.execute(
                 select(User).where(User.telegram_id == telegram_id).with_for_update()
             )).scalars().one_or_none()
 
             if not user:
-                await s.rollback()
-                return False, "user_not_found"
+                raise _Abort("user_not_found")
 
             if amount < 0 and user.balance < abs(amount):
-                await s.rollback()
-                return False, "insufficient_funds"
+                raise _Abort("insufficient_funds")
 
             user.balance += amount
 
@@ -529,23 +525,23 @@ async def admin_balance_change(telegram_id: int, amount: Decimal) -> tuple[bool,
             )
             s.add(operation)
 
-            await s.commit()
+    except _Abort as e:
+        return False, e.code
 
-            safe_create_task(invalidate_user_cache(telegram_id))
-            safe_create_task(invalidate_stats_cache())
+    except Exception as e:
+        await log_audit(
+            "admin_balance_change_failed",
+            level="WARNING",
+            user_id=telegram_id,
+            resource_type="User",
+            details=f"amount={amount}, error={e}",
+        )
+        return False, "balance_change_error"
 
-            return True, "success"
+    safe_create_task(invalidate_user_cache(telegram_id))
+    safe_create_task(invalidate_stats_cache())
 
-        except Exception as e:
-            await s.rollback()
-            await log_audit(
-                "admin_balance_change_failed",
-                level="WARNING",
-                user_id=telegram_id,
-                resource_type="User",
-                details=f"amount={amount}, error={e}",
-            )
-            return False, "balance_change_error"
+    return True, "success"
 
 
 async def redeem_balance_promo(code: str, user_id: int) -> tuple[bool, str, Decimal | None]:
@@ -553,14 +549,13 @@ async def redeem_balance_promo(code: str, user_id: int) -> tuple[bool, str, Deci
     Redeem a balance-type promo code: add discount_value to user balance.
     Returns (success, error_key_or_empty, amount_added).
     """
-    async with Database().session() as s:
-        try:
+    try:
+        async with Database().session() as s:
             user = (await s.execute(
                 select(User).where(User.telegram_id == user_id).with_for_update()
             )).scalars().one_or_none()
             if not user:
-                await s.rollback()
-                return False, "promo.not_found", None
+                raise _Abort("promo.not_found")
 
             promo = (await s.execute(
                 select(PromoCodes).where(PromoCodes.code == code.upper()).with_for_update()
@@ -568,8 +563,7 @@ async def redeem_balance_promo(code: str, user_id: int) -> tuple[bool, str, Deci
 
             err = await promo_rule_error(s, promo, user_id, require_balance=True)
             if err:
-                await s.rollback()
-                return False, _REDEEM_PROMO_ERRORS[err], None
+                raise _Abort(_REDEEM_PROMO_ERRORS[err])
 
             amount = Decimal(str(promo.discount_value))
             user.balance += amount
@@ -581,19 +575,20 @@ async def redeem_balance_promo(code: str, user_id: int) -> tuple[bool, str, Deci
                 operation_time=datetime.now(timezone.utc),
             ))
 
-            await s.commit()
-            safe_create_task(invalidate_user_cache(user_id))
-            safe_create_task(invalidate_stats_cache())
-            return True, "", amount
+    except _Abort as e:
+        return False, e.code, None
 
-        except Exception as e:
-            await s.rollback()
-            await log_audit(
-                "promo_redeem_failed",
-                level="WARNING",
-                user_id=user_id,
-                resource_type="PromoCode",
-                resource_id=code,
-                details=str(e),
-            )
-            return False, "errors.something_wrong", None
+    except Exception as e:
+        await log_audit(
+            "promo_redeem_failed",
+            level="WARNING",
+            user_id=user_id,
+            resource_type="PromoCode",
+            resource_id=code,
+            details=str(e),
+        )
+        return False, "errors.something_wrong", None
+
+    safe_create_task(invalidate_user_cache(user_id))
+    safe_create_task(invalidate_stats_cache())
+    return True, "", amount

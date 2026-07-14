@@ -84,8 +84,7 @@ class TestItemInfo:
             current_category="TestCat",
         )
 
-        with patch('bot.main.security_middleware', None):
-            await item_info_callback_handler(call, fsm_context)
+        await item_info_callback_handler(call, fsm_context)
 
         call.message.edit_text.assert_called_once()
 
@@ -123,8 +122,7 @@ class TestItemInfo:
             current_category="InfCat",
         )
 
-        with patch('bot.main.security_middleware', None):
-            await item_info_callback_handler(call, fsm_context)
+        await item_info_callback_handler(call, fsm_context)
 
         call.message.edit_text.assert_called_once()
         text = call.message.edit_text.call_args[0][0]

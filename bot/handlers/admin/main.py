@@ -8,13 +8,9 @@ from bot.database.methods import check_role_cached
 from bot.filters import HasPermissionFilter
 from bot.database.models import Permission
 from bot.database.methods.audit import log_audit
+from bot.middleware.security import get_auth_middleware
 
 router = Router()
-
-
-def _get_auth_middleware():
-    from bot.main import auth_middleware
-    return auth_middleware
 
 
 @router.callback_query(F.data == 'console')
@@ -25,7 +21,7 @@ async def console_callback_handler(call: CallbackQuery, state: FSMContext):
     user_id = call.from_user.id
     role = await check_role_cached(user_id)
     if Permission.has_any_admin_perm(role):
-        mw = _get_auth_middleware()
+        mw = get_auth_middleware()
         maintenance = mw.maintenance_mode if mw else False
         await call.message.edit_text(
             localize("admin.menu.main"),
@@ -42,7 +38,7 @@ async def toggle_maintenance_handler(call: CallbackQuery):
     """
     Toggle maintenance mode on/off.
     """
-    mw = _get_auth_middleware()
+    mw = get_auth_middleware()
     if not mw:
         return
 

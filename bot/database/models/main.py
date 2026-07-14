@@ -1,6 +1,6 @@
 import datetime
 from decimal import Decimal
-from typing import Any, Optional
+from typing import Optional
 
 from sqlalchemy import (
     Integer, String, BigInteger, ForeignKey, Text, Boolean,
@@ -40,15 +40,6 @@ class Role(Database.BASE):
     default: Mapped[Optional[bool]] = mapped_column(Boolean, default=False, index=True)
     permissions: Mapped[Optional[int]] = mapped_column(Integer)
     users: Mapped[list["User"]] = relationship('User', backref='role', lazy='raise')
-
-    def __init__(self, name: str = None, permissions=None, **kwargs):
-        super(Role, self).__init__(**kwargs)
-        if name is not None:
-            self.name = name
-        if permissions is not None:
-            self.permissions = permissions
-        elif self.permissions is None:
-            self.permissions = 0
 
     def __str__(self):
         return self.name or ""
@@ -130,20 +121,6 @@ class User(Database.BASE):
         lazy='raise',
     )
 
-    def __init__(self, telegram_id: int = None, registration_date: datetime.datetime = None, balance=None,
-                 referral_id=None, role_id: int = None, **kw: Any):
-        super().__init__(**kw)
-        if telegram_id is not None:
-            self.telegram_id = telegram_id
-        if role_id is not None:
-            self.role_id = role_id
-        if balance is not None:
-            self.balance = balance
-        if referral_id is not None:
-            self.referral_id = referral_id
-        if registration_date is not None:
-            self.registration_date = registration_date
-
     def __str__(self):
         return str(self.telegram_id)
 
@@ -154,11 +131,6 @@ class Categories(Database.BASE):
     name: Mapped[str] = mapped_column(String(100), unique=True, nullable=False)
     items: Mapped[list["Goods"]] = relationship(
         "Goods", back_populates="category", lazy='raise', passive_deletes=True)
-
-    def __init__(self, name: str = None, **kw: Any):
-        super().__init__(**kw)
-        if name is not None:
-            self.name = name
 
     def __str__(self):
         return self.name or ""
@@ -178,22 +150,6 @@ class Goods(Database.BASE):
     values: Mapped[list["ItemValues"]] = relationship(
         "ItemValues", back_populates="item", lazy='raise', passive_deletes=True)
 
-    def __init__(self, name: str = None, price=None, description: str = None, category_id: int = None,
-                 sale_percent=None, sale_until=None, **kw: Any):
-        super().__init__(**kw)
-        if name is not None:
-            self.name = name
-        if price is not None:
-            self.price = price
-        if description is not None:
-            self.description = description
-        if category_id is not None:
-            self.category_id = category_id
-        if sale_percent is not None:
-            self.sale_percent = sale_percent
-        if sale_until is not None:
-            self.sale_until = sale_until
-
     def __str__(self):
         return self.name or ""
 
@@ -211,15 +167,6 @@ class ItemValues(Database.BASE):
         UniqueConstraint('item_id', 'value', name='uq_item_value_per_item'),
         Index('ix_item_values_item_inf', 'item_id', 'is_infinity'),
     )
-
-    def __init__(self, item_id: int = None, value: str = None, is_infinity: bool = None, **kw: Any):
-        super().__init__(**kw)
-        if item_id is not None:
-            self.item_id = item_id
-        if value is not None:
-            self.value = value
-        if is_infinity is not None:
-            self.is_infinity = is_infinity
 
     def __str__(self):
         return f"#{self.id} ({self.item_id})"
@@ -244,22 +191,6 @@ class BoughtGoods(Database.BASE):
         Index('ix_bought_goods_buyer_datetime', 'buyer_id', 'bought_datetime'),
     )
 
-    def __init__(self, item_name: str = None, value: str = None, price=None, bought_datetime=None,
-                 unique_id=None, buyer_id: int = None, **kw: Any):
-        super().__init__(**kw)
-        if item_name is not None:
-            self.item_name = item_name
-        if value is not None:
-            self.value = value
-        if price is not None:
-            self.price = price
-        if buyer_id is not None:
-            self.buyer_id = buyer_id
-        if bought_datetime is not None:
-            self.bought_datetime = bought_datetime
-        if unique_id is not None:
-            self.unique_id = unique_id
-
     def __str__(self):
         return self.item_name or ""
 
@@ -278,15 +209,6 @@ class Operations(Database.BASE):
     __table_args__ = (
         Index('ix_operations_time', 'operation_time'),
     )
-
-    def __init__(self, user_id: int = None, operation_value=None, operation_time=None, **kw: Any):
-        super().__init__(**kw)
-        if user_id is not None:
-            self.user_id = user_id
-        if operation_value is not None:
-            self.operation_value = operation_value
-        if operation_time is not None:
-            self.operation_time = operation_time
 
     def __str__(self):
         return f"#{self.id}"
@@ -347,17 +269,6 @@ class ReferralEarnings(Database.BASE):
         Index('ix_referral_earnings_referrer_created', 'referrer_id', 'created_at'),
         Index('ix_referral_earnings_referral_created', 'referral_id', 'created_at'),
     )
-
-    def __init__(self, referrer_id: int = None, referral_id: int = None, amount=None, original_amount=None, **kw: Any):
-        super().__init__(**kw)
-        if referrer_id is not None:
-            self.referrer_id = referrer_id
-        if referral_id is not None:
-            self.referral_id = referral_id
-        if amount is not None:
-            self.amount = amount
-        if original_amount is not None:
-            self.original_amount = original_amount
 
     def __str__(self):
         return f"#{self.id}"

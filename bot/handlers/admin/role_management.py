@@ -401,10 +401,9 @@ async def assign_role_confirm(call: CallbackQuery):
 
     await set_role(target_id, role_id)
 
-    # Invalidate middleware admin cache so new permissions take effect immediately
-    from bot.main import auth_middleware
-    if auth_middleware:
-        auth_middleware.invalidate_admin_cache(target_id)
+    # Invalidate the role cache (Redis + in-memory, every worker) so the new permissions take effect immediately instead of after TTL expiry.
+    from bot.middleware.security import invalidate_auth_caches
+    invalidate_auth_caches(target_id)
 
     user_info = await call.message.bot.get_chat(target_id)
     await call.message.edit_text(

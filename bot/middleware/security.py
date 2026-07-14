@@ -297,6 +297,11 @@ def set_auth_middleware(instance: "AuthenticationMiddleware") -> None:
     _auth_middleware_instance = instance
 
 
+def get_auth_middleware() -> "AuthenticationMiddleware | None":
+    """Return the live AuthenticationMiddleware instance registered at startup."""
+    return _auth_middleware_instance
+
+
 def _drop_redis_role(user_id: int) -> None:
     """Schedule deletion of one user's shared role cache entry (best-effort)."""
     from bot.misc.caching import get_cache_manager
