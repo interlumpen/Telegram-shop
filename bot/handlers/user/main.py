@@ -7,7 +7,7 @@ from aiogram.exceptions import TelegramBadRequest, TelegramForbiddenError
 import datetime
 
 from bot.database.methods import (
-    select_max_role_id, create_user, check_role, check_user,
+    select_max_role_id, create_user, check_role_cached, check_user,
     select_user_operations, select_user_items, check_user_cached
 )
 from bot.database.methods.read import get_cart_count, invalidate_user_cache
@@ -37,39 +37,41 @@ async def start(message: Message, state: FSMContext):
     user_id = message.from_user.id
     await state.clear()
 
-    owner_max_role = await select_max_role_id()
-    user_role = owner_max_role if user_id == EnvKeys.OWNER_ID else 1
+    role_data = await check_role_cached(user_id)
 
-    referral_id = None
-    parts = message.text.split(maxsplit=1)
-    if len(parts) > 1:
-        payload = parts[1].strip()
-        if payload.isdigit() and payload != str(user_id):
-            candidate = int(payload)
-            if await check_user(candidate) is not None:
-                referral_id = candidate
+    if role_data == 0:
+        owner_max_role = await select_max_role_id()
+        user_role = owner_max_role if user_id == EnvKeys.OWNER_ID else 1
 
-    is_new_user = (await check_user(user_id)) is None
+        referral_id = None
+        parts = message.text.split(maxsplit=1)
+        if len(parts) > 1:
+            payload = parts[1].strip()
+            if payload.isdigit() and payload != str(user_id):
+                candidate = int(payload)
+                if await check_user(candidate) is not None:
+                    referral_id = candidate
 
-    # registration_date is DateTime
-    await create_user(
-        telegram_id=int(user_id),
-        registration_date=datetime.datetime.now(datetime.timezone.utc),
-        referral_id=referral_id,
-        role=user_role
-    )
+        # registration_date is DateTime
+        await create_user(
+            telegram_id=int(user_id),
+            registration_date=datetime.datetime.now(datetime.timezone.utc),
+            referral_id=referral_id,
+            role=user_role
+        )
 
-    await invalidate_user_cache(user_id)
-    from bot.middleware.security import invalidate_auth_caches
-    invalidate_auth_caches(user_id)
+        await invalidate_user_cache(user_id)
+        from bot.middleware.security import invalidate_auth_caches
+        invalidate_auth_caches(user_id)
 
-    if is_new_user:
         metrics = get_metrics()
         if metrics:
             metrics.track_event("registration", user_id)
 
+        # Re-read (now cached) so the menu reflects the freshly assigned role.
+        role_data = await check_role_cached(user_id)
+
     channel_username = _parse_channel_username()
-    role_data = await check_role(user_id)
 
     # Optional subscription check
     try:

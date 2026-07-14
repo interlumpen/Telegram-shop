@@ -125,7 +125,7 @@ class CacheManager:
             return 0
         try:
             keys = []
-            async for key in self.redis.scan_iter(match=pattern):
+            async for key in self.redis.scan_iter(match=pattern, count=500):
                 keys.append(key)
 
             if keys:
