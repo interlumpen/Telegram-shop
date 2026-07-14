@@ -14,8 +14,7 @@ RUN pip install --no-cache-dir --prefix=/install -r requirements.txt
 FROM python:3.11-slim
 
 RUN apt-get update && apt-get install -y \
-    libpq-dev \
-    curl \
+    libpq5 \
     gosu \
     && rm -rf /var/lib/apt/lists/*
 

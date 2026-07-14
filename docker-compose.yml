@@ -31,7 +31,6 @@ services:
       - .env
     environment:
       POSTGRES_HOST: db
-      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER}:${POSTGRES_PASSWORD}@db:${DB_PORT}/${POSTGRES_DB}
       REDIS_HOST: redis
       REDIS_PORT: 6379
       REDIS_DB: 0
@@ -50,7 +49,8 @@ services:
         condition: service_healthy
     restart: unless-stopped
     healthcheck:
-      test: [ "CMD", "curl", "-f", "http://localhost:9090/health" ]
+      # urlopen raises on a non-2xx (/health returns 503 when the DB is down) → exit 1.
+      test: [ "CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:9090/health', timeout=5)" ]
       interval: 30s
       timeout: 10s
       retries: 3
