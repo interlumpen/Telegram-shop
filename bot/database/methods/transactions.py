@@ -37,7 +37,8 @@ _REDEEM_PROMO_ERRORS = {
 }
 
 
-async def buy_item_transaction(telegram_id: int, item_name: str, promo_code: str = None) -> tuple[bool, str, dict | None]:
+async def buy_item_transaction(telegram_id: int, item_name: str, promo_code: str = None) -> tuple[
+    bool, str, dict | None]:
     """
     Complete transactional purchase of goods with checks and locks.
     Returns: (success, message, purchase_data)
@@ -239,7 +240,7 @@ async def process_payment_with_referral(
             if clamped_percent > 0 and user.referral_id and user.referral_id != user_id:
                 # Quantize to 2 dp to round on write
                 referral_amount = (
-                    (Decimal(clamped_percent) / Decimal(100)) * amount
+                        (Decimal(clamped_percent) / Decimal(100)) * amount
                 ).quantize(Decimal("0.01"))
 
                 if referral_amount > 0:
@@ -350,6 +351,7 @@ async def checkout_cart_transaction(user_id: int) -> tuple[bool, str, list | Non
                     query = select(ItemValues).where(ItemValues.item_id == goods.id)
                     if claimed_value_ids:
                         query = query.where(ItemValues.id.notin_(claimed_value_ids))
+                    query = query.order_by(ItemValues.is_infinity.desc())
                     item_value = (await s.execute(
                         query.with_for_update()
                     )).scalars().first()
@@ -358,7 +360,9 @@ async def checkout_cart_transaction(user_id: int) -> tuple[bool, str, list | Non
                         items_to_remove.append(ci.id)
                         continue
 
-                    claimed_value_ids.add(item_value.id)
+                    # Reserve only limited units so two cart lines can't claim the same one. An infinite value stays available for the remaining lines
+                    if not item_value.is_infinity:
+                        claimed_value_ids.add(item_value.id)
 
                     # Sale price is the authoritative base; promo stacks on top.
                     price, _on_sale, _original_price = effective_price(goods)
