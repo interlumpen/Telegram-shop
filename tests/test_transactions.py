@@ -7,9 +7,11 @@ import pytest
 
 from bot.database.methods.transactions import buy_item_transaction, \
     process_payment_with_referral, \
-    admin_balance_change
-from bot.database.methods.create import create_pending_payment
-from bot.database.models.main import BoughtGoods, ItemValues, Goods, Payments, Operations, ReferralEarnings, User
+    admin_balance_change, checkout_cart_transaction
+from bot.database.methods.create import create_pending_payment, add_to_cart
+from bot.handlers.user.cart import _receipt_total
+from bot.database.models.main import BoughtGoods, ItemValues, Goods, Payments, Operations, ReferralEarnings, User, \
+    CartItems, Categories, PromoCodes, PromoCodeUsages
 
 
 async def _get_balance(telegram_id: int) -> float:
@@ -457,3 +459,200 @@ class TestAdminBalanceChange:
             assert len(ops) == 2
             assert float(ops[0].operation_value) == 500.0
             assert float(ops[1].operation_value) == -300.0
+
+
+async def _make_promo(code, discount_type="percent", value="10", *, category_id=None):
+    async with Database().session() as s:
+        s.add(PromoCodes(
+            code=code.upper(), discount_type=discount_type,
+            discount_value=Decimal(str(value)), max_uses=0,
+            current_uses=0, is_active=True, category_id=category_id,
+        ))
+
+
+async def _cart_rows(user_id: int) -> int:
+    async with Database().session() as s:
+        return (await s.execute(
+            select(func.count()).select_from(CartItems).where(CartItems.user_id == user_id)
+        )).scalar()
+
+
+async def _stock_rows(item_name: str) -> int:
+    async with Database().session() as s:
+        goods = (await s.execute(select(Goods).where(Goods.name == item_name))).scalars().first()
+        return (await s.execute(
+            select(func.count()).select_from(ItemValues).where(ItemValues.item_id == goods.id)
+        )).scalar()
+
+
+class TestCheckoutCartTransaction:
+    async def test_quantity_delivers_one_row_per_unit(self, user_factory, item_factory):
+        await user_factory(telegram_id=400001, balance=500)
+        await item_factory(name="Qty3", price=50,
+                           values=[("a", False), ("b", False), ("c", False)])
+        await add_to_cart(400001, "Qty3", quantity=3)
+
+        success, msg, results = await checkout_cart_transaction(400001)
+
+        assert (success, msg) == (True, "success")
+        assert len(results) == 3
+        assert {r["value"] for r in results} == {"a", "b", "c"}   # distinct values
+        assert await _get_balance(400001) == 350.0                # 500 - 3*50
+        assert await _stock_rows("Qty3") == 0
+        assert await _cart_rows(400001) == 0
+
+        async with Database().session() as s:
+            bought = (await s.execute(
+                select(BoughtGoods).where(BoughtGoods.buyer_id == 400001)
+            )).scalars().all()
+            assert len(bought) == 3
+            assert sum(float(b.price) for b in bought) == 150.0
+
+    async def test_partial_stock_aborts_and_changes_nothing(self, user_factory, item_factory):
+        await user_factory(telegram_id=400002, balance=500)
+        await item_factory(name="Qty2of3", price=50, values=[("a", False), ("b", False)])
+        await add_to_cart(400002, "Qty2of3", quantity=3)
+
+        success, msg, results = await checkout_cart_transaction(400002)
+
+        assert (success, msg, results) == (False, "out_of_stock", None)
+        # The abort must be atomic: balance, stock and cart all untouched.
+        assert await _get_balance(400002) == 500.0
+        assert await _stock_rows("Qty2of3") == 2
+        assert await _cart_rows(400002) == 1
+
+    async def test_infinite_value_serves_every_unit(self, user_factory, item_factory):
+        await user_factory(telegram_id=400003, balance=500)
+        await item_factory(name="QtyInf", price=20, values=[("forever", True)])
+        await add_to_cart(400003, "QtyInf", quantity=5)
+
+        success, msg, results = await checkout_cart_transaction(400003)
+
+        assert (success, msg) == (True, "success")
+        assert len(results) == 5
+        assert [r["value"] for r in results] == ["forever"] * 5
+        assert await _get_balance(400003) == 400.0     # 500 - 5*20
+        assert await _stock_rows("QtyInf") == 1        # infinite row is not consumed
+
+    async def test_zero_stock_drops_the_line(self, user_factory, item_factory):
+        """No stock at all drops the line; the rest of the cart still buys."""
+        await user_factory(telegram_id=400004, balance=500)
+        await item_factory(name="QtyGone", price=50, values=[])
+        await item_factory(name="QtyOk", price=50, values=[("a", False)])
+        await add_to_cart(400004, "QtyGone")
+        await add_to_cart(400004, "QtyOk")
+
+        success, msg, results = await checkout_cart_transaction(400004)
+
+        assert (success, msg) == (True, "success")
+        assert [r["item_name"] for r in results] == ["QtyOk"]
+        assert await _get_balance(400004) == 450.0
+
+    async def test_insufficient_funds_for_quantity(self, user_factory, item_factory):
+        await user_factory(telegram_id=400005, balance=100)
+        await item_factory(name="QtyRich", price=50,
+                           values=[("a", False), ("b", False), ("c", False)])
+        await add_to_cart(400005, "QtyRich", quantity=3)
+
+        success, msg, results = await checkout_cart_transaction(400005)
+
+        assert (success, msg, results) == (False, "insufficient_funds", None)
+        assert await _get_balance(400005) == 100.0
+        assert await _stock_rows("QtyRich") == 3
+
+    async def test_percent_promo_scales_per_unit(self, user_factory, item_factory):
+        await user_factory(telegram_id=400006, balance=500)
+        await item_factory(name="QtyPct", price=100, values=[("a", False), ("b", False)])
+        await _make_promo("PCT10", "percent", 10)
+        await add_to_cart(400006, "QtyPct", promo_code="PCT10", quantity=2)
+
+        success, msg, results = await checkout_cart_transaction(400006)
+
+        assert (success, msg) == (True, "success")
+        # 10% off each unit: 90 * 2 = 180
+        assert await _get_balance(400006) == 320.0
+        assert sum(r["price"] for r in results) == 180.0
+
+    async def test_fixed_promo_applies_once_per_line(self, user_factory, item_factory):
+        await user_factory(telegram_id=400007, balance=500)
+        await item_factory(name="QtyFix", price=100, values=[("a", False), ("b", False)])
+        await _make_promo("FIX30", "fixed", 30)
+        await add_to_cart(400007, "QtyFix", promo_code="FIX30", quantity=2)
+
+        success, msg, results = await checkout_cart_transaction(400007)
+
+        assert (success, msg) == (True, "success")
+        # 200 - 30 once = 170, NOT 200 - 60
+        assert await _get_balance(400007) == 330.0
+        assert sum(r["price"] for r in results) == 170.0
+
+    async def test_fixed_promo_cannot_drive_line_negative(self, user_factory, item_factory):
+        await user_factory(telegram_id=400008, balance=500)
+        await item_factory(name="QtyFloor", price=10, values=[("a", False)])
+        await _make_promo("FIX999", "fixed", 999)
+        await add_to_cart(400008, "QtyFloor", promo_code="FIX999")
+
+        success, msg, results = await checkout_cart_transaction(400008)
+
+        assert (success, msg) == (True, "success")
+        assert sum(r["price"] for r in results) == 0.0
+        assert await _get_balance(400008) == 500.0
+
+    async def test_uneven_split_still_sums_to_charge(self, user_factory, item_factory):
+        await user_factory(telegram_id=400009, balance=500)
+        await item_factory(name="QtySplit", price=10,
+                           values=[("a", False), ("b", False), ("c", False)])
+        # 30 - 0.01 = 29.99 across 3 units -> 10.00 / 10.00 / 9.99
+        await _make_promo("FIX001", "fixed", "0.01")
+        await add_to_cart(400009, "QtySplit", promo_code="FIX001", quantity=3)
+
+        success, msg, results = await checkout_cart_transaction(400009)
+
+        assert (success, msg) == (True, "success")
+        assert len(results) == 3
+        assert sorted(r["price"] for r in results) == [9.99, 10.0, 10.0]
+        assert _receipt_total(results) == Decimal("29.99")   # no cents lost or invented
+        assert await _get_balance(400009) == round(500.0 - 29.99, 2)
+
+        async with Database().session() as s:
+            bought = (await s.execute(
+                select(BoughtGoods).where(BoughtGoods.buyer_id == 400009)
+            )).scalars().all()
+            assert sum((b.price for b in bought), Decimal(0)) == Decimal("29.99")
+
+    async def test_category_promo_recorded_once_across_lines(self, user_factory, item_factory,
+                                                             category_factory):
+        await user_factory(telegram_id=400010, balance=1000)
+        await category_factory("PromoCat")
+        await item_factory(name="PC1", price=50, category="PromoCat", values=[("a", False)])
+        await item_factory(name="PC2", price=50, category="PromoCat", values=[("b", False)])
+
+        async with Database().session() as s:
+            cat_id = (await s.execute(
+                select(Categories.id).where(Categories.name == "PromoCat")
+            )).scalar()
+        await _make_promo("CAT10", "percent", 10, category_id=cat_id)
+
+        await add_to_cart(400010, "PC1", promo_code="CAT10")
+        await add_to_cart(400010, "PC2", promo_code="CAT10")
+
+        success, msg, results = await checkout_cart_transaction(400010)
+
+        assert (success, msg) == (True, "success")
+        assert len(results) == 2
+
+        async with Database().session() as s:
+            usages = (await s.execute(
+                select(func.count()).select_from(PromoCodeUsages)
+                .where(PromoCodeUsages.user_id == 400010)
+            )).scalar()
+            assert usages == 1
+            promo = (await s.execute(
+                select(PromoCodes).where(PromoCodes.code == "CAT10")
+            )).scalars().one()
+            assert promo.current_uses == 1
+
+    async def test_empty_cart(self, user_factory):
+        await user_factory(telegram_id=400011, balance=100)
+        success, msg, results = await checkout_cart_transaction(400011)
+        assert (success, msg, results) == (False, "cart_empty", None)

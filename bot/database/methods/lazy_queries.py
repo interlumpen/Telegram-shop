@@ -1,5 +1,5 @@
 from typing import Any
-from sqlalchemy import func, select
+from sqlalchemy import func, select, or_
 from sqlalchemy import desc
 from bot.database import Database
 from bot.database.models import (
@@ -38,6 +38,37 @@ async def query_items_in_category(category_name: str, offset: int = 0, limit: in
             return count_result.scalar() or 0
         result = await s.execute(
             query.order_by(Goods.name.asc()).offset(offset).limit(limit)
+        )
+        return [row[0] for row in result.all()]
+
+
+async def query_goods_search(query: str, offset: int = 0, limit: int = 10,
+                             count_only: bool = False) -> Any:
+    """Search goods by name or description with pagination.
+
+    Returns a list of names, matching query_items_in_category's shape so the
+    item card and the index-into-page-list convention work unchanged.
+    """
+    q = (query or "").strip()
+    if not q:
+        return 0 if count_only else []
+
+    # Escape LIKE wildcards: without this, searching 100% matches everything and "a_b" matches "axb".
+    esc = q.replace('\\', '\\\\').replace('%', '\\%').replace('_', '\\_')
+    pattern = f"%{esc}%"
+
+    async with Database().session() as s:
+        base = select(Goods.name).where(
+            or_(
+                Goods.name.ilike(pattern, escape='\\'),
+                Goods.description.ilike(pattern, escape='\\'),
+            )
+        )
+        if count_only:
+            count_result = await s.execute(select(func.count()).select_from(base.subquery()))
+            return count_result.scalar() or 0
+        result = await s.execute(
+            base.order_by(Goods.name.asc()).offset(offset).limit(limit)
         )
         return [row[0] for row in result.all()]
 

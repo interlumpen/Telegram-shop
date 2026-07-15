@@ -341,11 +341,16 @@ class CartItems(Database.BASE):
     item_id: Mapped[int] = mapped_column(
         Integer, ForeignKey('goods.id', ondelete='CASCADE'), nullable=False, index=True)
     promo_code: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
+    quantity: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
     added_at: Mapped[datetime.datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now())
+    __table_args__ = (
+        UniqueConstraint('user_id', 'item_id', name='uq_cart_item_per_user'),
+        CheckConstraint('quantity > 0', name='ck_cart_items_quantity_positive'),
+    )
 
     def __str__(self):
-        return f"cart#{self.id} item={self.item_id}"
+        return f"cart#{self.id} item={self.item_id} x{self.quantity}"
 
 
 class Reviews(Database.BASE):
@@ -366,6 +371,23 @@ class Reviews(Database.BASE):
 
     def __str__(self):
         return f"item {self.item_id} ({self.rating}★)"
+
+
+class StockSubscriptions(Database.BASE):
+    __tablename__ = 'stock_subscriptions'
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    user_id: Mapped[int] = mapped_column(
+        BigInteger, ForeignKey('users.telegram_id', ondelete='CASCADE'), nullable=False, index=True)
+    item_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey('goods.id', ondelete='CASCADE'), nullable=False, index=True)
+    created_at: Mapped[datetime.datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now())
+    __table_args__ = (
+        UniqueConstraint('user_id', 'item_id', name='uq_stock_sub_per_user_item'),
+    )
+
+    def __str__(self):
+        return f"sub u={self.user_id} item={self.item_id}"
 
 
 async def register_models():

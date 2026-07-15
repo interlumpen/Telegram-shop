@@ -100,6 +100,77 @@ class TestSecurityMiddlewareCriticalActions:
         assert self.middleware.is_replay_protected("asr_2_123") is False
 
 
+class TestRateLimitActionMapping:
+    def setup_method(self):
+        from bot.middleware.rate_limit import RateLimitMiddleware
+        self.mw = RateLimitMiddleware()
+
+    def _action(self, data, state=None):
+        from unittest.mock import MagicMock
+        from aiogram.types import CallbackQuery
+        call = MagicMock(spec=CallbackQuery)
+        call.data = data
+        return self.mw._get_action_from_event(call, {"raw_state": state})
+
+    @pytest.mark.parametrize("data", ["cat:1:0", "itm:2:0", "sitm:0:0",
+                                      "categories-page_2", "gp_1", "shop"])
+    def test_browsing_is_shop_view(self, data):
+        assert self._action(data) == "shop_view"
+
+    @pytest.mark.parametrize("data", ["buy_item", "add_to_cart", "cart_checkout_confirm"])
+    def test_purchase_paths_are_buy_item(self, data):
+        assert self._action(data) == "buy_item"
+
+    def test_shop_search_is_search_not_shop_view(self):
+        assert self._action("shop_search") == "search"
+
+    def test_search_result_navigation_is_not_billed_as_a_search(self):
+        assert self._action("sp_2") == "shop_view"
+        assert self._action("sp_2") == self._action("gp_2")
+
+    def test_top_up_and_payment(self):
+        assert self._action("replenish_balance") == "top_up"
+        assert self._action("pay_stars") == "payment"
+
+    def test_unknown_callback_is_default(self):
+        assert self._action("something_else") == "default"
+
+    def test_search_text_input_recognised_by_state(self):
+        from unittest.mock import MagicMock
+        from aiogram.types import Message
+        from bot.states import ShopStates
+
+        message = MagicMock(spec=Message)
+        message.text = "netflix"
+        action = self.mw._get_action_from_event(
+            message, {"raw_state": ShopStates.waiting_search_query.state}
+        )
+        assert action == "search"
+
+    def test_plain_text_without_state_is_default(self):
+        from unittest.mock import MagicMock
+        from aiogram.types import Message
+
+        message = MagicMock(spec=Message)
+        message.text = "netflix"
+        assert self.mw._get_action_from_event(message, {"raw_state": None}) == "default"
+
+    def test_every_mapped_action_has_a_limit(self):
+        config = RateLimitConfig()
+        for action in set(self.mw.action_mapping.values()):
+            assert action in config.action_limits, f"{action!r} is mapped but unlimited"
+
+    def test_startup_does_not_shadow_the_limits(self):
+        from unittest.mock import MagicMock, patch
+        from bot.main import _setup_rate_limiting
+
+        with patch('bot.main.setup_rate_limiting') as setup:
+            _setup_rate_limiting(MagicMock(), auth_middleware=MagicMock())
+
+        passed_config = setup.call_args[0][1]
+        assert passed_config.action_limits == RateLimitConfig().action_limits
+
+
 class TestRateLimiter:
 
     def setup_method(self):

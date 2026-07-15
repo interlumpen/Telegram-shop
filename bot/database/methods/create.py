@@ -1,13 +1,18 @@
 from datetime import datetime
 from decimal import Decimal
 
-from sqlalchemy import select, exists
+from sqlalchemy import select, exists, func as sa_func
+from sqlalchemy.exc import IntegrityError
 
 from bot.database.models import User, ItemValues, Goods, Categories, Operations, Payments, ReferralEarnings, Role
-from bot.database.models.main import PromoCodes, CartItems, Reviews
+from bot.database.models.main import PromoCodes, CartItems, Reviews, StockSubscriptions
 from bot.database import Database
 from bot.database.methods.cache_utils import safe_create_task
-from bot.database.methods.read import invalidate_stats_cache
+from bot.database.methods.read import invalidate_stats_cache, invalidate_item_cache
+
+# Cart limits: distinct positions per cart, and units of any one position.
+CART_MAX_ITEMS = 10
+CART_MAX_QTY_PER_ITEM = 99
 
 
 async def create_user(telegram_id: int, registration_date: datetime, referral_id: int | None, role: int = 1) -> None:
@@ -53,29 +58,28 @@ async def add_values_to_item(item_name: str, value: str, is_infinity: bool) -> b
     if not value_norm:
         return False
 
-    async with Database().session() as s:
-        item_id = (await s.execute(select(Goods.id).where(Goods.name == item_name))).scalar()
-        if not item_id:
-            return False
+    try:
+        async with Database().session() as s:
+            item_id = (await s.execute(select(Goods.id).where(Goods.name == item_name))).scalar()
+            if not item_id:
+                return False
 
-        dup = (await s.execute(
-            select(exists().where(
-                ItemValues.item_id == item_id,
-                ItemValues.value == value_norm,
-            ))
-        )).scalar()
-        if dup:
-            return False
+            dup = (await s.execute(
+                select(exists().where(
+                    ItemValues.item_id == item_id,
+                    ItemValues.value == value_norm,
+                ))
+            )).scalar()
+            if dup:
+                return False
 
-        try:
             s.add(ItemValues(item_id=item_id, value=value_norm, is_infinity=bool(is_infinity)))
-            await s.flush()
-            from bot.database.methods.read import invalidate_item_cache
-            from bot.database.methods.cache_utils import safe_create_task
-            safe_create_task(invalidate_item_cache(item_name))
-            return True
-        except Exception:
-            return False
+    except IntegrityError:
+        return False
+
+    # Invalidate only after the commit succeeded.
+    safe_create_task(invalidate_item_cache(item_name))
+    return True
 
 
 async def create_category(category_name: str) -> None:
@@ -134,13 +138,13 @@ async def create_role(name: str, permissions: int) -> int | None:
 
 
 async def create_promo_code(
-    code: str,
-    discount_type: str,
-    discount_value,
-    max_uses: int = 0,
-    expires_at=None,
-    category_id: int = None,
-    item_id: int = None,
+        code: str,
+        discount_type: str,
+        discount_value,
+        max_uses: int = 0,
+        expires_at=None,
+        category_id: int = None,
+        item_id: int = None,
 ) -> int | None:
     """Create a promo code. Returns ID or None if code already exists."""
     from decimal import Decimal
@@ -162,17 +166,9 @@ async def create_promo_code(
         return promo.id
 
 
-async def add_to_cart(user_id: int, item_name: str, promo_code: str = None) -> tuple[bool, str]:
-    """Add item to user's cart. Returns (success, message)."""
-    from sqlalchemy import func as sa_func
-    CART_MAX_ITEMS = 10
+async def _add_to_cart_once(user_id: int, item_name: str, promo_code: str, quantity: int) -> tuple[bool, str]:
+    """One attempt at add_to_cart. See add_to_cart for semantics."""
     async with Database().session() as s:
-        count = (await s.execute(
-            select(sa_func.count(CartItems.id)).where(CartItems.user_id == user_id)
-        )).scalar() or 0
-        if count >= CART_MAX_ITEMS:
-            return False, "cart_full"
-
         # Resolve to the goods id (also serves as the existence check).
         item_id = (await s.execute(
             select(Goods.id).where(Goods.name == item_name)
@@ -180,9 +176,79 @@ async def add_to_cart(user_id: int, item_name: str, promo_code: str = None) -> t
         if not item_id:
             return False, "item_not_found"
 
-        s.add(CartItems(user_id=user_id, item_id=item_id, promo_code=promo_code))
+        existing = (await s.execute(
+            select(CartItems)
+            .where(CartItems.user_id == user_id, CartItems.item_id == item_id)
+            .with_for_update()
+        )).scalars().first()
+
+        if existing:
+            if existing.quantity + quantity > CART_MAX_QTY_PER_ITEM:
+                return False, "cart_qty_max"
+            existing.quantity += quantity
+            if promo_code:
+                # Latest applied promo wins for the whole line.
+                existing.promo_code = promo_code
+            return True, "success"
+
+        # Only a new line can fill the cart up
+        count = (await s.execute(
+            select(sa_func.count(CartItems.id)).where(CartItems.user_id == user_id)
+        )).scalar() or 0
+        if count >= CART_MAX_ITEMS:
+            return False, "cart_full"
+
+        s.add(CartItems(user_id=user_id, item_id=item_id, promo_code=promo_code, quantity=quantity))
         return True, "success"
 
+
+async def add_to_cart(user_id: int, item_name: str, promo_code: str = None, quantity: int = 1) -> tuple[bool, str]:
+    """Add `quantity` units of an item to the user's cart.
+
+    One row per (user, item): adding something already in the cart increments the existing line rather than inserting a duplicate.
+
+    Returns (success, message).
+    """
+    if quantity < 1:
+        return False, "invalid_quantity"
+
+    try:
+        return await _add_to_cart_once(user_id, item_name, promo_code, quantity)
+    except IntegrityError:
+        # Lost the uq_cart_item_per_user race against a concurrent add. Retry once: this attempt finds the row the winner inserted and increments it.
+        try:
+            return await _add_to_cart_once(user_id, item_name, promo_code, quantity)
+        except IntegrityError:
+            return False, "cart_conflict"
+
+
+async def subscribe_to_stock(user_id: int, item_name: str) -> tuple[bool, str]:
+    """Subscribe a user to the restock notification for an item.
+
+    Idempotent: subscribing twice is a success, not an error.
+    Returns (success, code).
+    """
+    try:
+        async with Database().session() as s:
+            item_id = (await s.execute(select(Goods.id).where(Goods.name == item_name))).scalar()
+            if not item_id:
+                return False, "item_not_found"
+
+            already = (await s.execute(
+                select(exists().where(
+                    StockSubscriptions.user_id == user_id,
+                    StockSubscriptions.item_id == item_id,
+                ))
+            )).scalar()
+            if already:
+                return True, "already_subscribed"
+
+            s.add(StockSubscriptions(user_id=user_id, item_id=item_id))
+    except IntegrityError:
+        # Lost the uq_stock_sub_per_user_item race — the subscription now exists, which is what the caller wanted anyway.
+        return True, "already_subscribed"
+
+    return True, "subscribed"
 
 
 async def create_review(user_id: int, item_name: str, rating: int, text: str = None) -> int | None:

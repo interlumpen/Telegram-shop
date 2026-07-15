@@ -9,6 +9,7 @@ from bot.database.methods import (
     check_category_cached, get_item_info_cached, create_item, add_values_to_item
 )
 from bot.handlers.other import _parse_channel_username
+from bot.handlers.admin._common import _notify_restock_safe
 from bot.keyboards.inline import back, question_buttons, simple_buttons
 from bot.database.methods.audit import log_audit
 from bot.filters import HasPermissionFilter
@@ -192,6 +193,9 @@ async def finish_adding_items_callback_handler(call: CallbackQuery, state):
 
     await call.message.edit_text("\n".join(text_lines), parse_mode="HTML", reply_markup=back("goods_management"))
 
+    if added:
+        await _notify_restock_safe(call.bot, item_name)
+
     # Optionally notify a channel
     channel_username = _parse_channel_username()
     if channel_username:
@@ -238,9 +242,13 @@ async def finish_adding_item_callback_handler(message: Message, state):
     # 1) Create position
     await create_item(item_name, item_description, item_price, category_name)
     # 2) Add 1 “infinite” value
-    await add_values_to_item(item_name, single_value, True)
+    added = await add_values_to_item(item_name, single_value, True)
 
-    # 3) Optionally notify a channel
+    # 3) Stock is committed — notify anyone waiting on this position.
+    if added:
+        await _notify_restock_safe(message.bot, item_name)
+
+    # 4) Optionally notify a channel
     channel_username = _parse_channel_username()
     if channel_username:
         try:

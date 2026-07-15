@@ -45,6 +45,24 @@ class _Abort(Exception):
         super().__init__(code)
 
 
+def _split_amount(total: Decimal, n: int) -> list[Decimal]:
+    """Split `total` into `n` amounts that sum back to it exactly.
+
+    A cart line is priced as a whole (a fixed promo comes off the line once),
+    but each delivered unit gets its own BoughtGoods row. Dividing the line by
+    n and rounding each share would drift, so the remainder cents are handed
+    out one per row: sum(result) == total, always.
+    """
+    if n <= 0:
+        return []
+    cents = int((total * 100).to_integral_value())
+    base, extra = divmod(cents, n)
+    return [
+        Decimal(base + (1 if i < extra else 0)) / 100
+        for i in range(n)
+    ]
+
+
 async def buy_item_transaction(telegram_id: int, item_name: str, promo_code: str = None) -> tuple[
     bool, str, dict | None]:
     """
@@ -339,8 +357,8 @@ async def checkout_cart_transaction(user_id: int) -> tuple[bool, str, list | Non
                 items_to_remove = []
                 # promo_id -> promo; a promo is redeemed once per checkout even if it
                 # is attached to multiple cart items (avoids uq_promo_usage_per_user).
+                # A category-bound promo can still ride several lines.
                 promos_to_record: dict[int, PromoCodes] = {}
-                claimed_value_ids: set[int] = set()
 
                 for ci in cart_items:
                     goods = goods_by_id.get(ci.item_id)
@@ -349,25 +367,53 @@ async def checkout_cart_transaction(user_id: int) -> tuple[bool, str, list | Non
                         items_to_remove.append(ci.id)
                         continue
 
-                    query = select(ItemValues).where(ItemValues.item_id == goods.id)
-                    if claimed_value_ids:
-                        query = query.where(ItemValues.id.notin_(claimed_value_ids))
-                    query = query.order_by(ItemValues.is_infinity.desc())
-                    item_value = (await s.execute(
-                        query.with_for_update()
+                    qty = ci.quantity
+
+                    # An infinite value satisfies any quantity from a single row and
+                    # is never consumed, so check it first and short-circuit: never
+                    # mix infinite and limited rows to fill one line.
+
+                    # No FOR UPDATE needed — the goods row lock taken above already
+                    # excludes concurrent stock mutation for this position, and
+                    # ix_item_values_item_inf serves this predicate exactly.
+                    inf_value = (await s.execute(
+                        select(ItemValues)
+                        .where(ItemValues.item_id == goods.id, ItemValues.is_infinity.is_(True))
+                        .limit(1)
                     )).scalars().first()
 
-                    if not item_value:
-                        items_to_remove.append(ci.id)
-                        continue
+                    if inf_value:
+                        delivered = [inf_value.value] * qty
+                        values_to_delete = []
+                    else:
+                        # Claim qty rows. Safe under the goods lock: no other checkout
+                        # can be selecting or deleting this position's values, so the
+                        # FOR UPDATE ... LIMIT cannot be re-evaluated short by a peer.
+                        rows = (await s.execute(
+                            select(ItemValues)
+                            .where(ItemValues.item_id == goods.id)
+                            .order_by(ItemValues.id)
+                            .limit(qty)
+                            .with_for_update()
+                        )).scalars().all()
 
-                    # Reserve only limited units so two cart lines can't claim the same one. An infinite value stays available for the remaining lines
-                    if not item_value.is_infinity:
-                        claimed_value_ids.add(item_value.id)
+                        if not rows:
+                            # Nothing in stock at all: drop the line, buy the rest.
+                            items_to_remove.append(ci.id)
+                            continue
+
+                        if len(rows) < qty:
+                            # Partial stock. Also catches the admin delete path, which
+                            # does not take the goods lock: a concurrently removed row
+                            # shows up as a short read here rather than a phantom.
+                            raise _Abort("out_of_stock")
+
+                        delivered = [r.value for r in rows]
+                        values_to_delete = rows
 
                     # Sale price is the authoritative base; promo stacks on top.
                     price, _on_sale, _original_price = effective_price(goods)
-                    final_price = price
+                    line_price = (price * qty).quantize(Decimal("0.01"))
 
                     # Validate and apply promo code if stored on cart item
                     if ci.promo_code:
@@ -381,19 +427,25 @@ async def checkout_cart_transaction(user_id: int) -> tuple[bool, str, list | Non
                             raise _Abort("promo_expired_during_checkout")
 
                         if promo.discount_type == 'percent':
-                            final_price = price * (1 - Decimal(str(promo.discount_value)) / 100)
+                            # Percent scales with quantity
+                            line_price = (
+                                price * (1 - Decimal(str(promo.discount_value)) / 100) * qty
+                            ).quantize(Decimal("0.01"))
                         else:
-                            final_price = max(price - Decimal(str(promo.discount_value)), Decimal(0))
-                        final_price = final_price.quantize(Decimal("0.01"))
+                            # Fixed comes off the line once, not per unit
+                            line_price = max(
+                                (price * qty) - Decimal(str(promo.discount_value)), Decimal(0)
+                            ).quantize(Decimal("0.01"))
                         promos_to_record[promo.id] = promo
 
                     purchases.append({
-                        'cart_item': ci,
                         'goods': goods,
-                        'item_value': item_value,
-                        'price': final_price,
+                        'delivered': delivered,
+                        'values_to_delete': values_to_delete,
+                        # The line total is authoritative; per-unit prices are derived from it so the BoughtGoods rows sum back to what is charged.
+                        'unit_prices': _split_amount(line_price, qty),
                     })
-                    total_price += final_price
+                    total_price += line_price
 
                 # Remove invalid cart items
                 if items_to_remove:
@@ -409,30 +461,32 @@ async def checkout_cart_transaction(user_id: int) -> tuple[bool, str, list | Non
                     if user.balance < total_price:
                         raise _Abort("insufficient_funds")
 
-                    # 5. Process each purchase
+                    # 5. Process each purchase — one BoughtGoods row per delivered
+                    #    unit, each carrying its own value.
                     results = []
                     for p in purchases:
-                        if not p['item_value'].is_infinity:
-                            await s.delete(p['item_value'])
+                        for v in p['values_to_delete']:
+                            await s.delete(v)
 
-                        bought_item = BoughtGoods(
-                            item_name=p['goods'].name,
-                            value=p['item_value'].value,
-                            price=p['price'],
-                            buyer_id=user_id,
-                            bought_datetime=datetime.now(timezone.utc),
-                            unique_id=uuid4().int >> 65
-                        )
-                        s.add(bought_item)
-                        await s.flush()
-                        results.append({
-                            "item_name": p['goods'].name,
-                            "value": p['item_value'].value,
-                            "price": float(p['price']),
-                            "bought_id": bought_item.id,
-                            "unique_id": bought_item.unique_id,
-                            "bought_datetime": bought_item.bought_datetime.isoformat(),
-                        })
+                        for value, unit_price in zip(p['delivered'], p['unit_prices']):
+                            bought_item = BoughtGoods(
+                                item_name=p['goods'].name,
+                                value=value,
+                                price=unit_price,
+                                buyer_id=user_id,
+                                bought_datetime=datetime.now(timezone.utc),
+                                unique_id=uuid4().int >> 65
+                            )
+                            s.add(bought_item)
+                            await s.flush()
+                            results.append({
+                                "item_name": p['goods'].name,
+                                "value": value,
+                                "price": float(unit_price),
+                                "bought_id": bought_item.id,
+                                "unique_id": bought_item.unique_id,
+                                "bought_datetime": bought_item.bought_datetime.isoformat(),
+                            })
 
                     # 6. Record promo usage (once per distinct promo)
                     for promo in promos_to_record.values():

@@ -13,14 +13,16 @@ from bot.database.methods import (
 )
 from bot.database.methods.read import (
     get_item_avg_rating, has_purchased_item, validate_promo_for_item,
-    get_user_review, invalidate_rating_cache, get_item_info,
+    get_user_review, invalidate_rating_cache, get_item_info, is_subscribed_to_stock,
 )
-from bot.database.methods.create import create_review
-from bot.database.methods.lazy_queries import query_item_reviews
+from bot.database.methods.create import create_review, subscribe_to_stock
+from bot.database.methods.delete import unsubscribe_from_stock
+from bot.database.methods.lazy_queries import query_item_reviews, query_goods_search
 from bot.database.methods.transactions import redeem_balance_promo
 from bot.database.methods.audit import log_audit
 from bot.keyboards import item_info, back, lazy_paginated_keyboard
 from bot.keyboards.inline import simple_buttons, rating_keyboard
+from aiogram.types import InlineKeyboardButton
 from bot.i18n import localize
 from bot.misc import EnvKeys, LazyPaginator
 from bot.misc.metrics import get_metrics
@@ -51,10 +53,16 @@ async def _render_item_page(target, state: FSMContext, item_name: str, back_data
         return
 
     quantity = await select_item_values_amount_cached(item_name)
+    is_infinite = await check_value(item_name)
     quantity_line = (
         localize("shop.item.quantity_unlimited")
-        if await check_value(item_name)
+        if is_infinite
         else localize("shop.item.quantity_left", count=quantity)
+    )
+
+    out_of_stock = (not is_infinite) and quantity == 0
+    subscribed = bool(
+        out_of_stock and user_id and await is_subscribed_to_stock(user_id, item_name)
     )
 
     reviews_enabled = EnvKeys.REVIEWS_ENABLED == "1"
@@ -100,6 +108,7 @@ async def _render_item_page(target, state: FSMContext, item_name: str, back_data
         avg_rating=avg_rating, review_count=review_count_val,
         has_purchased=purchased, applied_promo=applied_promo,
         reviews_enabled=reviews_enabled,
+        out_of_stock=out_of_stock, subscribed=subscribed,
     )
 
     text_lines = [
@@ -141,6 +150,9 @@ async def _show_categories_page(call: CallbackQuery, state: FSMContext, page: in
         page=page,
         back_cb="back_to_menu",
         nav_cb_prefix="categories-page_",
+        extra_rows=[[InlineKeyboardButton(
+            text=localize("btn.search"), callback_data="shop_search",
+        )]],
     )
 
     await call.message.edit_text(localize("shop.categories.title"), reply_markup=markup)
@@ -235,25 +247,20 @@ async def navigate_goods(call: CallbackQuery, state: FSMContext):
     )
 
 
-@router.callback_query(F.data.startswith('itm:'))
-async def item_info_callback_handler(call: CallbackQuery, state: FSMContext):
-    """
-    Show detailed information about the item.
-    Format: itm:{index}:{page}
-    """
-    parts = call.data.split(':')
-    idx = int(parts[1])
-    goods_page = int(parts[2]) if len(parts) > 2 else 0
+async def _open_item_from_index(call: CallbackQuery, state: FSMContext,
+                                list_key: str, idx: int, back_data: str):
+    """Open an item card by its index into an FSM-stored page list.
 
+    Shared by the category and the search flows
+    """
     data = await state.get_data()
-    goods_page_items = data.get('goods_page_items', [])
+    page_items = data.get(list_key, [])
 
-    if idx < 0 or idx >= len(goods_page_items):
+    if idx < 0 or idx >= len(page_items):
         await call.answer(localize("shop.item.not_found"), show_alert=True)
         return
 
-    item_name = goods_page_items[idx]
-    back_data = f"gp_{goods_page}"
+    item_name = page_items[idx]
 
     metrics = get_metrics()
     if metrics:
@@ -265,13 +272,185 @@ async def item_info_callback_handler(call: CallbackQuery, state: FSMContext):
     await _render_item_page(call, state, item_name, back_data, user_id=call.from_user.id)
 
 
+@router.callback_query(F.data.startswith('itm:'))
+async def item_info_callback_handler(call: CallbackQuery, state: FSMContext):
+    """
+    Show detailed information about the item.
+    Format: itm:{index}:{page}
+    """
+    parts = call.data.split(':')
+    idx = int(parts[1])
+    goods_page = int(parts[2]) if len(parts) > 2 else 0
+
+    await _open_item_from_index(call, state, 'goods_page_items', idx, f"gp_{goods_page}")
+
+
+# --- Catalog search ---
+
+async def _show_search_page(target, state: FSMContext, query: str, page: int):
+    """Render one page of search results. `target` is a CallbackQuery or Message."""
+    paginator_state = (await state.get_data()).get('search_paginator') if page > 0 else None
+    paginator = LazyPaginator(
+        partial(query_goods_search, query), per_page=10, state=paginator_state,
+    )
+
+    page_items = await paginator.get_page(page)
+    safe_query = html_escape(query, quote=False)
+
+    async def _render(text, markup):
+        if isinstance(target, CallbackQuery):
+            await target.message.edit_text(text, reply_markup=markup, parse_mode="HTML")
+        else:
+            await target.answer(text, reply_markup=markup, parse_mode="HTML")
+
+    if not page_items and page == 0:
+        await _render(localize("shop.search.empty", query=safe_query), back("shop"))
+        await state.set_state(None)
+        return
+
+    items_index = {item: i for i, item in enumerate(page_items)}
+    markup = await lazy_paginated_keyboard(
+        paginator=paginator,
+        item_text=lambda item: item,
+        item_callback=lambda item: f"sitm:{items_index[item]}:{page}",
+        page=page,
+        back_cb="shop",
+        nav_cb_prefix="sp_",
+    )
+
+    total = await paginator.get_total_count()
+    await _render(localize("shop.search.results", query=safe_query, count=total), markup)
+
+    await state.update_data(
+        search_paginator=paginator.get_state(),
+        search_query=query,
+        search_page_items=list(page_items),
+    )
+    await state.set_state(ShopStates.viewing_search_results)
+
+
+@router.callback_query(F.data == "shop_search")
+async def shop_search_handler(call: CallbackQuery, state: FSMContext):
+    """Prompt for a search query."""
+    await call.message.edit_text(localize("shop.search.prompt"), reply_markup=back("shop"))
+    await state.set_state(ShopStates.waiting_search_query)
+
+
+@router.message(ShopStates.waiting_search_query, F.text)
+async def receive_search_query_handler(message: Message, state: FSMContext):
+    query = (message.text or "").strip()
+
+    if len(query) < 2 or len(query) > 64:
+        # Stay in the state so the user can just retype.
+        await message.answer(localize("shop.search.too_short"), reply_markup=back("shop"))
+        return
+
+    await _show_search_page(message, state, query, 0)
+
+
+@router.callback_query(F.data.startswith('sp_'), ShopStates.viewing_search_results)
+async def navigate_search(call: CallbackQuery, state: FSMContext):
+    """Pagination across search results. Format: sp_{page}"""
+    page = int(call.data[3:])
+    data = await state.get_data()
+    await _show_search_page(call, state, data.get('search_query', ''), page)
+
+
+@router.callback_query(F.data.startswith('sitm:'))
+async def search_item_info_handler(call: CallbackQuery, state: FSMContext):
+    """
+    Open an item from the search results.
+    Format: sitm:{index}:{page}
+
+    A separate namespace from itm:/gp_ because navigate_goods re-derives its page
+    from current_category, which search results do not have.
+    """
+    parts = call.data.split(':')
+    idx = int(parts[1])
+    page = int(parts[2]) if len(parts) > 2 else 0
+
+    await _open_item_from_index(call, state, 'search_page_items', idx, f"sp_{page}")
+
+
+
+# --- Restock notifications ---
+
+@router.callback_query(F.data == "sub_stock")
+async def subscribe_stock_handler(call: CallbackQuery, state: FSMContext):
+    """Subscribe to the restock notification for the item on screen."""
+    item_name = (await state.get_data()).get('csrf_item')
+    if not item_name:
+        await call.answer(localize("shop.item.not_found"), show_alert=True)
+        return
+
+    ok, _code = await subscribe_to_stock(call.from_user.id, item_name)
+    await call.answer(localize("stock.subscribed" if ok else "errors.something_wrong"))
+    await _render_item_page(call, state, item_name, user_id=call.from_user.id)
+
+
+@router.callback_query(F.data == "unsub_stock")
+async def unsubscribe_stock_handler(call: CallbackQuery, state: FSMContext):
+    """Cancel the restock notification for the item on screen."""
+    item_name = (await state.get_data()).get('csrf_item')
+    if not item_name:
+        await call.answer(localize("shop.item.not_found"), show_alert=True)
+        return
+
+    await unsubscribe_from_stock(call.from_user.id, item_name)
+    await call.answer(localize("stock.unsubscribed"))
+    await _render_item_page(call, state, item_name, user_id=call.from_user.id)
+
 
 # --- Promo Code Application ---
+
+async def _leave_promo_input(state: FSMContext) -> None:
+    """Put back the browsing state that the promo prompt replaced.
+
+    The item card's Back button is `gp_{page}` / `sp_{page}`, and both
+    navigate_goods and navigate_search are state-filtered. Returning to
+    state=None instead of where we came from leaves that button dead.
+    """
+    data = await state.get_data()
+    await state.set_state(data.get('pre_promo_state'))
+
 
 @router.callback_query(F.data == "apply_promo")
 async def apply_promo_handler(call: CallbackQuery, state: FSMContext):
     await call.message.edit_text(localize("promo.enter_code"), reply_markup=back("back_to_item"))
-    await state.update_data(awaiting_promo=True)
+    await state.update_data(pre_promo_state=await state.get_state())
+    await state.set_state(PromoFSM.waiting_item_code)
+
+
+@router.message(PromoFSM.waiting_item_code, F.text)
+async def promo_code_text_handler(message: Message, state: FSMContext):
+    """Apply a promo code typed on an item page."""
+    data = await state.get_data()
+    item_name = data.get('csrf_item')
+
+    await _leave_promo_input(state)
+
+    if not item_name:
+        await message.answer(localize("shop.item.not_found"), reply_markup=back("back_to_menu"))
+        return
+
+    code = (message.text or "").strip().upper()
+    valid, error_key, promo_data = await validate_promo_for_item(code, item_name, message.from_user.id)
+
+    if not valid:
+        await message.answer(localize(error_key), reply_markup=back("back_to_item"))
+        return
+
+    # Store promo data for discounted price display
+    await state.update_data(
+        applied_promo=code,
+        applied_promo_data={
+            'discount_type': promo_data.get('discount_type'),
+            'discount_value': str(promo_data.get('discount_value', 0)),
+        },
+    )
+
+    # Re-render item page with discounted price
+    await _render_item_page(message, state, item_name, user_id=message.from_user.id)
 
 
 @router.callback_query(F.data == "remove_promo")
@@ -297,7 +476,7 @@ async def back_to_item_handler(call: CallbackQuery, state: FSMContext):
             reply_markup=back("back_to_menu"),
         )
         return
-    await state.update_data(awaiting_promo=False)
+    await _leave_promo_input(state)
     await _render_item_page(call, state, item_name, user_id=call.from_user.id)
 
 
@@ -398,42 +577,6 @@ async def receive_review_text_handler(message: Message, state: FSMContext):
     await invalidate_rating_cache(item_name)
     await message.answer(localize("review.created"), reply_markup=back("back_to_menu"))
     await state.clear()
-
-
-# --- Promo code text input (catch-all, must be AFTER state-specific message handlers) ---
-
-@router.message(F.text)
-async def promo_code_text_handler(message: Message, state: FSMContext):
-    """Handle promo code text input when awaiting_promo is set."""
-    data = await state.get_data()
-    if not data.get('awaiting_promo'):
-        return  # Not awaiting promo input — skip
-
-    item_name = data.get('csrf_item')
-    if not item_name:
-        await state.update_data(awaiting_promo=False)
-        return
-
-    code = (message.text or "").strip().upper()
-    valid, error_key, promo_data = await validate_promo_for_item(code, item_name, message.from_user.id)
-
-    if not valid:
-        await message.answer(localize(error_key), reply_markup=back("back_to_item"))
-        await state.update_data(awaiting_promo=False)
-        return
-
-    # Store promo data for discounted price display
-    await state.update_data(
-        applied_promo=code,
-        applied_promo_data={
-            'discount_type': promo_data.get('discount_type'),
-            'discount_value': str(promo_data.get('discount_value', 0)),
-        },
-        awaiting_promo=False,
-    )
-
-    # Re-render item page with discounted price
-    await _render_item_page(message, state, item_name, user_id=message.from_user.id)
 
 
 # --- View Reviews ---

@@ -4,6 +4,7 @@ TRANSLATIONS: dict[str, dict[str, str]] = {
     "ru": {
         # === Common Buttons ===
         "btn.shop": "🏪 Магазин",
+        "btn.search": "🔍 Поиск по каталогу",
         "btn.rules": "📜 Правила",
         "btn.profile": "👤 Профиль",
         "btn.support": "🆘 Поддержка",
@@ -351,6 +352,10 @@ TRANSLATIONS: dict[str, dict[str, str]] = {
         # === Shop Browsing (Categories / Goods / Item Page) ===
         "shop.categories.title": "🏪 Категории магазина",
         "shop.goods.choose": "🏪 Выберите нужный товар",
+        "shop.search.prompt": "🔍 Введите название товара или ключевое слово:",
+        "shop.search.too_short": "Запрос должен быть от 2 до 64 символов. Попробуйте ещё раз:",
+        "shop.search.results": "🔍 Результаты по запросу «{query}» — найдено: {count}",
+        "shop.search.empty": "🔍 По запросу «{query}» ничего не найдено.",
         "shop.item.not_found": "Товар не найден",
         "shop.item.title": "🏪 Товар {name}",
         "shop.item.description": "Описание: {description}",
@@ -450,12 +455,18 @@ TRANSLATIONS: dict[str, dict[str, str]] = {
         "btn.add_to_cart": "🛒 В корзину",
         "btn.cart_checkout": "💳 Оформить заказ",
         "btn.cart_clear": "🗑 Очистить корзину",
+        "btn.cart_remove_item": "❌ {name}",
+        "btn.cart_receipt_all": "📋 Все покупки",
         "cart.title": "🛒 <b>Корзина</b>",
         "cart.empty": "Корзина пуста.",
-        "cart.item": "• {name} — {price} {currency}",
+        "cart.item": "• {name} ×{qty} — {price} {currency}",
+        "cart.item_sale": "🔥 <b>{name}</b> ×{qty} — <s>{original}</s> {price} {currency}",
+        "cart.item_promo": "🏷 <b>{name}</b> ×{qty} — <s>{original}</s> {price} {currency} ({code})",
         "cart.total": "\n💰 <b>Итого</b>: {total} {currency}",
         "cart.added": "✅ {name} добавлен в корзину.",
         "cart.full": "❌ Корзина переполнена (макс. 10 товаров).",
+        "cart.qty_max": "❌ Максимум {max} шт. одного товара.",
+        "cart.out_of_stock": "Товара не хватает на складе в нужном количестве. Уменьшите количество и попробуйте снова.",
         "cart.item_not_found": "❌ Товар не найден.",
         "cart.removed": "✅ Товар убран из корзины.",
         "cart.cleared": "✅ Корзина очищена.",
@@ -464,6 +475,14 @@ TRANSLATIONS: dict[str, dict[str, str]] = {
         "cart.checkout_receipt": "✅ Заказ оформлен!\n➖➖➖➖➖➖➖➖➖➖➖➖\n📦 Кол-во: {count} шт.\n💲 Итого: {total} {currency}\n👤 Покупатель: @{username} ({user_id})\n🕐 Время: {datetime}\n➖➖➖➖➖➖➖➖➖➖➖➖\nНажмите на товар для просмотра:",
         "cart.checkout_fail": "❌ Не удалось оформить заказ: {reason}",
         "cart.items_unavailable": "Некоторые товары более недоступны и были убраны из корзины.",
+
+
+        # === Stock Subscriptions ===
+        "btn.notify_stock": "🔔 Сообщить о поступлении",
+        "btn.notify_stock_off": "🔕 Не сообщать",
+        "stock.subscribed": "🔔 Сообщим, когда товар появится.",
+        "stock.unsubscribed": "🔕 Уведомление отменено.",
+        "stock.back_in_stock": "🔔 Товар <b>{name}</b> снова в наличии!",
 
 
         # === Operation History ===
@@ -507,6 +526,7 @@ TRANSLATIONS: dict[str, dict[str, str]] = {
     "en": {
         # === Common Buttons ===
         "btn.shop": "🏪 Shop",
+        "btn.search": "🔍 Search catalog",
         "btn.rules": "📜 Rules",
         "btn.profile": "👤 Profile",
         "btn.support": "🆘 Support",
@@ -853,6 +873,10 @@ TRANSLATIONS: dict[str, dict[str, str]] = {
 
         # === Shop Browsing (Categories / Goods / Item Page) ===
         "shop.categories.title": "🏪 Shop categories",
+        "shop.search.prompt": "🔍 Enter a product name or keyword:",
+        "shop.search.too_short": "The query must be 2 to 64 characters. Try again:",
+        "shop.search.results": "🔍 Results for “{query}” — found: {count}",
+        "shop.search.empty": "🔍 Nothing found for “{query}”.",
         "shop.goods.choose": "🏪 Choose a product",
         "shop.item.not_found": "Item not found",
         "shop.item.title": "🏪 Item {name}",
@@ -953,12 +977,18 @@ TRANSLATIONS: dict[str, dict[str, str]] = {
         "btn.add_to_cart": "🛒 Add to cart",
         "btn.cart_checkout": "💳 Checkout",
         "btn.cart_clear": "🗑 Clear cart",
+        "btn.cart_remove_item": "❌ {name}",
+        "btn.cart_receipt_all": "📋 All purchases",
         "cart.title": "🛒 <b>Cart</b>",
         "cart.empty": "Cart is empty.",
-        "cart.item": "• {name} — {price} {currency}",
+        "cart.item": "• {name} ×{qty} — {price} {currency}",
+        "cart.item_sale": "🔥 <b>{name}</b> ×{qty} — <s>{original}</s> {price} {currency}",
+        "cart.item_promo": "🏷 <b>{name}</b> ×{qty} — <s>{original}</s> {price} {currency} ({code})",
         "cart.total": "\n💰 <b>Total</b>: {total} {currency}",
         "cart.added": "✅ {name} added to cart.",
         "cart.full": "❌ Cart is full (max 10 items).",
+        "cart.qty_max": "❌ Maximum {max} units of one item.",
+        "cart.out_of_stock": "Not enough stock for the requested quantity. Reduce it and try again.",
         "cart.item_not_found": "❌ Item not found.",
         "cart.removed": "✅ Item removed from cart.",
         "cart.cleared": "✅ Cart cleared.",
@@ -967,6 +997,14 @@ TRANSLATIONS: dict[str, dict[str, str]] = {
         "cart.checkout_receipt": "✅ Order placed!\n➖➖➖➖➖➖➖➖➖➖➖➖\n📦 Qty: {count}\n💲 Total: {total} {currency}\n👤 Buyer: @{username} ({user_id})\n🕐 Time: {datetime}\n➖➖➖➖➖➖➖➖➖➖➖➖\nTap an item to view details:",
         "cart.checkout_fail": "❌ Checkout failed: {reason}",
         "cart.items_unavailable": "Some items are no longer available and were removed from cart.",
+
+
+        # === Stock Subscriptions ===
+        "btn.notify_stock": "🔔 Notify me when in stock",
+        "btn.notify_stock_off": "🔕 Cancel notification",
+        "stock.subscribed": "🔔 We'll let you know when it's back.",
+        "stock.unsubscribed": "🔕 Notification cancelled.",
+        "stock.back_in_stock": "🔔 <b>{name}</b> is back in stock!",
 
 
         # === Operation History ===

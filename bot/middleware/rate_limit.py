@@ -11,6 +11,7 @@ from aiogram.exceptions import TelegramBadRequest
 
 from bot.i18n import localize
 from bot.database.models import Permission
+from bot.states import ShopStates
 
 logger = logging.getLogger(__name__)
 
@@ -22,11 +23,13 @@ class RateLimitConfig:
     global_limit: int = 30  # requests
     global_window: int = 60  # seconds
 
-    # Limits for specific actions
+    # Limits for specific actions — (requests, window_seconds).
     action_limits: dict = field(default_factory=lambda: {
-        'payment': (10, 60),  # 10 times a minute
-        'shop_view': (60, 60),  # 60 times per minute
-        'buy_item': (5, 60),  # 5 buys a minute
+        'payment': (10, 60),    # 10 times a minute
+        'shop_view': (60, 60),  # 60 times per minute — browsing and paging
+        'buy_item': (5, 60),    # 5 purchases a minute
+        'search': (10, 60),     # 10 new searches a minute — each is a LIKE scan
+        'top_up': (5, 300),     # 5 top-ups in 5 minutes
     })
 
     # Temporary ban after exceeding
@@ -227,24 +230,33 @@ class RateLimitMiddleware(BaseMiddleware):
         self._redis_limiter: "RedisRateLimiter | None" = None
         self.auth_middleware = auth_middleware
         self.action_mapping = {
-            # Callback data -> action name
             'replenish_balance': 'top_up',
             'pay_': 'payment',
-            'buy_': 'buy_item',
+            'cart_checkout_confirm': 'buy_item',
+            'add_to_cart': 'buy_item',
+            'buy_item': 'buy_item',
+            'shop_search': 'search',
             'shop': 'shop_view',
-            'category_': 'shop_view',
-            'item_': 'shop_view',
+            'cat:': 'shop_view',
+            'itm:': 'shop_view',
+            'sitm:': 'shop_view',
+            'categories-page_': 'shop_view',
+            'gp_': 'shop_view',
+            'sp_': 'shop_view',
         }
 
-    def _get_action_from_event(self, event: TelegramObject) -> str:
+    def _get_action_from_event(self, event: TelegramObject, data: Dict[str, Any] | None = None) -> str:
         """Determines the action from the event"""
         if isinstance(event, CallbackQuery):
-            data = event.data or ""
+            cb_data = event.data or ""
             for prefix, action in self.action_mapping.items():
-                if data.startswith(prefix):
+                if cb_data.startswith(prefix):
                     return action
 
         elif isinstance(event, Message):
+            if data is not None and data.get('raw_state') == ShopStates.waiting_search_query.state:
+                return 'search'
+
             text = event.text or ""
             if text.startswith('/start'):
                 return 'shop_view'
@@ -346,7 +358,7 @@ class RateLimitMiddleware(BaseMiddleware):
             return await handler(event, data)
 
         # Define action
-        action = self._get_action_from_event(event)
+        action = self._get_action_from_event(event, data)
 
         # Checking the limits
         if not await self._check_global_limit(user_id):

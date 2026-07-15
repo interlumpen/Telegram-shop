@@ -1,8 +1,16 @@
-from bot.database.methods.create import add_to_cart, create_review
+import pytest
+
+from bot.database.methods.create import (
+    add_to_cart, create_review, subscribe_to_stock, CART_MAX_QTY_PER_ITEM,
+)
 from bot.database.methods.read import (
     get_cart_items, get_cart_count, get_item_avg_rating, get_user_review,
+    is_subscribed_to_stock,
 )
-from bot.database.methods.delete import remove_from_cart, clear_cart
+from bot.database.methods.update import set_cart_item_quantity
+from bot.database.methods.delete import (
+    remove_from_cart, clear_cart, unsubscribe_from_stock, pop_stock_subscribers,
+)
 from bot.database.methods.lazy_queries import query_item_reviews
 
 
@@ -24,12 +32,51 @@ class TestCart:
         assert (ok, msg) == (False, "item_not_found")
 
     async def test_cart_full(self, user_factory, item_factory):
+        """The cart caps *distinct* positions, not units."""
         await user_factory(telegram_id=960003)
-        await item_factory(name="CartF", price=10, values=[("v", False)])
-        for _ in range(10):
-            await add_to_cart(960003, "CartF")
-        ok, msg = await add_to_cart(960003, "CartF")
+        for i in range(10):
+            await item_factory(name=f"CartF{i}", price=10, values=[("v", False)])
+            ok, msg = await add_to_cart(960003, f"CartF{i}")
+            assert (ok, msg) == (True, "success")
+
+        await item_factory(name="CartFOver", price=10, values=[("v", False)])
+        ok, msg = await add_to_cart(960003, "CartFOver")
         assert (ok, msg) == (False, "cart_full")
+
+    async def test_add_same_item_increments_quantity(self, user_factory, item_factory):
+        await user_factory(telegram_id=960005)
+        await item_factory(name="CartQ", price=10, values=[("v", False)])
+        for _ in range(10):
+            ok, msg = await add_to_cart(960005, "CartQ")
+            assert (ok, msg) == (True, "success")
+
+        items = await get_cart_items(960005)
+        assert len(items) == 1              # one row, not ten
+        assert items[0]["quantity"] == 10
+        assert await get_cart_count(960005) == 10   # badge counts units
+
+    async def test_increment_works_when_cart_is_full(self, user_factory, item_factory):
+        """A full cart still allows bumping something already in it."""
+        await user_factory(telegram_id=960006)
+        for i in range(10):
+            await item_factory(name=f"CartB{i}", price=10, values=[("v", False)])
+            await add_to_cart(960006, f"CartB{i}")
+
+        ok, msg = await add_to_cart(960006, "CartB0")
+        assert (ok, msg) == (True, "success")
+        items = await get_cart_items(960006)
+        assert len(items) == 10
+        assert next(i for i in items if i["item_name"] == "CartB0")["quantity"] == 2
+
+    async def test_add_to_cart_qty_cap(self, user_factory, item_factory):
+        await user_factory(telegram_id=960007)
+        await item_factory(name="CartCap", price=10, values=[("v", False)])
+        ok, msg = await add_to_cart(960007, "CartCap", quantity=CART_MAX_QTY_PER_ITEM)
+        assert (ok, msg) == (True, "success")
+
+        ok, msg = await add_to_cart(960007, "CartCap")
+        assert (ok, msg) == (False, "cart_qty_max")
+        assert await get_cart_count(960007) == CART_MAX_QTY_PER_ITEM
 
     async def test_remove_and_clear(self, user_factory, item_factory):
         await user_factory(telegram_id=960004)
@@ -38,9 +85,135 @@ class TestCart:
         items = await get_cart_items(960004)
         assert await remove_from_cart(items[0]["id"], 960004) is True
         assert await get_cart_count(960004) == 0
+        # Two adds of one item are now a single row of quantity 2.
         await add_to_cart(960004, "CartR")
         await add_to_cart(960004, "CartR")
-        assert await clear_cart(960004) == 2
+        assert await get_cart_count(960004) == 2
+        assert await clear_cart(960004) == 1
+
+
+class TestCartQuantity:
+    async def test_increment_and_decrement(self, user_factory, item_factory):
+        await user_factory(telegram_id=961001)
+        await item_factory(name="QtyA", price=10, values=[("v", False)])
+        await add_to_cart(961001, "QtyA", quantity=3)
+        cid = (await get_cart_items(961001))[0]["id"]
+
+        ok, code, qty = await set_cart_item_quantity(cid, 961001, 2)
+        assert (ok, code, qty) == (True, "success", 5)
+
+        ok, code, qty = await set_cart_item_quantity(cid, 961001, -1)
+        assert (ok, code, qty) == (True, "success", 4)
+        assert await get_cart_count(961001) == 4
+
+    async def test_decrement_to_zero_removes_row(self, user_factory, item_factory):
+        await user_factory(telegram_id=961002)
+        await item_factory(name="QtyB", price=10, values=[("v", False)])
+        await add_to_cart(961002, "QtyB")
+        cid = (await get_cart_items(961002))[0]["id"]
+
+        ok, code, qty = await set_cart_item_quantity(cid, 961002, -1)
+        assert (ok, code, qty) == (True, "removed", 0)
+        assert await get_cart_items(961002) == []
+
+    async def test_cap_is_enforced(self, user_factory, item_factory):
+        await user_factory(telegram_id=961003)
+        await item_factory(name="QtyC", price=10, values=[("v", False)])
+        await add_to_cart(961003, "QtyC", quantity=CART_MAX_QTY_PER_ITEM)
+        cid = (await get_cart_items(961003))[0]["id"]
+
+        ok, code, qty = await set_cart_item_quantity(cid, 961003, 1)
+        assert (ok, code) == (False, "cart_qty_max")
+        assert qty == CART_MAX_QTY_PER_ITEM
+
+    async def test_other_users_cart_is_rejected(self, user_factory, item_factory):
+        await user_factory(telegram_id=961004)
+        await user_factory(telegram_id=961005)
+        await item_factory(name="QtyD", price=10, values=[("v", False)])
+        await add_to_cart(961004, "QtyD", quantity=2)
+        cid = (await get_cart_items(961004))[0]["id"]
+
+        ok, code, _ = await set_cart_item_quantity(cid, 961005, 1)
+        assert (ok, code) == (False, "item_not_found")
+        assert await get_cart_count(961004) == 2   # untouched
+
+    async def test_one_row_per_user_item(self, user_factory, item_factory):
+        """The unique constraint is what makes a cart line == one position."""
+        from sqlalchemy.exc import IntegrityError
+        from bot.database import Database
+        from bot.database.models.main import CartItems
+
+        await user_factory(telegram_id=961006)
+        await item_factory(name="QtyE", price=10, values=[("v", False)])
+        await add_to_cart(961006, "QtyE")
+        item_id = (await get_cart_items(961006))[0]["item_id"]
+
+        with pytest.raises(IntegrityError):
+            async with Database().session() as s:
+                s.add(CartItems(user_id=961006, item_id=item_id, quantity=1))
+
+
+class TestStockSubscriptions:
+    async def test_subscribe_and_check(self, user_factory, item_factory):
+        await user_factory(telegram_id=962001)
+        await item_factory(name="SubA", price=10, values=[])
+
+        ok, code = await subscribe_to_stock(962001, "SubA")
+        assert (ok, code) == (True, "subscribed")
+        assert await is_subscribed_to_stock(962001, "SubA") is True
+
+    async def test_subscribe_is_idempotent(self, user_factory, item_factory):
+        await user_factory(telegram_id=962002)
+        await item_factory(name="SubB", price=10, values=[])
+
+        assert await subscribe_to_stock(962002, "SubB") == (True, "subscribed")
+        assert await subscribe_to_stock(962002, "SubB") == (True, "already_subscribed")
+        assert len(await pop_stock_subscribers("SubB")) == 1   # not two rows
+
+    async def test_subscribe_unknown_item(self, user_factory):
+        await user_factory(telegram_id=962003)
+        assert await subscribe_to_stock(962003, "NoSuchItem") == (False, "item_not_found")
+
+    async def test_unsubscribe(self, user_factory, item_factory):
+        await user_factory(telegram_id=962004)
+        await item_factory(name="SubC", price=10, values=[])
+        await subscribe_to_stock(962004, "SubC")
+
+        assert await unsubscribe_from_stock(962004, "SubC") is True
+        assert await is_subscribed_to_stock(962004, "SubC") is False
+        assert await unsubscribe_from_stock(962004, "SubC") is False   # already gone
+
+    async def test_pop_returns_subscribers_and_empties_table(self, user_factory, item_factory):
+        await user_factory(telegram_id=962005)
+        await user_factory(telegram_id=962006)
+        await item_factory(name="SubD", price=10, values=[])
+        await subscribe_to_stock(962005, "SubD")
+        await subscribe_to_stock(962006, "SubD")
+
+        popped = await pop_stock_subscribers("SubD")
+        assert sorted(popped) == [962005, 962006]
+        assert await is_subscribed_to_stock(962005, "SubD") is False
+
+    async def test_pop_twice_never_double_notifies(self, user_factory, item_factory):
+        """The property that stops two concurrent restocks messaging twice."""
+        await user_factory(telegram_id=962007)
+        await item_factory(name="SubE", price=10, values=[])
+        await subscribe_to_stock(962007, "SubE")
+
+        assert await pop_stock_subscribers("SubE") == [962007]
+        assert await pop_stock_subscribers("SubE") == []
+
+    async def test_pop_unknown_item(self):
+        assert await pop_stock_subscribers("NoSuchItem") == []
+
+    async def test_subscriptions_are_per_item(self, user_factory, item_factory):
+        await user_factory(telegram_id=962008)
+        await item_factory(name="SubF", price=10, values=[])
+        await item_factory(name="SubG", price=10, values=[])
+        await subscribe_to_stock(962008, "SubF")
+
+        assert await is_subscribed_to_stock(962008, "SubG") is False
+        assert await pop_stock_subscribers("SubG") == []
 
 
 class TestReviews:

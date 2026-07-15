@@ -127,12 +127,14 @@ async def db_cleanup(setup_test_database):
         ReferralEarnings, BoughtGoods, Operations, Payments,
         ItemValues, Goods, Categories, User, Role,
         Reviews, CartItems, PromoCodeUsages, PromoCodes,
+        StockSubscriptions,
     )
 
     db = Database()
     async with db.session() as s:
         # Delete in FK order.
         await s.execute(delete(Reviews))
+        await s.execute(delete(StockSubscriptions))
         await s.execute(delete(CartItems))
         await s.execute(delete(PromoCodeUsages))
         await s.execute(delete(PromoCodes))
@@ -171,6 +173,7 @@ def patch_safe_create_task():
             asyncio.run(coro)
 
     with patch('bot.database.methods.cache_utils.safe_create_task', side_effect=run_immediately), \
+            patch('bot.database.methods.create.safe_create_task', side_effect=run_immediately), \
             patch('bot.database.methods.update.safe_create_task', side_effect=run_immediately), \
             patch('bot.database.methods.delete.safe_create_task', side_effect=run_immediately), \
             patch('bot.database.methods.transactions.safe_create_task', side_effect=run_immediately):

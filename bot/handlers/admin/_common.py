@@ -1,5 +1,15 @@
 from bot.i18n import localize
+from bot.logger_mesh import logger
 from bot.misc import EnvKeys
+
+
+async def _notify_restock_safe(bot, item_name: str) -> None:
+    """Fire restock notifications, never letting a failure break the stock add."""
+    from bot.misc.services.restock_notifier import notify_restock
+    try:
+        await notify_restock(bot, item_name)
+    except Exception:
+        logger.exception("restock notification failed for %r", item_name)
 
 
 def user_profile_lines(user, first_name, target_id, *, overall_balance,

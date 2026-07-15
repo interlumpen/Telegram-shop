@@ -1,5 +1,5 @@
+import hashlib
 import json
-import uuid
 from decimal import Decimal, ROUND_HALF_UP
 
 from aiogram import Router, F
@@ -24,7 +24,7 @@ from bot.states import BalanceStates
 router = Router()
 
 
-async def _notify_referrer_bonus(bot, user_id: int, amount: int, payer_name: str, payer_id: int):
+async def _notify_referrer_bonus(bot, user_id: int, amount: Decimal | int, payer_name: str, payer_id: int):
     """Send referral bonus notification to the referrer if applicable."""
     referral_id = await get_user_referral(user_id)
     if not referral_id or not EnvKeys.REFERRAL_PERCENT:
@@ -254,12 +254,16 @@ async def checking_payment(call: CallbackQuery, state: FSMContext):
 
         status = info.get("status")
         if status == "paid":
-            balance_amount = int(Decimal(str(info.get("amount", "0"))).quantize(Decimal("1.")))
+            balance_amount = Decimal(str(info.get("amount", "0"))).quantize(Decimal("0.01"))
+
+            if balance_amount <= 0:
+                await call.answer(localize("payments.unable_determine_amount"), show_alert=True)
+                return
 
             # Use transactional payment processing
             success, error_msg = await process_payment_with_referral(
                 user_id=user_id,
-                amount=Decimal(balance_amount),
+                amount=balance_amount,
                 provider="cryptopay",
                 external_id=str(invoice_id),
                 referral_percent=EnvKeys.REFERRAL_PERCENT
@@ -370,7 +374,17 @@ async def successful_payment_handler(message: Message):
 
     # Idempotence
     provider = "telegram" if sp.currency != "XTR" else "stars"
-    external_id = sp.telegram_payment_charge_id or sp.provider_payment_charge_id or f"{provider}:{user_id}:{uuid.uuid4().hex}"
+    external_id = sp.telegram_payment_charge_id or sp.provider_payment_charge_id
+    if not external_id:
+        digest = hashlib.sha256(
+            f"{provider}|{user_id}|{sp.currency}|{sp.total_amount}|{sp.invoice_payload or ''}".encode()
+        ).hexdigest()
+        external_id = f"{provider}:fallback:{digest[:32]}"
+        logger.warning(
+            "successful_payment without a charge id for user %s (%s %s); "
+            "falling back to a derived idempotency key %s",
+            user_id, sp.total_amount, sp.currency, external_id,
+        )
 
     success, error_msg = await process_payment_with_referral(
         user_id=user_id,

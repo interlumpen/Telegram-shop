@@ -7,7 +7,7 @@ from sqlalchemy import func, exists, select, inspect as sa_inspect
 
 from bot.database.models import Database, User, ItemValues, Goods, Categories, Role, BoughtGoods, \
     Operations, ReferralEarnings, Permission
-from bot.database.models.main import PromoCodes, PromoCodeUsages, CartItems, Reviews
+from bot.database.models.main import PromoCodes, PromoCodeUsages, CartItems, Reviews, StockSubscriptions
 from bot.misc.caching import get_cache_manager
 
 F = TypeVar('F', bound=Callable[..., Coroutine[Any, Any, Any]])
@@ -230,6 +230,18 @@ async def get_category_name_by_id(category_id: int) -> str | None:
     async with Database().session() as s:
         return (await s.execute(
             select(Categories.name).where(Categories.id == category_id)
+        )).scalar()
+
+
+async def get_item_name_by_id(item_id: int) -> str | None:
+    """Return a product's name by its id, or None.
+
+    ItemValues.item is lazy='raise', so callers holding only a stock row cannot
+    walk the relationship to get there.
+    """
+    async with Database().session() as s:
+        return (await s.execute(
+            select(Goods.name).where(Goods.id == item_id)
         )).scalar()
 
 
@@ -628,11 +640,30 @@ async def get_cart_items(user_id: int) -> list[dict]:
 
 
 async def get_cart_count(user_id: int) -> int:
-    """Return count of items in user's cart."""
+    """Return the total number of units in a user's cart.
+
+    Units, not lines: this feeds the cart badge and the checkout confirmation,
+    and both must agree with the number of items the receipt lists.
+    """
     async with Database().session() as s:
-        return (await s.execute(
-            select(func.count(CartItems.id)).where(CartItems.user_id == user_id)
-        )).scalar() or 0
+        return int((await s.execute(
+            select(func.coalesce(func.sum(CartItems.quantity), 0)).where(CartItems.user_id == user_id)
+        )).scalar() or 0)
+
+
+# --- Stock subscriptions ---
+
+async def is_subscribed_to_stock(user_id: int, item_name: str) -> bool:
+    """Whether the user is waiting for this item to be restocked.
+    """
+    async with Database().session() as s:
+        return bool((await s.execute(
+            select(exists().where(
+                StockSubscriptions.user_id == user_id,
+                StockSubscriptions.item_id == Goods.id,
+                Goods.name == item_name,
+            ))
+        )).scalar())
 
 
 # --- Reviews ---

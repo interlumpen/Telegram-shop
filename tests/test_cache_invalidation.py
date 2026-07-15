@@ -184,3 +184,104 @@ class TestCacheInvalidationAfterMutations:
 
         assert success is True
         assert f"user:{referrer_id}" not in fake_cache.store
+
+
+class TestWebPanelStockEdits:
+    def _request(self):
+        from unittest.mock import MagicMock
+        request = MagicMock()
+        request.client.host = "127.0.0.1"
+        return request
+
+    async def _fire(self, method, *args):
+        from unittest.mock import patch
+
+        scheduled = []
+        with patch('bot.web.admin.safe_create_task', side_effect=scheduled.append):
+            await method(*args)
+        for coro in scheduled:
+            await coro
+
+    async def _stock_row(self, item_name: str):
+        from sqlalchemy import select
+        from bot.database.main import Database
+        from bot.database.models.main import Goods, ItemValues
+
+        async with Database().session() as s:
+            item_id = (await s.execute(select(Goods.id).where(Goods.name == item_name))).scalar()
+            return (await s.execute(
+                select(ItemValues).where(ItemValues.item_id == item_id)
+            )).scalars().first()
+
+    async def test_create_invalidates_item_cache(self, fake_cache, item_factory):
+        from bot.web.admin import ItemValuesAdmin
+
+        await item_factory(name="PanelItem", price=10, values=[("v1", False)])
+        row = await self._stock_row("PanelItem")
+        fake_cache.store["item_values:PanelItem"] = 0   # the stale "out of stock" read
+
+        await self._fire(ItemValuesAdmin().after_model_change, {}, row, True, self._request())
+
+        assert "item_values:PanelItem" not in fake_cache.store
+
+    async def test_delete_invalidates_item_cache(self, fake_cache, item_factory):
+        from bot.web.admin import ItemValuesAdmin
+
+        await item_factory(name="PanelDel", price=10, values=[("v1", False)])
+        row = await self._stock_row("PanelDel")
+        fake_cache.store["item_values:PanelDel"] = 1
+
+        await self._fire(ItemValuesAdmin().after_model_delete, row, self._request())
+
+        assert "item_values:PanelDel" not in fake_cache.store
+
+    async def test_create_notifies_stock_subscribers(self, mock_bot, item_factory, user_factory):
+        from bot.web.admin import ItemValuesAdmin, set_notifier_bot
+        from bot.database.methods.create import subscribe_to_stock
+        from bot.database.methods.read import is_subscribed_to_stock
+
+        await user_factory(telegram_id=990001)
+        await item_factory(name="PanelRestock", price=10, values=[("v1", False)])
+        await subscribe_to_stock(990001, "PanelRestock")
+        row = await self._stock_row("PanelRestock")
+
+        set_notifier_bot(mock_bot)
+        try:
+            await self._fire(ItemValuesAdmin().after_model_change, {}, row, True, self._request())
+        finally:
+            set_notifier_bot(None)
+
+        mock_bot.send_message.assert_awaited_once()
+        assert mock_bot.send_message.await_args.kwargs["chat_id"] == 990001
+        assert await is_subscribed_to_stock(990001, "PanelRestock") is False
+
+    async def test_edit_does_not_notify(self, mock_bot, item_factory, user_factory):
+        """Only new stock is an arrival; editing a value in place is not."""
+        from bot.web.admin import ItemValuesAdmin, set_notifier_bot
+        from bot.database.methods.create import subscribe_to_stock
+
+        await user_factory(telegram_id=990002)
+        await item_factory(name="PanelEdit", price=10, values=[("v1", False)])
+        await subscribe_to_stock(990002, "PanelEdit")
+        row = await self._stock_row("PanelEdit")
+
+        set_notifier_bot(mock_bot)
+        try:
+            await self._fire(ItemValuesAdmin().after_model_change, {}, row, False, self._request())
+        finally:
+            set_notifier_bot(None)
+
+        mock_bot.send_message.assert_not_awaited()
+
+    async def test_no_bot_configured_is_a_noop(self, item_factory, user_factory):
+        from bot.web.admin import ItemValuesAdmin, set_notifier_bot
+        from bot.database.methods.create import subscribe_to_stock
+
+        await user_factory(telegram_id=990003)
+        await item_factory(name="PanelNoBot", price=10, values=[("v1", False)])
+        await subscribe_to_stock(990003, "PanelNoBot")
+        row = await self._stock_row("PanelNoBot")
+
+        set_notifier_bot(None)
+        # Must not raise even though someone is waiting.
+        await self._fire(ItemValuesAdmin().after_model_change, {}, row, True, self._request())

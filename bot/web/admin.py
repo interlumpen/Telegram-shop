@@ -80,8 +80,9 @@ from bot.database.models.main import (
 )
 from bot.misc.metrics import get_metrics
 from bot.misc.caching import get_cache_manager
-from bot.database.methods.read import invalidate_user_cache, invalidate_item_cache
+from bot.database.methods.read import invalidate_user_cache, invalidate_item_cache, get_item_name_by_id
 from bot.database.methods.cache_utils import safe_create_task
+from bot.misc.services.restock_notifier import notify_restock
 from bot.middleware.security import invalidate_auth_caches, clear_role_auth_caches
 
 
@@ -140,6 +141,14 @@ def _safe_model_repr(model: Any, max_len: int = 500) -> str:
         parts.append(f"{col.name}={val!r}")
     result = f"{type(model).__name__}({', '.join(parts)})"
     return result[:max_len]
+
+
+_notifier_bot: Any = None
+
+
+def set_notifier_bot(bot: Any) -> None:
+    global _notifier_bot
+    _notifier_bot = bot
 
 
 # Audited base view for mutable models
@@ -320,6 +329,29 @@ class ItemValuesAdmin(AuditModelView, model=ItemValues):
     name_plural = "Stock Items"
     icon = "fa-solid fa-warehouse"
 
+    async def _item_name(self, model: Any) -> str | None:
+        item_id = getattr(model, "item_id", None)
+        return await get_item_name_by_id(int(item_id)) if item_id is not None else None
+
+    async def _invalidate(self, name: str) -> None:
+        safe_create_task(invalidate_item_cache(name))
+
+    async def after_model_change(self, data: dict, model: Any, is_created: bool, request: Request) -> None:
+        await super().after_model_change(data, model, is_created, request)
+        name = await self._item_name(model)
+        if not name:
+            return
+        await self._invalidate(name)
+
+        if is_created and _notifier_bot is not None:
+            safe_create_task(notify_restock(_notifier_bot, name))
+
+    async def after_model_delete(self, model: Any, request: Request) -> None:
+        await super().after_model_delete(model, request)
+        name = await self._item_name(model)
+        if name:
+            await self._invalidate(name)
+
 
 class BoughtGoodsAdmin(ModelView, model=BoughtGoods):
     column_list = [BoughtGoods.id, BoughtGoods.item_name, BoughtGoods.value,
@@ -487,7 +519,9 @@ async def metrics_json(request: Request) -> JSONResponse:
 
 
 # App Factory
-def create_admin_app() -> Starlette:
+def create_admin_app(bot: Any = None) -> Starlette:
+    """Build the admin panel app."""
+    set_notifier_bot(bot)
 
     from bot.web.export import export_routes
 

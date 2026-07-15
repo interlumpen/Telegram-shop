@@ -46,20 +46,8 @@ class AppContext:
 # ---------------------------------------------------------------------------
 
 def _setup_rate_limiting(dp: Dispatcher, auth_middleware: AuthenticationMiddleware):
-    """Configure and register the rate-limit middleware (shares the auth role cache)."""
-    rate_config = RateLimitConfig(
-        global_limit=30,
-        global_window=60,
-        ban_duration=300,
-        admin_bypass=True,
-        action_limits={
-            'payment': (10, 60),   # 10 times per minute
-            'shop_view': (60, 60),  # 60 times per minute
-            'buy_item': (5, 60),    # 5 purchases per minute
-            'top_up': (5, 300),     # 5 top-ups in 5 minutes
-        }
-    )
-    return setup_rate_limiting(dp, rate_config, auth_middleware=auth_middleware)
+    """Register the rate-limit middleware (shares the auth role cache)."""
+    return setup_rate_limiting(dp, RateLimitConfig(), auth_middleware=auth_middleware)
 
 
 def _register_middlewares(
@@ -110,7 +98,8 @@ async def _start_admin_server(bot: Bot):
     import uvicorn
     from bot.web import create_admin_app
 
-    admin_app = create_admin_app()
+    # The bot goes in so panel edits can reach users (e.g. restock notifications).
+    admin_app = create_admin_app(bot)
     config = uvicorn.Config(
         admin_app,
         host=EnvKeys.ADMIN_HOST,

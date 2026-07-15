@@ -127,3 +127,73 @@ class TestBroadcastManager:
         assert stats.end_time is not None
         assert stats.duration is not None
         assert stats.duration >= 0
+
+
+class TestRestockNotifier:
+    async def test_notifies_subscribers_and_clears_them(self, mock_bot, user_factory, item_factory):
+        from bot.misc.services.restock_notifier import notify_restock
+        from bot.database.methods.create import subscribe_to_stock
+        from bot.database.methods.read import is_subscribed_to_stock
+
+        await user_factory(telegram_id=980001)
+        await user_factory(telegram_id=980002)
+        await item_factory(name="RestockMe", price=10, values=[])
+        await subscribe_to_stock(980001, "RestockMe")
+        await subscribe_to_stock(980002, "RestockMe")
+
+        sent = await notify_restock(mock_bot, "RestockMe")
+
+        assert sent == 2
+        assert mock_bot.send_message.await_count == 2
+        recipients = {c.kwargs["chat_id"] for c in mock_bot.send_message.await_args_list}
+        assert recipients == {980001, 980002}
+
+        # Subscriptions are consumed, so a second restock stays quiet.
+        assert await is_subscribed_to_stock(980001, "RestockMe") is False
+        assert await notify_restock(mock_bot, "RestockMe") == 0
+
+    async def test_notification_carries_a_close_button(self, mock_bot, user_factory, item_factory):
+        from bot.misc.services.restock_notifier import notify_restock
+        from bot.database.methods.create import subscribe_to_stock
+
+        await user_factory(telegram_id=980020)
+        await item_factory(name="ClosableItem", price=10, values=[])
+        await subscribe_to_stock(980020, "ClosableItem")
+
+        await notify_restock(mock_bot, "ClosableItem")
+
+        markup = mock_bot.send_message.await_args.kwargs["reply_markup"]
+        cbs = [b.callback_data for row in markup.inline_keyboard for b in row]
+        assert cbs == ["close"]
+
+    async def test_no_subscribers_sends_nothing(self, mock_bot, item_factory):
+        from bot.misc.services.restock_notifier import notify_restock
+
+        await item_factory(name="NobodyWaiting", price=10, values=[])
+        assert await notify_restock(mock_bot, "NobodyWaiting") == 0
+        mock_bot.send_message.assert_not_awaited()
+
+    async def test_blocked_user_does_not_break_the_rest(self, mock_bot, user_factory, item_factory):
+        from bot.misc.services.restock_notifier import notify_restock
+        from bot.database.methods.create import subscribe_to_stock
+
+        await user_factory(telegram_id=980010)
+        await user_factory(telegram_id=980011)
+        await item_factory(name="HalfBlocked", price=10, values=[])
+        await subscribe_to_stock(980010, "HalfBlocked")
+        await subscribe_to_stock(980011, "HalfBlocked")
+
+        async def _send(chat_id, **kwargs):
+            if chat_id == 980010:
+                raise TelegramForbiddenError(method=MagicMock(), message="bot was blocked")
+            return True
+
+        mock_bot.send_message = AsyncMock(side_effect=_send)
+
+        sent = await notify_restock(mock_bot, "HalfBlocked")
+
+        assert sent == 1   # the reachable one still got it, no exception escaped
+
+    async def test_unknown_item_is_a_noop(self, mock_bot):
+        from bot.misc.services.restock_notifier import notify_restock
+        assert await notify_restock(mock_bot, "NoSuchItemAtAll") == 0

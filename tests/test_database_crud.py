@@ -216,6 +216,23 @@ class TestItemCRUD:
         result = await add_values_to_item("DupVal", "abc", False)
         assert result is False
 
+    async def test_add_values_lost_race_returns_false(self, item_factory):
+        import sqlalchemy
+        from unittest.mock import patch
+
+        await item_factory(name="RaceVal", category="RaceCat")
+        await add_values_to_item("RaceVal", "abc", False)
+
+        class _NeverExists:
+            def where(self, *a, **k):
+                return sqlalchemy.false()
+
+        with patch('bot.database.methods.create.exists', return_value=_NeverExists()):
+            result = await add_values_to_item("RaceVal", "abc", False)
+
+        assert result is False
+        assert await select_item_values_amount("RaceVal") == 1   # still just the one
+
     async def test_add_values_empty_returns_false(self, item_factory):
         await item_factory(name="EmptyVal", category="EmptyValCat")
         assert await add_values_to_item("EmptyVal", "", False) is False

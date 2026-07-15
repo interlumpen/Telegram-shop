@@ -3,7 +3,7 @@ from sqlalchemy import func, select, delete as sa_delete
 from bot.database.methods.read import invalidate_item_cache, invalidate_category_cache
 from bot.database.methods.cache_utils import safe_create_task
 from bot.database.models import Database, Goods, ItemValues, Categories, Role, User
-from bot.database.models.main import PromoCodes, CartItems, Reviews
+from bot.database.models.main import PromoCodes, CartItems, Reviews, StockSubscriptions
 from bot.database.methods.audit import log_audit
 
 
@@ -103,6 +103,48 @@ async def clear_cart(user_id: int) -> int:
         result = await s.execute(sa_delete(CartItems).where(CartItems.user_id == user_id))
         return result.rowcount
 
+
+
+async def unsubscribe_from_stock(user_id: int, item_name: str) -> bool:
+    """Drop a user's restock subscription for an item."""
+    async with Database().session() as s:
+        item_id = (await s.execute(select(Goods.id).where(Goods.name == item_name))).scalar()
+        if not item_id:
+            return False
+        result = await s.execute(
+            sa_delete(StockSubscriptions).where(
+                StockSubscriptions.user_id == user_id,
+                StockSubscriptions.item_id == item_id,
+            )
+        )
+        return result.rowcount > 0
+
+
+async def pop_stock_subscribers(item_name: str) -> list[int]:
+    """Claim and remove every restock subscription for an item.
+
+    Locks the rows before deleting them so two concurrent restocks cannot both
+    notify the same user: the loser waits on the locks, then finds nothing.
+    """
+    async with Database().session() as s:
+        item_id = (await s.execute(select(Goods.id).where(Goods.name == item_name))).scalar()
+        if not item_id:
+            return []
+
+        rows = (await s.execute(
+            select(StockSubscriptions.id, StockSubscriptions.user_id)
+            .where(StockSubscriptions.item_id == item_id)
+            .with_for_update()
+        )).all()
+        if not rows:
+            return []
+
+        await s.execute(
+            sa_delete(StockSubscriptions).where(
+                StockSubscriptions.id.in_([r.id for r in rows])
+            )
+        )
+        return [r.user_id for r in rows]
 
 
 async def delete_review(review_id: int) -> bool:

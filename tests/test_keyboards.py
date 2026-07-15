@@ -1,7 +1,7 @@
 from bot.keyboards.inline import (
     main_menu, profile_keyboard, simple_buttons, back, close, item_info, payment_menu,
     get_payment_choice, question_buttons, check_sub, referral_system_keyboard,
-    admin_console_keyboard,
+    admin_console_keyboard, cart_keyboard,
 )
 
 
@@ -122,6 +122,88 @@ class TestItemInfoKeyboard:
         cbs = _all_callback_data(markup)
         assert "buy_item" in cbs
         assert "gp_0" in cbs
+
+    def test_in_stock_has_no_notify_button(self):
+        cbs = _all_callback_data(item_info("Widget", "gp_0"))
+        assert "sub_stock" not in cbs
+        assert "unsub_stock" not in cbs
+
+    def test_out_of_stock_offers_subscribe(self):
+        cbs = _all_callback_data(item_info("Widget", "gp_0", out_of_stock=True))
+        assert "sub_stock" in cbs
+        assert "unsub_stock" not in cbs
+
+    def test_out_of_stock_and_subscribed_offers_unsubscribe(self):
+        cbs = _all_callback_data(
+            item_info("Widget", "gp_0", out_of_stock=True, subscribed=True)
+        )
+        assert "unsub_stock" in cbs
+        assert "sub_stock" not in cbs
+
+
+class TestCartKeyboard:
+
+    def _items(self):
+        return [{"id": 7, "item_name": "Widget", "quantity": 3}]
+
+    def test_has_quantity_stepper(self):
+        cbs = _all_callback_data(cart_keyboard(self._items()))
+        assert "cart_qty:7:1" in cbs
+        assert "cart_qty:7:-1" in cbs
+
+    def test_has_remove_checkout_and_clear(self):
+        cbs = _all_callback_data(cart_keyboard(self._items()))
+        assert "cart_remove:7" in cbs
+        assert "cart_checkout" in cbs
+        assert "cart_clear" in cbs
+
+    def test_shows_quantity_in_label(self):
+        markup = cart_keyboard(self._items())
+        labels = [b.text for row in markup.inline_keyboard for b in row]
+        assert any("×3" in t for t in labels)
+
+
+class TestLazyPaginatedExtraRows:
+
+    async def test_extra_row_is_rendered(self):
+        from aiogram.types import InlineKeyboardButton
+        from bot.keyboards.inline import lazy_paginated_keyboard
+        from bot.misc import LazyPaginator
+
+        async def _query(offset=0, limit=10, count_only=False):
+            return 1 if count_only else ["OnlyCat"]
+
+        markup = await lazy_paginated_keyboard(
+            paginator=LazyPaginator(_query, per_page=10),
+            item_text=lambda c: c,
+            item_callback=lambda c: f"cat:0:0",
+            page=0,
+            back_cb="back_to_menu",
+            nav_cb_prefix="categories-page_",
+            extra_rows=[[InlineKeyboardButton(text="🔍", callback_data="shop_search")]],
+        )
+        assert "shop_search" in _all_callback_data(markup)
+
+    async def test_without_extra_rows_output_is_unchanged(self):
+        """The 6 existing call sites must be byte-identical."""
+        from bot.keyboards.inline import lazy_paginated_keyboard
+        from bot.misc import LazyPaginator
+
+        async def _query(offset=0, limit=10, count_only=False):
+            return 1 if count_only else ["OnlyCat"]
+
+        def _kb():
+            return lazy_paginated_keyboard(
+                paginator=LazyPaginator(_query, per_page=10),
+                item_text=lambda c: c,
+                item_callback=lambda c: "cat:0:0",
+                page=0,
+                back_cb="back_to_menu",
+                nav_cb_prefix="categories-page_",
+            )
+
+        markup = await _kb()
+        assert _all_callback_data(markup) == ["cat:0:0", "back_to_menu"]
 
 
 class TestSimpleButtons:

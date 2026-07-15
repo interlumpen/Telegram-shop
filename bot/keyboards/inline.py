@@ -101,9 +101,12 @@ async def lazy_paginated_keyboard(
         back_cb: str | None = None,
         nav_cb_prefix: str = "",
         back_text: str | None = None,
+        extra_rows: list[list[InlineKeyboardButton]] | None = None,
 ) -> InlineKeyboardMarkup:
     """
-    Lazy pagination keyboard with data loading on demand
+    Lazy pagination keyboard with data loading on demand.
+
+    `extra_rows` are inserted between the item buttons and the navigation row.
     """
     kb = InlineKeyboardBuilder()
 
@@ -113,6 +116,9 @@ async def lazy_paginated_keyboard(
     for item in items:
         kb.button(text=item_text(item), callback_data=item_callback(item))
     kb.adjust(1)
+
+    for row in (extra_rows or []):
+        kb.row(*row)
 
     # Navigation
     total_pages = await paginator.get_total_pages()
@@ -135,9 +141,13 @@ def item_info(
         item_name: str, back_data: str, avg_rating: float = None,
         review_count: int = 0, has_purchased: bool = False,
         applied_promo: str = None, reviews_enabled: bool = True,
+        out_of_stock: bool = False, subscribed: bool = False,
 ) -> InlineKeyboardMarkup:
     """
     Product card with buy, cart, promo, review buttons.
+
+    When `out_of_stock`, offers a restock notification toggle instead of
+    leaving the user at a dead end.
     """
     kb = InlineKeyboardBuilder()
     kb.button(text=localize("btn.buy"), callback_data="buy_item")
@@ -151,8 +161,37 @@ def item_info(
             kb.button(text=localize("btn.view_reviews", count=review_count), callback_data=f"reviews:{item_name}:0")
         if has_purchased:
             kb.button(text=localize("btn.leave_review"), callback_data=f"review:{item_name}")
+    if out_of_stock:
+        if subscribed:
+            kb.button(text=localize("btn.notify_stock_off"), callback_data="unsub_stock")
+        else:
+            kb.button(text=localize("btn.notify_stock"), callback_data="sub_stock")
     kb.button(text=localize("btn.back"), callback_data=back_data)
     kb.adjust(2)
+    return kb.as_markup()
+
+
+def cart_keyboard(items: list[dict]) -> InlineKeyboardMarkup:
+    """
+    Cart view: a quantity stepper plus a remove button per line.
+    """
+    kb = InlineKeyboardBuilder()
+    for item in items:
+        kb.row(
+            InlineKeyboardButton(text="➖", callback_data=f"cart_qty:{item['id']}:-1"),
+            InlineKeyboardButton(
+                text=f"{item['item_name']} ×{item['quantity']}",
+                callback_data="dummy_button",
+            ),
+            InlineKeyboardButton(text="➕", callback_data=f"cart_qty:{item['id']}:1"),
+        )
+        kb.row(InlineKeyboardButton(
+            text=localize("btn.cart_remove_item", name=item['item_name']),
+            callback_data=f"cart_remove:{item['id']}",
+        ))
+    kb.row(InlineKeyboardButton(text=localize("btn.cart_checkout"), callback_data="cart_checkout"))
+    kb.row(InlineKeyboardButton(text=localize("btn.cart_clear"), callback_data="cart_clear"))
+    kb.row(InlineKeyboardButton(text=localize("btn.back"), callback_data="profile"))
     return kb.as_markup()
 
 

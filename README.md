@@ -39,9 +39,15 @@ and optional Redis caching.
 - **Catalog** — categories and products, per-unit stock that is either *limited* (one row
   per account/key, consumed on purchase) or *unlimited* (one value delivered every time),
   plus optional time‑limited per‑product sales.
-- **Cart & promo codes** — add multiple items, apply a promo per item, atomic multi‑item
-  checkout with a receipt. Promo types: `percent`, `fixed`, `balance`; with usage limits,
-  expiry, and category/item binding. A promo stacks on top of an active sale.
+- **Search** — find a product by name or description instead of paging categories; results
+  are paginated and open the normal product page. Backed by trigram (GIN) indexes on
+  PostgreSQL, with a graceful fallback when the `pg_trgm` extension isn't available.
+- **Cart & promo codes** — add multiple items **with quantities**, apply a promo per item,
+  atomic multi‑item checkout with a receipt. Promo types: `percent`, `fixed`, `balance`; with
+  usage limits, expiry, and category/item binding. A promo stacks on top of an active sale;
+  a `percent` promo scales per unit while a `fixed` one comes off the line once.
+- **Restock notifications** — an out‑of‑stock product offers "notify me"; when stock arrives
+  (from the bot **or** the web panel) everyone waiting is messaged once and unsubscribed.
 - **Payments** — CryptoPay (crypto), Telegram Stars, and Telegram Payments (fiat). Balance
   top‑up model; purchases are paid from balance. Processing is idempotent and transactional.
 - **Reviews** — 1–5★ ratings with optional text, one per user per item.
@@ -81,8 +87,9 @@ Implemented, and described honestly so you know what to rely on:
   audit‑logged; financial tables are read‑only.
 - **Input handling** — all database access is parameterized via the SQLAlchemy ORM (no raw
   SQL); user‑facing text is HTML‑escaped on render, and broadcast/category text is sanitized;
-  CSV export neutralizes spreadsheet formula injection; item names are control‑character
-  filtered.
+  search queries have their `LIKE` wildcards escaped, so typing `100%` searches for that
+  literal rather than matching the whole catalog; CSV export neutralizes spreadsheet formula
+  injection; item names are control‑character filtered.
 - **Stale‑action guard** — taps on a transactional message older than 1 hour are rejected.
 
 ## 💻 Tech Stack
@@ -95,13 +102,116 @@ Redis 7 *(optional)* · SQLAdmin + Starlette (web panel) · Pydantic · Docker.
 <details>
 <summary><b>System architecture</b> (click to expand)</summary>
 
-![System architecture](assets/system_architecture.png)
+Everything runs in **one process on one asyncio event loop**: the bot, the web
+panel, and the background workers. There is no broker and no worker pool — the
+"services" below are just long-lived tasks.
+
+**How an update becomes a handler call**
+
+```mermaid
+flowchart TD
+    U([Telegram user]) --> API[Telegram Bot API]
+    API -->|long polling · default| DP
+    API -->|webhook POST| WH["POST /webhook<br/>route appended to the running admin app"]
+    WH -->|secret token compared in constant time| DP
+    DP["aiogram Dispatcher<br/>allowed updates: message, callback_query,<br/>pre_checkout_query, successful_payment"]
+    DP --> M1["RateLimit<br/>global 30/min + per-action buckets"]
+    M1 --> M2["Analytics<br/>metrics + conversion funnels"]
+    M2 --> M3["Auth<br/>role cache · blocked users"]
+    M3 --> M4["Security<br/>audit · maintenance gate · 1h replay guard"]
+    M4 --> R["Routers: admin → other → user"]
+    R --> H[Handler]
+```
+
+The middleware order is the order they are registered in
+[`bot/main.py`](bot/main.py) — aiogram runs the first-registered outermost, so
+rate limiting rejects a flood before anything else does work.
+
+**What runs, and what it talks to**
+
+```mermaid
+flowchart TD
+    ADMIN([Admin browser]) --> UV
+    TG[Telegram Bot API] <--> DP
+
+    subgraph proc["Bot process — one asyncio loop"]
+        DP["aiogram Dispatcher"]
+        UV["uvicorn · Starlette<br/>SQLAdmin · /health · /metrics · /export"]
+        RM["RecoveryManager<br/>CryptoPay sweep 5 min · health 60 s"]
+        CM["CleanupManager<br/>daily retention"]
+        CS["CacheScheduler<br/>stats hourly · 03:00 · redis 30 s"]
+    end
+
+    CP["CryptoPay API"]
+    PG[("PostgreSQL 16")]
+    RD[("Redis 7 — optional")]
+    FS["logs/ · data/"]
+
+    DP <--> CP
+    RM <--> CP
+    DP --> PG
+    UV --> PG
+    RM --> PG
+    CM --> PG
+    DP --> RD
+    CS --> RD
+    DP --> FS
+    UV -.->|restock notify| TG
+```
+
+Worth knowing:
+
+- **Webhook mode reuses the admin server.** `WEBHOOK_ENABLED=1` appends a
+  `POST /webhook` route onto the *already running* Starlette app rather than
+  starting a second one; the secret header is compared with `hmac.compare_digest`.
+- **Redis is optional.** Without it: in-memory FSM, no caching, and a per-process
+  rate limiter and role cache. With it, those are shared across workers.
+- **The web panel is not read-only bookkeeping.** It runs in the same process as
+  the bot, so an edit there clears the same caches and can message users — that
+  is how a restock added in the panel reaches the people waiting for it.
+- **Shutdown is graceful**: tasks stopped, metrics snapshot written to
+  `data/final_metrics.json`, webhook removed, CryptoPay session and DB engine closed.
+
 </details>
 
 <details>
 <summary><b>Database schema</b> (click to expand)</summary>
 
-![Database schema](assets/database_schema.png)
+Two views of the same 15 tables: the product side and the people/money side.
+Exact columns, indexes and `CHECK` constraints live in
+[`bot/database/models/main.py`](bot/database/models/main.py) — the notes under the
+diagrams say what each table is *for*.
+
+**Catalog & stock**
+
+```mermaid
+erDiagram
+    categories ||--o{ goods : "groups"
+    goods ||--o{ item_values : "sellable units"
+    goods ||--o{ cart_items : "in carts"
+    goods ||--o{ reviews : "rated by"
+    goods ||--o{ stock_subscriptions : "waited for"
+    categories ||--o{ promo_codes : "optional binding"
+    goods ||--o{ promo_codes : "optional binding"
+```
+
+**Users, money & access**
+
+```mermaid
+erDiagram
+    roles ||--o{ users : "role_id (RESTRICT)"
+    users ||--o{ users : "referral_id (self)"
+    users ||--o{ payments : "top-ups (idempotent)"
+    users ||--o{ operations : "balance ledger"
+    users ||--o{ referral_earnings : "commission"
+    users ||--o{ bought_goods : "purchase history"
+    users ||--o{ promo_code_usages : "redeemed"
+    promo_codes ||--o{ promo_code_usages : "once per user"
+```
+
+`audit_log` is absent from both on purpose: its `user_id` carries **no** foreign
+key, so the trail outlives the user it refers to.
+
 </details>
 
 The data model, in plain terms:
@@ -112,9 +222,13 @@ The data model, in plain terms:
   its sellable units live in `item_values` (one row per account/key, or a single `is_infinity`
   row for unlimited delivery).
 - **cart_items** / **reviews** — reference their product by foreign key, so a rename or delete
-  never leaves them dangling.
-- **bought_goods** — purchase history; it keeps the product *name* as a snapshot so history
-  survives even if the product is later removed.
+  never leaves them dangling. A cart holds one row per product with a `quantity` (unique per
+  user+product, `CHECK (quantity > 0)`).
+- **stock_subscriptions** — who is waiting for an out‑of‑stock product. Rows are *consumed*
+  when the notification is sent, which is what stops a restock from messaging twice.
+- **bought_goods** — purchase history, **one row per delivered unit** (each carries its own
+  value, and its price is the per‑unit share of what was charged). It keeps the product *name*
+  as a snapshot so history survives even if the product is later removed.
 - **payments** — one row per top‑up, unique per `(provider, external_id)` so a duplicate/retried
   callback can only credit once. **operations** is the balance ledger (top‑ups, deductions,
   referral credits).
@@ -238,6 +352,11 @@ Two ways to manage the shop:
 (one per account/key, or a single `is_infinity` unit for unlimited delivery). Renaming or
 deleting a product keeps carts, reviews, and purchase history consistent automatically.
 
+#### Adding stock from the web panel
+
+Creating a *Stock Item* in the panel is a first-class way to restock: it clears the product's
+cached stock count and notifies everyone waiting on that product, exactly as the in‑chat flow does.
+
 ### Monitoring endpoints
 
 - `/health` — liveness probe. Public callers get only `{"status": "healthy"}` / 503
@@ -271,6 +390,10 @@ The bot's home screen. Admins additionally see an **Admin panel** button here.
 Shop → **categories** → **products** in a category. Out‑of‑stock products are still listed but
 can't be bought.
 
+The shop menu also offers **🔍 Search**: type a name or a keyword and get matching products
+straight away — matches are looked for in both the product name and its description, so you
+don't have to remember which category something lives in.
+
 ![Categories](assets/categories_picture.png)
 ![Products in a category](assets/positions_picture.png)
 
@@ -280,9 +403,13 @@ Each product shows its price (with any active sale/promo already applied), how m
 left (or ∞), and its review rating. Buying pays from your **balance** and the stock value
 (account/key/…) is delivered instantly in chat.
 
+If a product is sold out, the page offers **🔔 Notify me when in stock** instead of a dead end:
+you get a single message as soon as it's restocked, and the subscription is dropped.
+
 ![Product page](assets/position_description_picture.png)
 ![Product page with promo](assets/position_promo.png)
 
+![Notify](assets/position_notify.png)
 ![Purchase](assets/position_purchase.png)
 
 #### Profile & balance top‑up
@@ -295,9 +422,14 @@ Telegram Payments) and then spend from balance. The invoice is valid for `PAYMEN
 
 #### Cart
 
-Add several products, attach a promo code **per item**, then check out in one atomic
-transaction with a formatted receipt. If a promo becomes invalid between adding and checkout,
-the whole checkout is aborted rather than silently charging full price.
+Add several products, set **how many** of each with the ➖/➕ stepper, attach a promo code
+**per item**, then check out in one atomic transaction with a formatted receipt. Every unit
+gets its own delivered value, so buying 3 keys hands you 3 different keys.
+
+If a promo becomes invalid between adding and checkout, the whole checkout is aborted rather
+than silently charging full price. The same goes for stock: if fewer units are left than you
+asked for, the checkout is refused and nothing is charged (a product that has sold out
+entirely is simply dropped from the cart and the rest goes through).
 
 ![Cart](assets/cart.png)
 
@@ -342,10 +474,15 @@ the sale price is computed server‑side and a promo code stacks on top of it.
 ![Categories management](assets/categories_management_menu_picture.png)
 ![Products management](assets/goods_management_menu_picture.png)
 
-#### Stock & channel posting
+#### Stock, notifications & channel posting
 
-When you add stock, the bot can announce the new product to your configured news channel
-(`CHANNEL_ID`).
+When you add stock, two things happen automatically:
+
+- **Waiting users are notified.** Anyone subscribed to that product gets a single "back in
+  stock" message and is unsubscribed. This fires whether the stock was added from the in‑chat
+  menu **or** from the web panel.
+- **The news channel can be posted to** (`CHANNEL_ID`), announcing the product and how many
+  units were added. This one is in‑chat only.
 
 ![Assortment update](assets/assortment_update.png)
 ![Stock / channel post](assets/stock.png)
@@ -394,7 +531,9 @@ admins keep working.
 
 ### SQLAdmin
 
-You can do all the same things in SQLAdmin!
+You can do all the same things in SQLAdmin! Edits made there are not second‑class: they clear
+the caches they affect (user, role, product, stock) and adding stock notifies the users waiting
+for it, just like the in‑chat flow.
 
 ![SQLAdmin](assets/sqladmin_info.png)
 
@@ -404,24 +543,26 @@ You can do all the same things in SQLAdmin!
 
 ## 🧪 Testing
 
-**529 tests** (`pytest`). The data layer runs against a real in‑memory async SQLite database
+**623 tests** (`pytest`). The data layer runs against a real in‑memory async SQLite database
 (real SQL, transactions, and constraints) — only external services are mocked (Telegram Bot
 API, CryptoPay, Redis). What's covered:
 
 - **Transactions & money** — purchase and cart‑checkout atomicity (balance deducted, stock
-  removed, rollback on error), payment **idempotency**, atomic admin balance changes, referral
-  bonus calculation.
+  removed, rollback on error), quantity checkout (one row per unit, partial stock aborts
+  without charging, per‑unit prices summing back to the charge), promo semantics at quantity,
+  payment **idempotency**, atomic admin balance changes, referral bonus calculation.
 - **Promo codes & sales** — every validation path (buy, cart checkout, balance redeem,
   read‑only validate), sale pricing, and promo‑on‑sale stacking.
-- **CRUD** — users, roles (incl. custom create/edit/delete), categories, products, stock, cart,
-  reviews, payments, operations; duplicate/blocking handling; stats queries.
-- **Security & middleware** — rate limiting and bans, permission‑bitmask helpers, critical /
-  replay‑action detection, authentication, the web‑panel login limiter, and role‑cache
-  behavior.
-- **Handlers** — user flows (`/start`, profile, shop, cart, referrals) and admin flows
+- **CRUD** — users, roles (incl. custom create/edit/delete), categories, products, stock, cart
+  (quantities, per‑user uniqueness), stock subscriptions, reviews, payments, operations;
+  duplicate/blocking handling; stats queries.
+- **Security & middleware** — rate limiting and bans (including that every mapped action has a
+  limit), permission‑bitmask helpers, critical / replay‑action detection, authentication, the
+  web‑panel login limiter, and role‑cache behavior.
+- **Handlers** — user flows (`/start`, profile, shop, search, cart, referrals) and admin flows
   (user/role/balance management, catalog, paginated lists, profile views).
-- **Infrastructure** — broadcast, payment recovery, metrics, caching & invalidation,
-  pagination, i18n, validators, and audit logging.
+- **Infrastructure** — broadcast, restock notifications, payment recovery, metrics, caching &
+  invalidation (including web‑panel edits), pagination, i18n, validators, and audit logging.
 
 ```bash
 pytest                     # full suite (coverage runs automatically)

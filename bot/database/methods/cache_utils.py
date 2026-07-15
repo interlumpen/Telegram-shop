@@ -17,7 +17,7 @@ def _on_task_done(task: "asyncio.Task") -> None:
         logger.error("Background cache task failed: %r", exc)
 
 
-def safe_create_task(coro: Coroutine[Any, Any, None]) -> None:
+def safe_create_task(coro: Coroutine[Any, Any, Any]) -> None:
     """
     Safely create an async task for cache invalidation.
     Works in two contexts:

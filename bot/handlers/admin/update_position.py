@@ -8,6 +8,7 @@ from bot.database.models import Permission
 from bot.database.methods import get_item_info_cached, add_values_to_item, update_item, check_value, \
     delete_only_items, get_category_name_by_id
 from bot.handlers.other import _parse_channel_username
+from bot.handlers.admin._common import _notify_restock_safe
 
 from bot.keyboards.inline import back, question_buttons, simple_buttons
 from bot.database.methods.audit import log_audit
@@ -140,6 +141,9 @@ async def updating_item_amount(call: CallbackQuery, state):
         text_lines.append(localize('admin.goods.add.result.skipped_invalid', n=skipped_invalid))
 
     await call.message.edit_text("\n".join(text_lines), parse_mode="HTML", reply_markup=back('goods_management'))
+
+    if added:
+        await _notify_restock_safe(call.bot, item_name)
 
     # Optional: channel notification (if configured)
     channel_username = _parse_channel_username()
@@ -313,6 +317,9 @@ async def update_item_infinity(message: Message, state):
         return
 
     await message.answer(localize('admin.goods.update.success'), reply_markup=back('goods_management'))
+
+    await _notify_restock_safe(message.bot, item_new_name)
+
     admin_info = await message.bot.get_chat(message.from_user.id)
     await log_audit("update_item", user_id=message.from_user.id, resource_type="Item", resource_id=item_new_name,
                     details=f"admin={admin_info.first_name}, old_name={item_old_name}")
@@ -397,6 +404,9 @@ async def update_item_no_infinity(call: CallbackQuery, state):
         text_lines.append(localize('admin.goods.add.result.skipped_batch_dup', n=skipped_batch_dup))
     if skipped_invalid:
         text_lines.append(localize('admin.goods.add.result.skipped_invalid', n=skipped_invalid))
+
+    if added:
+        await _notify_restock_safe(call.bot, item_new_name)
 
     # Optional: channel notification (if configured)
     channel_username = _parse_channel_username()
