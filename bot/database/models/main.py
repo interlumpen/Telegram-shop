@@ -304,8 +304,9 @@ class PromoCodes(Database.BASE):
     __tablename__ = 'promo_codes'
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     code: Mapped[str] = mapped_column(String(50), unique=True, nullable=False, index=True)
-    discount_type: Mapped[str] = mapped_column(String(10), nullable=False)  # 'percent' | 'fixed'
+    discount_type: Mapped[str] = mapped_column(String(10), nullable=False)  # 'percent' | 'fixed' | 'balance'
     discount_value: Mapped[Decimal] = mapped_column(Numeric(12, 2), nullable=False)
+    scope: Mapped[str] = mapped_column(String(16), nullable=False, server_default='global')
     max_uses: Mapped[int] = mapped_column(Integer, nullable=False, default=0)  # 0 = unlimited
     current_uses: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     expires_at: Mapped[Optional[datetime.datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
@@ -317,8 +318,24 @@ class PromoCodes(Database.BASE):
     created_at: Mapped[datetime.datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now())
 
+    __table_args__ = (
+        CheckConstraint("scope IN ('global','category','item')", name='ck_promo_codes_scope'),
+    )
+
     def __str__(self):
         return self.code or ""
+
+
+def promo_scope_for(category_id: Optional[int], item_id: Optional[int]) -> str:
+    """Derive a promo's scope discriminator from its bindings (item wins).
+
+    Item-first matches the precedence in promo_rule_error.
+    """
+    if item_id is not None:
+        return 'item'
+    if category_id is not None:
+        return 'category'
+    return 'global'
 
 
 class PromoCodeUsages(Database.BASE):

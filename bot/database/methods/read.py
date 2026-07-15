@@ -540,7 +540,8 @@ async def promo_rule_error(s, promo, user_id, *, goods=None, require_balance=Fal
     """Shared promo-code business rules; returns a canonical error code or None if valid.
 
     Canonical codes: not_found, inactive, wrong_type, expired, max_uses, already_used, wrong_item, wrong_category
-    each caller maps them to its own user-facing keys.
+    each caller maps them to its own user-facing keys. wrong_item/wrong_category
+    also cover a promo whose bound item/category has since been deleted.
 
     - ``promo``: the already-fetched PromoCodes row (or None).
     - ``goods``: the Goods row the promo applies to, for item/category binding (ignored when ``require_balance`` is True).
@@ -577,6 +578,10 @@ async def promo_rule_error(s, promo, user_id, *, goods=None, require_balance=Fal
         return "already_used"
 
     if not require_balance:
+        if promo.scope == "item" and promo.item_id is None:
+            return "wrong_item"
+        if promo.scope == "category" and promo.category_id is None:
+            return "wrong_category"
         if promo.item_id and (goods is None or promo.item_id != goods.id):
             return "wrong_item"
         if promo.category_id and (goods is None or promo.category_id != goods.category_id):

@@ -5,7 +5,7 @@ from sqlalchemy import select, exists, func as sa_func
 from sqlalchemy.exc import IntegrityError
 
 from bot.database.models import User, ItemValues, Goods, Categories, Operations, Payments, ReferralEarnings, Role
-from bot.database.models.main import PromoCodes, CartItems, Reviews, StockSubscriptions
+from bot.database.models.main import PromoCodes, CartItems, Reviews, StockSubscriptions, promo_scope_for
 from bot.database import Database
 from bot.database.methods.cache_utils import safe_create_task
 from bot.database.methods.read import invalidate_stats_cache, invalidate_item_cache
@@ -146,8 +146,15 @@ async def create_promo_code(
         category_id: int = None,
         item_id: int = None,
 ) -> int | None:
-    """Create a promo code. Returns ID or None if code already exists."""
+    """Create a promo code. Returns ID or None if code already exists.
+
+    Raises ValueError if bound to both a category and an item.
+    """
     from decimal import Decimal
+
+    if category_id is not None and item_id is not None:
+        raise ValueError("a promo code cannot be bound to both a category and an item")
+
     async with Database().session() as s:
         result = await s.execute(select(exists().where(PromoCodes.code == code.upper())))
         if result.scalar():
@@ -156,6 +163,7 @@ async def create_promo_code(
             code=code.upper(),
             discount_type=discount_type,
             discount_value=Decimal(str(discount_value)),
+            scope=promo_scope_for(category_id, item_id),
             max_uses=max_uses,
             expires_at=expires_at,
             category_id=category_id,

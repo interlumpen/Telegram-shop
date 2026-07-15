@@ -215,6 +215,11 @@ async def query_promo_codes(offset: int = 0, limit: int = 10, count_only: bool =
                 'discount_value': p.discount_value, 'max_uses': p.max_uses,
                 'current_uses': p.current_uses, 'is_active': p.is_active,
                 'expires_at': p.expires_at, 'created_at': p.created_at,
+                'scope': p.scope, 'category_id': p.category_id, 'item_id': p.item_id,
+                'dangling': (
+                    (p.scope == 'category' and p.category_id is None)
+                    or (p.scope == 'item' and p.item_id is None)
+                ),
             }
             for p in rows
         ]

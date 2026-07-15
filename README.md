@@ -146,7 +146,6 @@ flowchart TD
     PG[("PostgreSQL 16")]
     RD[("Redis 7 — optional")]
     FS["logs/ · data/"]
-
     DP <--> CP
     RM <--> CP
     DP --> PG
@@ -186,27 +185,27 @@ diagrams say what each table is *for*.
 
 ```mermaid
 erDiagram
-    categories ||--o{ goods : "groups"
-    goods ||--o{ item_values : "sellable units"
-    goods ||--o{ cart_items : "in carts"
-    goods ||--o{ reviews : "rated by"
-    goods ||--o{ stock_subscriptions : "waited for"
-    categories ||--o{ promo_codes : "optional binding"
-    goods ||--o{ promo_codes : "optional binding"
+    categories ||--o{ goods: "groups"
+    goods ||--o{ item_values: "sellable units"
+    goods ||--o{ cart_items: "in carts"
+    goods ||--o{ reviews: "rated by"
+    goods ||--o{ stock_subscriptions: "waited for"
+    categories ||--o{ promo_codes: "optional binding"
+    goods ||--o{ promo_codes: "optional binding"
 ```
 
 **Users, money & access**
 
 ```mermaid
 erDiagram
-    roles ||--o{ users : "role_id (RESTRICT)"
-    users ||--o{ users : "referral_id (self)"
-    users ||--o{ payments : "top-ups (idempotent)"
-    users ||--o{ operations : "balance ledger"
-    users ||--o{ referral_earnings : "commission"
-    users ||--o{ bought_goods : "purchase history"
-    users ||--o{ promo_code_usages : "redeemed"
-    promo_codes ||--o{ promo_code_usages : "once per user"
+    roles ||--o{ users: "role_id (RESTRICT)"
+    users ||--o{ users: "referral_id (self)"
+    users ||--o{ payments: "top-ups (idempotent)"
+    users ||--o{ operations: "balance ledger"
+    users ||--o{ referral_earnings: "commission"
+    users ||--o{ bought_goods: "purchase history"
+    users ||--o{ promo_code_usages: "redeemed"
+    promo_codes ||--o{ promo_code_usages: "once per user"
 ```
 
 `audit_log` is absent from both on purpose: its `user_id` carries **no** foreign
@@ -232,8 +231,11 @@ The data model, in plain terms:
 - **payments** — one row per top‑up, unique per `(provider, external_id)` so a duplicate/retried
   callback can only credit once. **operations** is the balance ledger (top‑ups, deductions,
   referral credits).
-- **promo_codes** (+ per‑user usages), **referral_earnings**, and an **audit_log** of every
-  admin action. All money is stored as exact `NUMERIC(12,2)` — never floats.
+- **promo_codes** (+ per‑user usages) — a promo can be bound to a category or a product. It
+  carries its own `scope` because the bindings are `ON DELETE SET NULL`. A promo whose target is gone
+  stays scoped and applies to nothing.
+- **referral_earnings**, and an **audit_log** of every admin action. All money is stored as
+  exact `NUMERIC(12,2)` — never floats.
 
 ---
 
@@ -426,10 +428,12 @@ Add several products, set **how many** of each with the ➖/➕ stepper, attach 
 **per item**, then check out in one atomic transaction with a formatted receipt. Every unit
 gets its own delivered value, so buying 3 keys hands you 3 different keys.
 
-If a promo becomes invalid between adding and checkout, the whole checkout is aborted rather
-than silently charging full price. The same goes for stock: if fewer units are left than you
-asked for, the checkout is refused and nothing is charged (a product that has sold out
-entirely is simply dropped from the cart and the rest goes through).
+If the promo stops applying between adding and checkout — it expired, ran out, or its category was deleted — the line
+says so and shows the real price, and the checkout aborts rather than silently charging full price.
+
+The same goes for stock: if fewer units are left than you asked for, the checkout is refused
+and nothing is charged (a product that has sold out entirely is simply dropped from the cart
+and the rest goes through).
 
 ![Cart](assets/cart.png)
 
@@ -543,7 +547,7 @@ for it, just like the in‑chat flow.
 
 ## 🧪 Testing
 
-**623 tests** (`pytest`). The data layer runs against a real in‑memory async SQLite database
+**642 tests** (`pytest`). The data layer runs against a real in‑memory async SQLite database
 (real SQL, transactions, and constraints) — only external services are mocked (Telegram Bot
 API, CryptoPay, Redis). What's covered:
 
@@ -552,7 +556,9 @@ API, CryptoPay, Redis). What's covered:
   without charging, per‑unit prices summing back to the charge), promo semantics at quantity,
   payment **idempotency**, atomic admin balance changes, referral bonus calculation.
 - **Promo codes & sales** — every validation path (buy, cart checkout, balance redeem,
-  read‑only validate), sale pricing, and promo‑on‑sale stacking.
+  read‑only validate), scope enforcement (a promo whose bound category/product was deleted
+  applies to nothing), what the cart displays matching what checkout charges, sale pricing,
+  and promo‑on‑sale stacking.
 - **CRUD** — users, roles (incl. custom create/edit/delete), categories, products, stock, cart
   (quantities, per‑user uniqueness), stock subscriptions, reviews, payments, operations;
   duplicate/blocking handling; stats queries.

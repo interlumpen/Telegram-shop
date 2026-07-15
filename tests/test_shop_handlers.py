@@ -58,6 +58,34 @@ class TestCartHandlers:
         assert "100" in text          # 25 * 4, not 25
         assert "×4" in text
 
+    async def test_cart_warns_when_a_line_promo_stopped_applying(self, make_callback_query,
+                                                                 fsm_context, user_factory,
+                                                                 item_factory):
+        from datetime import datetime, timedelta, timezone
+        from decimal import Decimal
+        from bot.handlers.user.cart import view_cart_handler
+        from bot.database.methods.create import add_to_cart
+        from bot.database.main import Database
+        from bot.database.models.main import PromoCodes
+
+        await user_factory(telegram_id=620010, balance=1000)
+        await item_factory(name="WarnItem", price=100, values=[("v", False)])
+        async with Database().session() as s:
+            s.add(PromoCodes(
+                code="WARNEXP", discount_type="percent", discount_value=Decimal("10"),
+                scope="global", is_active=True,
+                expires_at=datetime.now(timezone.utc) - timedelta(hours=1),
+            ))
+        await add_to_cart(620010, "WarnItem", promo_code="WARNEXP")
+
+        call = make_callback_query(data="cart", user_id=620010)
+        await view_cart_handler(call, fsm_context)
+
+        text = call.message.edit_text.call_args[0][0]
+        assert "⚠️" in text            # the line is flagged, not silently full-price
+        assert "WARNEXP" in text        # and it names the promo to remove
+        assert "100" in text            # charged at full price, no fake discount
+
     async def test_stepper_rejects_other_users_line(self, make_callback_query, fsm_context,
                                                     user_factory, item_factory):
         from bot.handlers.user.cart import cart_qty_handler

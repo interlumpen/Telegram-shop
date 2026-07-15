@@ -13,7 +13,7 @@ from starlette.middleware.sessions import SessionMiddleware
 from starlette.routing import Route
 from sqlalchemy import text
 
-from markupsafe import Markup
+from markupsafe import Markup, escape
 
 from bot.misc import EnvKeys
 from bot.database.methods.audit import log_audit
@@ -426,13 +426,51 @@ class AuditLogAdmin(ModelView, model=AuditLog):
     icon = "fa-solid fa-clipboard-list"
 
 
+def _format_promo_scope_html(model, name):
+    """Render scope, flagging a promo whose bound category/item was deleted.
+    """
+    scope = getattr(model, name, None) or "global"
+    dangling = (
+        (scope == "category" and getattr(model, "category_id", None) is None)
+        or (scope == "item" and getattr(model, "item_id", None) is None)
+    )
+    if not dangling:
+        return Markup(
+            f'<span style="display:inline-block;background:#e2e8f0;padding:1px 6px;'
+            f'border-radius:4px;font-size:11px">{escape(scope)}</span>'
+        )
+    return Markup(
+        f'<span style="display:inline-block;background:#e2e8f0;padding:1px 6px;'
+        f'border-radius:4px;font-size:11px">{escape(scope)}</span> '
+        f'<span style="display:inline-block;background:#fed7d7;color:#9b2c2c;'
+        f'padding:1px 6px;border-radius:4px;font-size:11px;font-weight:600" '
+        f'title="The bound category/item was deleted. This promo now applies to nothing.">'
+        f'DANGLING</span>'
+    )
+
+
 class PromoCodeAdmin(AuditModelView, model=PromoCodes):
     column_list = [PromoCodes.id, PromoCodes.code, PromoCodes.discount_type,
-                   PromoCodes.discount_value, PromoCodes.max_uses, PromoCodes.current_uses,
+                   PromoCodes.discount_value, PromoCodes.scope, PromoCodes.category_id,
+                   PromoCodes.item_id, PromoCodes.max_uses, PromoCodes.current_uses,
                    PromoCodes.is_active, PromoCodes.expires_at, PromoCodes.created_at]
     column_searchable_list = [PromoCodes.code]
     column_sortable_list = [PromoCodes.id, PromoCodes.code, PromoCodes.created_at]
     column_default_sort = (PromoCodes.id, True)
+    form_columns = [PromoCodes.code, PromoCodes.discount_type, PromoCodes.discount_value,
+                    PromoCodes.scope, PromoCodes.category_id, PromoCodes.item_id,
+                    PromoCodes.max_uses, PromoCodes.expires_at, PromoCodes.is_active]
+    form_args = {
+        "scope": {
+            "description": (
+                "global | category | item. Must match the binding: 'category' with "
+                "a category_id, 'item' with an item_id. This is what keeps a promo "
+                "scoped after its category/item is deleted."
+            ),
+        },
+    }
+    column_formatters = {"scope": _format_promo_scope_html}
+    column_formatters_detail = {"scope": _format_promo_scope_html}
     name = "Promo Code"
     name_plural = "Promo Codes"
     icon = "fa-solid fa-tag"

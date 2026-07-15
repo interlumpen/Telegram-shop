@@ -23,6 +23,14 @@ router = Router()
 
 # --- Promo list ---
 
+def _promo_list_label(p: dict) -> str:
+    """One promo's row in the list. `⚠️` marks a promo whose binding was deleted:
+    it looks healthy but applies to nothing."""
+    warn = "⚠️ " if p.get('dangling') else ""
+    state_icon = '✅' if p['is_active'] else '⛔'
+    return f"{warn}{state_icon} {p['code']} ({p['current_uses']}/{p['max_uses'] or '∞'})"
+
+
 @router.callback_query(F.data == "promo_mgmt", HasPermissionFilter(permission=Permission.PROMO_MANAGE))
 async def promo_management_handler(call: CallbackQuery, state: FSMContext):
     paginator = LazyPaginator(query_promo_codes, per_page=10)
@@ -42,7 +50,7 @@ async def promo_management_handler(call: CallbackQuery, state: FSMContext):
 
     markup = await lazy_paginated_keyboard(
         paginator=paginator,
-        item_text=lambda p: f"{'✅' if p['is_active'] else '⛔'} {p['code']} ({p['current_uses']}/{p['max_uses'] or '∞'})",
+        item_text=_promo_list_label,
         item_callback=lambda p: f"promo_v_{p['id']}",
         page=0,
         back_cb=None,
@@ -68,7 +76,7 @@ async def navigate_promos(call: CallbackQuery, state: FSMContext):
 
     markup = await lazy_paginated_keyboard(
         paginator=paginator,
-        item_text=lambda p: f"{'✅' if p['is_active'] else '⛔'} {p['code']} ({p['current_uses']}/{p['max_uses'] or '∞'})",
+        item_text=_promo_list_label,
         item_callback=lambda p: f"promo_v_{p['id']}",
         page=page,
         back_cb=None,
@@ -87,6 +95,35 @@ async def navigate_promos(call: CallbackQuery, state: FSMContext):
 
 # --- View / toggle / delete promo ---
 
+async def _promo_binding_label(s, promo) -> str:
+    """Human-readable description of what a promo applies to.
+
+    A scoped promo whose bound category/item was deleted keeps its scope but
+    loses the id (ON DELETE SET NULL). It rejects every product from then on, so
+    say that plainly instead of letting it read as healthy.
+    """
+    from bot.database.models.main import Categories, Goods
+    from sqlalchemy import select
+
+    if promo.scope == "category":
+        if promo.category_id is None:
+            return localize("admin.promo.binding.dangling")
+        name = (await s.execute(
+            select(Categories.name).where(Categories.id == promo.category_id)
+        )).scalar()
+        return localize("admin.promo.binding.on_category", name=name or "?")
+
+    if promo.scope == "item":
+        if promo.item_id is None:
+            return localize("admin.promo.binding.dangling")
+        name = (await s.execute(
+            select(Goods.name).where(Goods.id == promo.item_id)
+        )).scalar()
+        return localize("admin.promo.binding.on_item", name=name or "?")
+
+    return localize("admin.promo.binding.none")
+
+
 async def _show_promo_view(message, promo_id: int):
     """Shared logic: render promo detail view on a Message object."""
     from bot.database.models.main import PromoCodes
@@ -98,11 +135,14 @@ async def _show_promo_view(message, promo_id: int):
         if not promo:
             return
 
+        binding = await _promo_binding_label(s, promo)
+
         text = localize(
             "admin.promo.detail",
             code=promo.code,
             discount_type=promo.discount_type,
             discount_value=promo.discount_value,
+            binding=binding,
             current_uses=promo.current_uses,
             max_uses=promo.max_uses or "∞",
             expires_at=str(promo.expires_at or "—"),

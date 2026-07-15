@@ -7,7 +7,7 @@ from aiogram.fsm.context import FSMContext
 from aiogram.exceptions import TelegramBadRequest
 
 from bot.database.methods.create import add_to_cart, CART_MAX_QTY_PER_ITEM
-from bot.database.methods.read import get_cart_items, get_cart_count
+from bot.database.methods.read import get_cart_items, get_cart_count, validate_promo_for_item
 from bot.database.methods.update import set_cart_item_quantity
 from bot.database.methods.delete import remove_from_cart, clear_cart
 from bot.database.methods.transactions import checkout_cart_transaction
@@ -21,16 +21,17 @@ router = Router()
 RECEIPT_MAX_BUTTONS = 10
 
 
-async def _resolve_promo_price(price: Decimal, promo_code: str | None, quantity: int = 1) -> Decimal | None:
-    """Return the discounted total for a cart line, or None if no valid promo.
+async def _resolve_promo_price(price: Decimal, promo_code: str | None, item_name: str,
+                               user_id: int, quantity: int = 1) -> Decimal | None:
+    """Return the discounted line total, or None if the promo does not apply.
 
     A percent promo scales with quantity; a fixed promo comes off the line once.
     """
     if not promo_code:
         return None
-    from bot.database.methods.read import get_promo_code
-    promo = await get_promo_code(promo_code)
-    if not promo or not promo.get('is_active'):
+
+    valid, _err, promo = await validate_promo_for_item(promo_code, item_name, user_id)
+    if not valid:
         return None
 
     if promo['discount_type'] == 'percent':
@@ -73,7 +74,9 @@ async def _show_cart(call: CallbackQuery):
 
         # Sale price is the base; a promo code (if any) stacks on top of it.
         base_price, on_sale, original = effective_price(info)
-        discounted = await _resolve_promo_price(base_price, item.get('promo_code'), qty)
+        discounted = await _resolve_promo_price(
+            base_price, item.get('promo_code'), item['item_name'], user_id, qty,
+        )
 
         if discounted is not None:
             line_total = discounted
@@ -81,6 +84,13 @@ async def _show_cart(call: CallbackQuery):
                 "cart.item_promo", name=item['item_name'], qty=qty,
                 original=(original * qty).quantize(Decimal("0.01")), price=line_total,
                 currency=EnvKeys.PAY_CURRENCY, code=item['promo_code'],
+            ))
+        elif item.get('promo_code'):
+            line_total = (base_price * qty).quantize(Decimal("0.01"))
+            lines.append(localize(
+                "cart.item_promo_invalid", name=item['item_name'], qty=qty,
+                price=line_total, currency=EnvKeys.PAY_CURRENCY,
+                code=item['promo_code'],
             ))
         elif on_sale:
             line_total = (base_price * qty).quantize(Decimal("0.01"))
@@ -238,7 +248,9 @@ async def _calc_cart_total_with_promos(user_id: int) -> Decimal:
             continue
         qty = item['quantity']
         base_price, _on_sale, _original = effective_price(info)
-        discounted = await _resolve_promo_price(base_price, item.get('promo_code'), qty)
+        discounted = await _resolve_promo_price(
+            base_price, item.get('promo_code'), item['item_name'], user_id, qty,
+        )
         total += discounted if discounted is not None else (base_price * qty).quantize(Decimal("0.01"))
     return total
 
