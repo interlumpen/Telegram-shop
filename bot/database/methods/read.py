@@ -184,9 +184,17 @@ async def get_all_users() -> list[tuple[int]]:
         return result.all()
 
 
-async def get_bought_item_info(item_id: int) -> dict | None:
-    """Return bought item row as dict by row id, or None."""
-    return await _fetch_one_dict(BoughtGoods, BoughtGoods.id == item_id)
+async def get_bought_item_info(item_id: int, buyer_id: int | None = None) -> dict | None:
+    """Return bought item row as dict by row id, or None.
+
+    When ``buyer_id`` is given the row must also belong to that buyer, so a user
+    can only read their own delivered goods. Admin views pass ``buyer_id=None``
+    after an explicit permission check.
+    """
+    clauses = [BoughtGoods.id == item_id]
+    if buyer_id is not None:
+        clauses.append(BoughtGoods.buyer_id == buyer_id)
+    return await _fetch_one_dict(BoughtGoods, *clauses)
 
 
 async def get_item_info(item_name: str) -> dict | None:
@@ -439,9 +447,17 @@ async def get_referral_earnings_stats(referrer_id: int) -> Dict:
         }
 
 
-async def get_one_referral_earning(earning_id: int) -> dict | None:
-    """Get one user referral earning info."""
-    return await _fetch_one_dict(ReferralEarnings, ReferralEarnings.id == earning_id)
+async def get_one_referral_earning(earning_id: int, referrer_id: int | None = None) -> dict | None:
+    """Get one referral earning as a dict, or None.
+
+    When ``referrer_id`` is given the row must belong to that referrer, so a user
+    can only read their own earnings. Admin views pass ``referrer_id=None`` after
+    an explicit permission check.
+    """
+    clauses = [ReferralEarnings.id == earning_id]
+    if referrer_id is not None:
+        clauses.append(ReferralEarnings.referrer_id == referrer_id)
+    return await _fetch_one_dict(ReferralEarnings, *clauses)
 
 
 # --- Cached versions ---
@@ -508,8 +524,6 @@ async def invalidate_item_cache(item_name: str, category_name: str = None):
         await cache.delete(f"item_values:{item_name}")
         if category_name:
             await cache.delete(f"category:{category_name}")
-        else:
-            await cache.invalidate_pattern("category:*")
 
 
 async def invalidate_category_cache(category_name: str):

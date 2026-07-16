@@ -1,3 +1,5 @@
+from html import escape as _esc
+
 from bot.i18n import localize
 from bot.logger_mesh import logger
 from bot.misc import EnvKeys
@@ -22,7 +24,7 @@ def user_profile_lines(user, first_name, target_id, *, overall_balance,
     (blocked status, earnings stats).
     """
     lines = [
-        localize('profile.caption', name=first_name, id=target_id),
+        localize('profile.caption', name=_esc(str(first_name or '')), id=target_id),
         '',
         localize('profile.id', id=target_id),
         localize('profile.balance', amount=user.get('balance'), currency=EnvKeys.PAY_CURRENCY),

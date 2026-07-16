@@ -29,6 +29,29 @@ def coerce_sale_until(value: Any) -> datetime | None:
     return value
 
 
+def apply_promo_discount(
+        base_price: Decimal, discount_type: str, discount_value: Any, quantity: int = 1
+) -> Decimal:
+    """Return the discounted line total for ``quantity`` units, clamped to >= 0.
+
+    - ``percent``: a percentage off each unit; the percent is clamped to [0, 100]
+      so a mis-entered value (e.g. 150 from the web admin) can never produce a
+      negative price that would *mint* balance on purchase.
+    - ``fixed``: a flat amount off the whole line once (not per unit); clamped so
+      it can neither go negative nor add to the price.
+
+    Balance-type promos credit the balance directly and never reach here.
+    """
+    base = Decimal(str(base_price))
+    if discount_type == 'percent':
+        pct = min(max(Decimal(str(discount_value)), Decimal(0)), Decimal(100))
+        line = base * (1 - pct / 100) * quantity
+    else:  # 'fixed'
+        amount = max(Decimal(str(discount_value)), Decimal(0))
+        line = base * quantity - amount
+    return max(line, Decimal(0)).quantize(Decimal("0.01"))
+
+
 def effective_price(goods: Any, now: datetime | None = None) -> tuple[Decimal, bool, Decimal]:
     """Return (final_price, on_sale, original_price) for a product.
 

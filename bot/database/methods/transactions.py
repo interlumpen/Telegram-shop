@@ -13,7 +13,7 @@ from bot.database.methods.read import (
     invalidate_user_cache, invalidate_stats_cache, invalidate_item_cache, promo_rule_error,
 )
 from bot.database.methods.cache_utils import safe_create_task
-from bot.database.methods.pricing import effective_price
+from bot.database.methods.pricing import effective_price, apply_promo_discount
 from bot.database.methods.audit import log_audit
 
 # Canonical promo error code (from promo_rule_error) -> user-facing key per call site.
@@ -105,12 +105,10 @@ async def buy_item_transaction(telegram_id: int, item_name: str, promo_code: str
                     if err:
                         raise _Abort(_BUY_PROMO_ERRORS[err])
 
-                    # Apply discount
-                    if promo.discount_type == 'percent':
-                        final_price = price * (1 - Decimal(str(promo.discount_value)) / 100)
-                    else:
-                        final_price = max(price - Decimal(str(promo.discount_value)), Decimal(0))
-                    final_price = final_price.quantize(Decimal("0.01"))
+                    # Apply discount (clamped: percent in [0,100], result >= 0).
+                    final_price = apply_promo_discount(
+                        price, promo.discount_type, promo.discount_value, 1
+                    )
 
                     # Record usage
                     promo.current_uses += 1
@@ -125,9 +123,12 @@ async def buy_item_transaction(telegram_id: int, item_name: str, promo_code: str
                 if user.balance < final_price:
                     raise _Abort("insufficient_funds")
 
-                # 4. Receive and lock the goods for purchase (blocking wait for row lock)
+                # 4. Receive and lock the goods for purchase (blocking wait for row lock).
+                # Prefer an infinite value (never consumed) over finite stock
                 item_value = (await s.execute(
-                    select(ItemValues).where(ItemValues.item_id == goods.id).with_for_update()
+                    select(ItemValues).where(ItemValues.item_id == goods.id)
+                    .order_by(ItemValues.is_infinity.desc(), ItemValues.id)
+                    .with_for_update()
                 )).scalars().first()
 
                 if not item_value:
@@ -314,10 +315,18 @@ async def process_payment_with_referral(
     return True, "success"
 
 
-async def checkout_cart_transaction(user_id: int) -> tuple[bool, str, list | None]:
+async def checkout_cart_transaction(
+        user_id: int, expected_total: Decimal | None = None
+) -> tuple[bool, str, list | None]:
     """
     Atomic cart checkout — purchase all items from user's cart in one transaction.
     Promo codes are read from cart_items.promo_code and validated at checkout time.
+
+    ``expected_total`` is the total shown to the user on the confirmation dialog.
+    If the price/sale changed in between, the recomputed total won't match and the
+    checkout aborts with ``price_changed`` instead of silently charging a
+    different amount.
+
     Returns: (success, message, list[purchase_data])
     """
     max_retries = 3
@@ -426,16 +435,10 @@ async def checkout_cart_transaction(user_id: int) -> tuple[bool, str, list | Non
                         if await promo_rule_error(s, promo, user_id, goods=goods):
                             raise _Abort("promo_expired_during_checkout")
 
-                        if promo.discount_type == 'percent':
-                            # Percent scales with quantity
-                            line_price = (
-                                price * (1 - Decimal(str(promo.discount_value)) / 100) * qty
-                            ).quantize(Decimal("0.01"))
-                        else:
-                            # Fixed comes off the line once, not per unit
-                            line_price = max(
-                                (price * qty) - Decimal(str(promo.discount_value)), Decimal(0)
-                            ).quantize(Decimal("0.01"))
+                        # Percent scales with quantity; fixed comes off the line once. Clamped so a bad discount can't go negative.
+                        line_price = apply_promo_discount(
+                            price, promo.discount_type, promo.discount_value, qty
+                        )
                         promos_to_record[promo.id] = promo
 
                     purchases.append({
@@ -457,6 +460,11 @@ async def checkout_cart_transaction(user_id: int) -> tuple[bool, str, list | Non
                     # Commit the invalid-item cleanup above, but report failure.
                     outcome = (False, "cart_items_unavailable", None)
                 else:
+                    # Guard: the sale/price (or a promo) may have changed between the confirmation dialog and this commit.
+                    # Refuse to charge a total the user did not agree to.
+                    if expected_total is not None and total_price != expected_total:
+                        raise _Abort("price_changed")
+
                     # 4. Check balance
                     if user.balance < total_price:
                         raise _Abort("insufficient_funds")

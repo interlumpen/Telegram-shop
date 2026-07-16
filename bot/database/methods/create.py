@@ -29,6 +29,11 @@ async def create_user(telegram_id: int, registration_date: datetime, referral_id
                 referral_id=referral_id,
             )
         )
+        try:
+            await s.flush()
+        except IntegrityError:
+            # Lost the race — the user now exists, which is the desired outcome.
+            await s.rollback()
 
 
 async def create_item(item_name: str, item_description: str, item_price: int, category_name: str) -> None:

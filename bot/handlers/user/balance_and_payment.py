@@ -1,6 +1,7 @@
 import hashlib
 import json
 from decimal import Decimal, ROUND_HALF_UP
+from html import escape as html_escape
 
 from aiogram import Router, F
 from aiogram.types import CallbackQuery, Message, PreCheckoutQuery, SuccessfulPayment
@@ -36,7 +37,7 @@ async def _notify_referrer_bonus(bot, user_id: int, amount: Decimal | int, payer
             await bot.send_message(
                 referral_id,
                 localize('payments.referral.bonus',
-                         amount=bonus, name=payer_name,
+                         amount=bonus, name=html_escape(payer_name or ''),
                          id=payer_id, currency=EnvKeys.PAY_CURRENCY),
                 reply_markup=close()
             )

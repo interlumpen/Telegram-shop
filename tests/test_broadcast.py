@@ -67,8 +67,8 @@ class TestBroadcastManager:
         user_ids = list(range(1, 10))
         stats = await self.manager.broadcast(user_ids, "Hello!")
         assert stats.sent > 0
-        assert stats.failed > 0
-        assert stats.sent + stats.failed == stats.total
+        assert stats.blocked > 0
+        assert stats.sent + stats.failed + stats.blocked == stats.total
 
     @pytest.mark.asyncio
     async def test_broadcast_forbidden_user(self):
@@ -77,7 +77,8 @@ class TestBroadcastManager:
         )
         stats = await self.manager.broadcast([1, 2, 3], "Hello!")
         assert stats.sent == 0
-        assert stats.failed == 3
+        assert stats.blocked == 3
+        assert stats.failed == 0
 
     @pytest.mark.asyncio
     async def test_broadcast_cancel(self):

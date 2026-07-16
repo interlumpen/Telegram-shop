@@ -182,6 +182,7 @@ TRANSLATIONS: dict[str, dict[str, str]] = {
         "admin.goods.show_items": "📄 Показать товары в позиции",
         "admin.goods.add.prompt.name": "Введите название позиции",
         "admin.goods.add.name.exists": "❌ Позиция не может быть создана (такая позиция уже существует)",
+        "admin.goods.add.name.invalid": "⚠️ Недопустимое название (1–100 символов, без управляющих символов).",
         "admin.goods.add.prompt.description": "Введите описание для позиции:",
         "admin.goods.add.prompt.price": "Введите цену для позиции (число в {currency}):",
         "admin.goods.add.price.invalid": "⚠️ Некорректное значение цены. Введите число.",
@@ -306,12 +307,14 @@ TRANSLATIONS: dict[str, dict[str, str]] = {
             "👥 Всего: {total}\n"
             "✅ Доставлено: {sent}\n"
             "❌ Не доставлено: {failed}\n"
-            "🚫 Заблокировали бота: ~{blocked}\n"
+            "🚫 Заблокировали бота: {blocked}\n"
             "📈 Успешность: {success}%\n"
             "⏱ Время: {duration} сек"
         ),
         "broadcast.cancel": "❌ Рассылка отменена",
         "broadcast.warning": "Нет активной рассылки",
+        "broadcast.already_running": "⏳ Рассылка уже выполняется. Дождитесь её завершения.",
+        "broadcast.btn.cancel": "🛑 Отменить рассылку",
 
         # === Payments / Top-up Flow ===
         "payments.replenish_prompt": "Введите сумму пополнения в {currency}:",
@@ -471,6 +474,7 @@ TRANSLATIONS: dict[str, dict[str, str]] = {
         "cart.full": "❌ Корзина переполнена (макс. 10 товаров).",
         "cart.qty_max": "❌ Максимум {max} шт. одного товара.",
         "cart.out_of_stock": "Товара не хватает на складе в нужном количестве. Уменьшите количество и попробуйте снова.",
+        "cart.price_changed": "Цена в корзине изменилась. Откройте корзину и подтвердите новую сумму.",
         "cart.item_not_found": "❌ Товар не найден.",
         "cart.removed": "✅ Товар убран из корзины.",
         "cart.cleared": "✅ Корзина очищена.",
@@ -708,6 +712,7 @@ TRANSLATIONS: dict[str, dict[str, str]] = {
         "admin.goods.show_items": "📄 show goods in item",
         "admin.goods.add.prompt.name": "Enter the item name",
         "admin.goods.add.name.exists": "❌ Item cannot be created (it already exists)",
+        "admin.goods.add.name.invalid": "⚠️ Invalid name (1–100 characters, no control characters).",
         "admin.goods.add.prompt.description": "Enter item description:",
         "admin.goods.add.prompt.price": "Enter item price (number in {currency}):",
         "admin.goods.add.price.invalid": "⚠️ Invalid price. Please enter a number.",
@@ -832,12 +837,14 @@ TRANSLATIONS: dict[str, dict[str, str]] = {
             "👥 Total: {total}\n"
             "✅ Delivered: {sent}\n"
             "❌ Undelivered: {failed}\n"
-            "🚫 Blocked bot: ~{blocked}\n"
+            "🚫 Blocked bot: {blocked}\n"
             "📈 Success rate: {success}%\n"
             "⏱ Time: {duration} sec"
         ),
         "broadcast.cancel": "❌ The broadcast has been canceled.",
         "broadcast.warning": "No active broadcast",
+        "broadcast.already_running": "⏳ A broadcast is already running. Wait for it to finish.",
+        "broadcast.btn.cancel": "🛑 Cancel broadcast",
 
         # === Payments / Top-up Flow ===
         "payments.replenish_prompt": "Enter top-up amount in {currency}:",
@@ -997,6 +1004,7 @@ TRANSLATIONS: dict[str, dict[str, str]] = {
         "cart.full": "❌ Cart is full (max 10 items).",
         "cart.qty_max": "❌ Maximum {max} units of one item.",
         "cart.out_of_stock": "Not enough stock for the requested quantity. Reduce it and try again.",
+        "cart.price_changed": "The cart total changed. Open the cart and confirm the new amount.",
         "cart.item_not_found": "❌ Item not found.",
         "cart.removed": "✅ Item removed from cart.",
         "cart.cleared": "✅ Cart cleared.",

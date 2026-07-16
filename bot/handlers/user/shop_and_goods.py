@@ -17,9 +17,10 @@ from bot.database.methods.read import (
 )
 from bot.database.methods.create import create_review, subscribe_to_stock
 from bot.database.methods.delete import unsubscribe_from_stock
-from bot.database.methods.lazy_queries import query_item_reviews, query_goods_search
+from bot.database.methods.lazy_queries import query_item_reviews, query_goods_search, query_items_in_category
 from bot.database.methods.transactions import redeem_balance_promo
 from bot.database.methods.audit import log_audit
+from bot.database.models import Permission
 from bot.keyboards import item_info, back, lazy_paginated_keyboard
 from bot.keyboards.inline import simple_buttons, rating_keyboard
 from aiogram.types import InlineKeyboardButton
@@ -217,18 +218,20 @@ async def items_list_callback_handler(call: CallbackQuery, state: FSMContext):
     Show items of selected category.
     Parse index and page from cat:{index}:{page}, look up category name from state.
     """
-    parts = call.data.split(':')
-    idx = int(parts[1])
-    cat_page = int(parts[2]) if len(parts) > 2 else 0
-
-    data = await state.get_data()
-    category_page_items = data.get('category_page_items', [])
-
-    if idx < 0 or idx >= len(category_page_items):
+    try:
+        parts = call.data.split(':')
+        idx = int(parts[1])
+        cat_page = int(parts[2]) if len(parts) > 2 else 0
+    except (ValueError, IndexError):
         await call.answer(localize("shop.item.not_found"), show_alert=True)
         return
 
-    await _show_goods_page(call, state, category_page_items[idx], cat_page, 0)
+    category = await _page_item_at(query_categories, cat_page, idx)
+    if category is None:
+        await call.answer(localize("shop.item.not_found"), show_alert=True)
+        return
+
+    await _show_goods_page(call, state, category, cat_page, 0)
 
 
 @router.callback_query(F.data.startswith('gp_'), ShopStates.viewing_goods)
@@ -247,21 +250,17 @@ async def navigate_goods(call: CallbackQuery, state: FSMContext):
     )
 
 
-async def _open_item_from_index(call: CallbackQuery, state: FSMContext,
-                                list_key: str, idx: int, back_data: str):
-    """Open an item card by its index into an FSM-stored page list.
-
-    Shared by the category and the search flows
-    """
-    data = await state.get_data()
-    page_items = data.get(list_key, [])
-
+async def _page_item_at(query_func, page: int, idx: int):
+    """Return the item at ``idx`` on ``page`` of ``query_func``, or None."""
+    paginator = LazyPaginator(query_func, per_page=10)
+    page_items = await paginator.get_page(page)
     if idx < 0 or idx >= len(page_items):
-        await call.answer(localize("shop.item.not_found"), show_alert=True)
-        return
+        return None
+    return page_items[idx]
 
-    item_name = page_items[idx]
 
+async def _open_item(call: CallbackQuery, state: FSMContext, item_name: str, back_data: str):
+    """Open an item card and record it for the on-screen (csrf) item context."""
     metrics = get_metrics()
     if metrics:
         metrics.track_conversion("purchase_funnel", "view_item", call.from_user.id)
@@ -278,11 +277,20 @@ async def item_info_callback_handler(call: CallbackQuery, state: FSMContext):
     Show detailed information about the item.
     Format: itm:{index}:{page}
     """
-    parts = call.data.split(':')
-    idx = int(parts[1])
-    goods_page = int(parts[2]) if len(parts) > 2 else 0
+    try:
+        parts = call.data.split(':')
+        idx = int(parts[1])
+        goods_page = int(parts[2]) if len(parts) > 2 else 0
+    except (ValueError, IndexError):
+        await call.answer(localize("shop.item.not_found"), show_alert=True)
+        return
 
-    await _open_item_from_index(call, state, 'goods_page_items', idx, f"gp_{goods_page}")
+    category = (await state.get_data()).get('current_category', '')
+    item_name = await _page_item_at(partial(query_items_in_category, category), goods_page, idx)
+    if not item_name:
+        await call.answer(localize("shop.item.not_found"), show_alert=True)
+        return
+    await _open_item(call, state, item_name, f"gp_{goods_page}")
 
 
 # --- Catalog search ---
@@ -365,11 +373,20 @@ async def search_item_info_handler(call: CallbackQuery, state: FSMContext):
     A separate namespace from itm:/gp_ because navigate_goods re-derives its page
     from current_category, which search results do not have.
     """
-    parts = call.data.split(':')
-    idx = int(parts[1])
-    page = int(parts[2]) if len(parts) > 2 else 0
+    try:
+        parts = call.data.split(':')
+        idx = int(parts[1])
+        page = int(parts[2]) if len(parts) > 2 else 0
+    except (ValueError, IndexError):
+        await call.answer(localize("shop.item.not_found"), show_alert=True)
+        return
 
-    await _open_item_from_index(call, state, 'search_page_items', idx, f"sp_{page}")
+    query = (await state.get_data()).get('search_query', '')
+    item_name = await _page_item_at(partial(query_goods_search, query), page, idx)
+    if not item_name:
+        await call.answer(localize("shop.item.not_found"), show_alert=True)
+        return
+    await _open_item(call, state, item_name, f"sp_{page}")
 
 
 
@@ -684,7 +701,17 @@ async def navigate_bought_items(call: CallbackQuery, state: FSMContext):
         back_cb = 'profile'
         pre_back = f'bought-goods-page_user_{current_index}'
     else:
-        user_id = int(data_type)
+        # Admin path: viewing another user's purchases. Gate on USERS_MANAGE — this callback prefix is not covered by the auth middleware.
+        from bot.database.methods import check_role_cached
+        caller_perms = await check_role_cached(call.from_user.id) or 0
+        if not Permission.granted(caller_perms, Permission.USERS_MANAGE):
+            await call.answer(localize("middleware.security.not_admin"), show_alert=True)
+            return
+        try:
+            user_id = int(data_type)
+        except ValueError:
+            await call.answer(localize("purchases.pagination.invalid"))
+            return
         back_cb = f'check-user_{data_type}'
         pre_back = f'bought-goods-page_{data_type}_{current_index}'
 
@@ -715,18 +742,33 @@ async def navigate_bought_items(call: CallbackQuery, state: FSMContext):
 async def bought_item_info_callback_handler(call: CallbackQuery):
     """
     Show details for a purchased item.
+
+    Scoped to the caller's own purchases; an admin with USERS_MANAGE may view
+    any buyer's row (falls back to an unscoped lookup only after the permission
+    check).
     """
-    trash, item_id, back_data = call.data.split(':', 2)
-    item = await get_bought_item_info(int(item_id))
+    trash, item_id_str, back_data = call.data.split(':', 2)
+    try:
+        item_id = int(item_id_str)
+    except ValueError:
+        await call.answer(localize("errors.invalid_data"), show_alert=True)
+        return
+
+    item = await get_bought_item_info(item_id, buyer_id=call.from_user.id)
+    if not item:
+        from bot.database.methods import check_role_cached
+        caller_perms = await check_role_cached(call.from_user.id) or 0
+        if Permission.granted(caller_perms, Permission.USERS_MANAGE):
+            item = await get_bought_item_info(item_id)
     if not item:
         await call.answer(localize("purchases.item.not_found"), show_alert=True)
         return
 
     text = "\n".join([
-        localize("purchases.item.name", name=item["item_name"]),
+        localize("purchases.item.name", name=html_escape(str(item["item_name"]))),
         localize("purchases.item.price", amount=item["price"], currency=EnvKeys.PAY_CURRENCY),
         localize("purchases.item.datetime", dt=item["bought_datetime"]),
         localize("purchases.item.unique_id", uid=item["unique_id"]),
-        localize("purchases.item.value", value=item["value"]),
+        localize("purchases.item.value", value=html_escape(str(item["value"]))),
     ])
     await call.message.edit_text(text, parse_mode='HTML', reply_markup=back(back_data))

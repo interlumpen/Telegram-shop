@@ -80,11 +80,12 @@ class TestLazyPaginator:
         await p.get_page(1)
         state = p.get_state()
         assert state['current_page'] == 1
-        assert state['total_count'] is None or state['total_count'] == 25
+        assert 'total_count' not in state
 
-        # Restore from state
         p2 = LazyPaginator(_mock_query, per_page=10, state=state)
         assert p2.current_page == 1
+        assert p2._total_count is None
+        assert await p2.get_total_count() == 25
 
     @pytest.mark.asyncio
     async def test_empty_results(self):

@@ -38,7 +38,18 @@ class TestCacheInvalidationFunctions:
         assert "item:Test" not in fake_cache.store
         assert "item_info:Test" not in fake_cache.store
         assert "item_values:Test" not in fake_cache.store
+        assert "category:Cat1" in fake_cache.store
+
+    async def test_invalidate_item_cache_with_category_drops_only_that_key(self, fake_cache):
+        fake_cache.store["item_info:Test"] = {"name": "Test"}
+        fake_cache.store["category:Cat1"] = {"name": "Cat1"}
+        fake_cache.store["category:Other"] = {"name": "Other"}
+
+        await invalidate_item_cache("Test", category_name="Cat1")
+
+        assert "item_info:Test" not in fake_cache.store
         assert "category:Cat1" not in fake_cache.store
+        assert "category:Other" in fake_cache.store  # untouched
 
     async def test_invalidate_category_cache(self, fake_cache):
         fake_cache.store["category:Cat"] = {"name": "Cat"}
@@ -285,3 +296,78 @@ class TestWebPanelStockEdits:
         set_notifier_bot(None)
         # Must not raise even though someone is waiting.
         await self._fire(ItemValuesAdmin().after_model_change, {}, row, True, self._request())
+
+
+class _FakeRedis:
+    """Minimal async Redis stub with a toggleable outage for CacheManager tests."""
+
+    def __init__(self):
+        self.store = {}
+        self.fail = False
+
+    async def get(self, k):
+        if self.fail:
+            raise ConnectionError("down")
+        return self.store.get(k)
+
+    async def setex(self, k, ttl, v):
+        if self.fail:
+            raise ConnectionError("down")
+        self.store[k] = v
+
+    async def delete(self, *keys):
+        if self.fail:
+            raise ConnectionError("down")
+        n = 0
+        for k in keys:
+            if k in self.store:
+                del self.store[k]
+                n += 1
+        return n
+
+    async def ping(self):
+        if self.fail:
+            raise ConnectionError("down")
+        return True
+
+    async def scan_iter(self, match=None, count=None):
+        import fnmatch
+        for k in list(self.store):
+            if match is None or fnmatch.fnmatch(k, match):
+                yield k
+
+
+class TestDeferredInvalidationOnRedisOutage:
+    async def test_deferred_delete_replays_on_recovery(self):
+        from bot.misc.caching.cache import CacheManager
+        r = _FakeRedis()
+        r.store["user:1"] = b"stale"
+        cm = CacheManager(r)
+
+        r.fail = True  # outage begins
+        assert await cm.delete("user:1") is False
+        assert cm._healthy is False
+        assert "user:1" in cm._pending_deletes
+        assert "user:1" in r.store  # delete did not happen yet
+
+        r.fail = False  # Redis recovers
+        await cm.check_health()
+        assert cm._healthy is True
+        assert "user:1" not in r.store  # deferred delete replayed
+        assert not cm._pending_deletes
+
+    async def test_deferred_pattern_replays_on_recovery(self):
+        from bot.misc.caching.cache import CacheManager
+        r = _FakeRedis()
+        r.store["category:A"] = b"x"
+        r.store["category:B"] = b"y"
+        cm = CacheManager(r)
+
+        r.fail = True
+        assert await cm.invalidate_pattern("category:*") == 0
+        assert "category:*" in cm._pending_patterns
+
+        r.fail = False
+        await cm.check_health()
+        assert "category:A" not in r.store and "category:B" not in r.store
+        assert not cm._pending_patterns

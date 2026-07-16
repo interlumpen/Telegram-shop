@@ -547,7 +547,7 @@ for it, just like the in‑chat flow.
 
 ## 🧪 Testing
 
-**642 tests** (`pytest`). The data layer runs against a real in‑memory async SQLite database
+**648 tests** (`pytest`). The data layer runs against a real in‑memory async SQLite database
 (real SQL, transactions, and constraints) — only external services are mocked (Telegram Bot
 API, CryptoPay, Redis). What's covered:
 

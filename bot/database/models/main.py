@@ -32,6 +32,11 @@ class Permission:
         """True if `perms` has any permission beyond USE."""
         return (perms & ~Permission.USE) != 0
 
+    @staticmethod
+    def granted(perms: int, bit: int) -> bool:
+        """True if every bit in `bit` is set in `perms` (same AND semantics as HasPermissionFilter)."""
+        return (perms & bit) == bit
+
 
 class Role(Database.BASE):
     __tablename__ = 'roles'
@@ -320,6 +325,11 @@ class PromoCodes(Database.BASE):
 
     __table_args__ = (
         CheckConstraint("scope IN ('global','category','item')", name='ck_promo_codes_scope'),
+        CheckConstraint('discount_value >= 0', name='ck_promo_discount_nonneg'),
+        CheckConstraint(
+            'category_id IS NULL OR item_id IS NULL',
+            name='ck_promo_single_binding',
+        ),
     )
 
     def __str__(self):

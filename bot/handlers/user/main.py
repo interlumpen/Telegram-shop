@@ -5,6 +5,7 @@ from aiogram.fsm.context import FSMContext
 from aiogram.exceptions import TelegramBadRequest, TelegramForbiddenError
 
 import datetime
+from html import escape as _esc
 
 from bot.database.methods import (
     select_max_role_id, create_user, check_role_cached, check_user,
@@ -149,7 +150,7 @@ async def profile_callback_handler(call: CallbackQuery, state: FSMContext):
 
     markup = profile_keyboard(referral, items, cart_count=cart_count)
     text = (
-        f"{localize('profile.caption', name=tg_user.first_name, id=user_id)}\n"
+        f"{localize('profile.caption', name=_esc(tg_user.first_name or ''), id=user_id)}\n"
         f"{localize('profile.id', id=user_id)}\n"
         f"{localize('profile.balance', amount=balance, currency=EnvKeys.PAY_CURRENCY)}\n"
         f"{localize('profile.total_topup', amount=overall_balance, currency=EnvKeys.PAY_CURRENCY)}\n"
@@ -196,7 +197,11 @@ async def operation_history_handler(call: CallbackQuery, state: FSMContext):
 
 @router.callback_query(F.data.startswith("ops-page_"))
 async def navigate_operations(call: CallbackQuery, state: FSMContext):
-    page = int(call.data.split("_")[1])
+    try:
+        page = int(call.data.split("_")[1])
+    except (ValueError, IndexError):
+        await call.answer(localize("errors.pagination_invalid"))
+        return
     await _show_operations_page(call, state, call.from_user.id, page)
 
 

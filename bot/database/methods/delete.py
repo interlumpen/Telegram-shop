@@ -26,6 +26,9 @@ async def delete_only_items(item_name: str) -> None:
         if item_id:
             await s.execute(sa_delete(ItemValues).where(ItemValues.item_id == item_id))
 
+    # Stock count changed to zero — drop the cached item_info/item_values.
+    safe_create_task(invalidate_item_cache(item_name))
+
 
 async def delete_item_from_position(item_id: int) -> None:
     """Delete a single stock row by its ItemValues id."""
@@ -42,8 +45,8 @@ async def delete_category(category_name: str) -> None:
             return
         items_result = await s.execute(select(Goods.name).where(Goods.category_id == cat.id))
         items = items_result.all()
-        if items:
-            item_names = [i[0] for i in items]
+        item_names = [i[0] for i in items]
+        if item_names:
             await log_audit(
                 "cascade_delete",
                 resource_type="Category",
@@ -54,6 +57,9 @@ async def delete_category(category_name: str) -> None:
         await s.delete(cat)
 
     safe_create_task(invalidate_category_cache(category_name))
+    # The category delete cascades to its goods and item_values; their per-item caches (item_info / item_values) would otherwise serve deleted products until TTL, so invalidate each one
+    for name in item_names:
+        safe_create_task(invalidate_item_cache(name))
 
 
 async def delete_role(role_id: int) -> tuple[bool, str | None]:
@@ -102,7 +108,6 @@ async def clear_cart(user_id: int) -> int:
     async with Database().session() as s:
         result = await s.execute(sa_delete(CartItems).where(CartItems.user_id == user_id))
         return result.rowcount
-
 
 
 async def unsubscribe_from_stock(user_id: int, item_name: str) -> bool:

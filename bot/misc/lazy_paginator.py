@@ -1,5 +1,4 @@
-from typing import Callable, List, Optional, Dict, Any
-from datetime import datetime
+from typing import Callable, List, Optional, Dict
 
 
 class LazyPaginator:
@@ -25,15 +24,12 @@ class LazyPaginator:
         self.per_page = per_page
         self.cache_pages = cache_pages
 
-        # Restore from dictionary or create new
+        # Restore from dictionary or create new.
+        self._cache = {}
+        self._total_count = None
         if state and isinstance(state, dict):
-            # Don't restore cache from state - it contains non-serializable objects
-            self._cache = {}
-            self._total_count = state.get('total_count')
             self.current_page = state.get('current_page', 0)
         else:
-            self._cache = {}
-            self._total_count = None
             self.current_page = 0
 
     async def get_total_count(self) -> int:
@@ -88,41 +84,14 @@ class LazyPaginator:
         total = await self.get_total_count()
         return max(1, (total + self.per_page - 1) // self.per_page)
 
-    def _serialize_item(self, item: Any) -> Dict:
-        """Convert item to serializable format"""
-        if hasattr(item, '__dict__'):
-            # SQLAlchemy object
-            result = {}
-            for key, value in item.__dict__.items():
-                if key.startswith('_'):
-                    continue
-                if isinstance(value, datetime):
-                    result[key] = value.isoformat()
-                elif hasattr(value, '__dict__'):
-                    # Skip nested objects
-                    continue
-                else:
-                    result[key] = value
-            return result
-        elif isinstance(item, dict):
-            # Already a dict
-            result = {}
-            for key, value in item.items():
-                if isinstance(value, datetime):
-                    result[key] = value.isoformat()
-                else:
-                    result[key] = value
-            return result
-        else:
-            # Simple type
-            return {'value': item}
-
     def get_state(self) -> Dict:
-        """Get current state for FSM storage - without cache to avoid serialization issues"""
+        """Get current state for FSM storage.
+
+        Excludes the page cache (non-serializable ORM objects) and total_count
+        (intentionally recomputed on restore so page counts never go stale).
+        """
         return {
-            'total_count': self._total_count,
-            'current_page': self.current_page
-            # Don't include cache - it contains non-serializable SQLAlchemy objects
+            'current_page': self.current_page,
         }
 
     def clear_cache(self):

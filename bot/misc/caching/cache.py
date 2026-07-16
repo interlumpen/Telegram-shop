@@ -8,12 +8,36 @@ from bot.logger_mesh import logger
 class CacheManager:
     """Centralized caching manager with graceful Redis degradation"""
 
+    # Cap on deferred invalidations held while Redis is down. Bounded so a long outage can't grow memory without limit;
+    # on overflow fall back to replaying the known cache-key prefixes on recovery.
+    _PENDING_CAP = 5000
+    _KNOWN_PREFIXES = (
+        "user:", "role:", "auth:role:", "category:", "item_info:", "item_values:",
+        "user_count:", "stats:",
+    )
+
     def __init__(self, redis_client: Redis):
         self.redis = redis_client
         self.default_ttl = 300
         self.hits = 0
         self.misses = 0
         self._healthy = True
+        # Invalidations that failed while Redis was unavailable, replayed on recovery so a committed DB write is never masked by a stale cache entry until its TTL expires.
+        self._pending_deletes: set[str] = set()
+        self._pending_patterns: set[str] = set()
+        self._pending_overflow = False
+
+    def _defer_delete(self, key: str) -> None:
+        if len(self._pending_deletes) >= self._PENDING_CAP:
+            self._pending_overflow = True
+            return
+        self._pending_deletes.add(key)
+
+    def _defer_pattern(self, pattern: str) -> None:
+        if len(self._pending_patterns) >= self._PENDING_CAP:
+            self._pending_overflow = True
+            return
+        self._pending_patterns.add(pattern)
 
     async def get(self, key: str, deserialize: bool = True) -> Optional[Any]:
         """Get value from cache with correct deserialization"""
@@ -95,12 +119,15 @@ class CacheManager:
     async def delete(self, key: str) -> bool:
         """Delete a value from the cache"""
         if not self._healthy:
+            # Redis is down: remember the invalidation so recovery can replay it.
+            self._defer_delete(key)
             return False
         try:
             await self.redis.delete(key)
             return True
         except (ConnectionError, TimeoutError, OSError) as e:
             self._healthy = False
+            self._defer_delete(key)
             logger.warning(f"Redis unavailable (delete): {e}")
             return False
         except Exception as e:
@@ -111,9 +138,14 @@ class CacheManager:
         """Ping Redis and restore healthy status if connection is back."""
         try:
             await self.redis.ping()
-            if not self._healthy:
+            was_unhealthy = not self._healthy
+            if was_unhealthy:
                 logger.info("Redis connection restored, re-enabling cache")
                 self._healthy = True
+            # Replay any invalidations deferred during the outage (also covers a
+            # steady-state overflow flush) so committed writes stop serving stale.
+            if was_unhealthy or self._pending_deletes or self._pending_patterns or self._pending_overflow:
+                await self._replay_pending()
             return True
         except Exception:
             self._healthy = False
@@ -122,6 +154,7 @@ class CacheManager:
     async def invalidate_pattern(self, pattern: str) -> int:
         """Invalidate all keys by pattern"""
         if not self._healthy:
+            self._defer_pattern(pattern)
             return 0
         try:
             keys = []
@@ -133,12 +166,37 @@ class CacheManager:
             return 0
         except (ConnectionError, TimeoutError, OSError) as e:
             self._healthy = False
+            self._defer_pattern(pattern)
             logger.warning(f"Redis unavailable (invalidate): {e}")
             return 0
         except Exception as e:
             logger.error(f"Cache invalidate error for pattern {pattern}: {e}")
             return 0
 
+    async def _replay_pending(self) -> None:
+        """Replay invalidations that were deferred while Redis was down.
+
+        Called from check_health once the connection is back. Best-effort: any
+        key that fails here is simply re-deferred by delete()/invalidate_pattern.
+        """
+        if self._pending_overflow:
+            # We lost track of exactly which keys changed — clear all known cache
+            # namespaces so nothing stale survives, then reset.
+            self._pending_overflow = False
+            self._pending_deletes.clear()
+            self._pending_patterns.clear()
+            for prefix in self._KNOWN_PREFIXES:
+                await self.invalidate_pattern(f"{prefix}*")
+            return
+
+        deletes = self._pending_deletes
+        patterns = self._pending_patterns
+        self._pending_deletes = set()
+        self._pending_patterns = set()
+        for key in deletes:
+            await self.delete(key)
+        for pattern in patterns:
+            await self.invalidate_pattern(pattern)
 
 
 def cache_result(

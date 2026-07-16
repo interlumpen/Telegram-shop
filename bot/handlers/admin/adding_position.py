@@ -8,7 +8,7 @@ from bot.database.models import Permission
 from bot.database.methods import (
     check_category_cached, get_item_info_cached, create_item, add_values_to_item
 )
-from bot.handlers.other import _parse_channel_username
+from bot.handlers.other import _parse_channel_username, is_safe_item_name
 from bot.handlers.admin._common import _notify_restock_safe
 from bot.keyboards.inline import back, question_buttons, simple_buttons
 from bot.database.methods.audit import log_audit
@@ -18,6 +18,8 @@ from bot.i18n import localize
 from bot.states import AddItemFSM
 
 router = Router()
+
+MAX_ITEM_PRICE = 99_999_999
 
 
 @router.callback_query(F.data == 'add_item', HasPermissionFilter(permission=Permission.CATALOG_MANAGE))
@@ -35,6 +37,12 @@ async def check_item_name_for_add(message: Message, state):
     If position already exists — inform the user; otherwise save name and ask for description.
     """
     item_name = (message.text or "").strip()
+    if not is_safe_item_name(item_name):
+        await message.answer(
+            localize('admin.goods.add.name.invalid'),
+            reply_markup=back('goods_management'),
+        )
+        return
     item = await get_item_info_cached(item_name)
     if item:
         await message.answer(
@@ -65,11 +73,15 @@ async def add_item_price(message: Message, state):
     Validate price and ask for category.
     """
     price_text = (message.text or "").strip()
-    if not price_text.isdigit():
+    if not (price_text.isascii() and price_text.isdigit()):
+        await message.answer(localize('admin.goods.add.price.invalid'), reply_markup=back('goods_management'))
+        return
+    price = int(price_text)
+    if price < 1 or price > MAX_ITEM_PRICE:
         await message.answer(localize('admin.goods.add.price.invalid'), reply_markup=back('goods_management'))
         return
 
-    await state.update_data(item_price=int(price_text))
+    await state.update_data(item_price=price)
     await message.answer(localize('admin.goods.add.prompt.category'), reply_markup=back('goods_management'))
     await state.set_state(AddItemFSM.waiting_category)
 

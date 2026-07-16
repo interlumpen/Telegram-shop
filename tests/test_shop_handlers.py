@@ -369,7 +369,7 @@ class TestCatalogSearch:
         from bot.handlers.user.shop_and_goods import search_item_info_handler
 
         await item_factory(name="FoundItem", price=100, values=[("v", False)])
-        await fsm_context.update_data(search_page_items=["FoundItem"])
+        await fsm_context.update_data(search_query="found")
 
         call = make_callback_query(data="sitm:0:0", user_id=610007)
         await search_item_info_handler(call, fsm_context)
@@ -381,7 +381,7 @@ class TestCatalogSearch:
     async def test_open_item_bad_index(self, make_callback_query, fsm_context):
         from bot.handlers.user.shop_and_goods import search_item_info_handler
 
-        await fsm_context.update_data(search_page_items=[])
+        await fsm_context.update_data(search_query="nothingmatches")
         call = make_callback_query(data="sitm:5:0", user_id=610008)
         await search_item_info_handler(call, fsm_context)
 

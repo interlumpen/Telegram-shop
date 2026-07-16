@@ -52,6 +52,34 @@ class TestUserCRUD:
         await create_user(2001, NOW, referral_id=None, role=1)
         assert await get_user_count() == 1
 
+    async def test_create_user_swallows_insert_conflict(self, user_factory, monkeypatch):
+        await user_factory(telegram_id=2002)
+
+        import bot.database.methods.create as create_mod
+
+        class _Miss:
+            def scalar(self):
+                return False
+
+        from sqlalchemy.ext.asyncio import AsyncSession
+        orig_execute = AsyncSession.execute
+        state = {"first": True}
+
+        async def fake_execute(self, statement, *a, **k):
+            if state["first"]:
+                state["first"] = False
+                return _Miss()  # existence pre-check sees "not exists"
+            return await orig_execute(self, statement, *a, **k)
+
+        monkeypatch.setattr(AsyncSession, "execute", fake_execute)
+
+        # Should not raise even though 2002 already exists.
+        await create_mod.create_user(2002, NOW, referral_id=None, role=1)
+
+        monkeypatch.undo()
+        assert await get_user_count() == 1
+        assert (await check_user(2002))["telegram_id"] == 2002
+
     async def test_check_user_not_found(self):
         result = await check_user(999999)
         assert result is None

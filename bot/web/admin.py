@@ -2,6 +2,7 @@ import hmac
 import logging
 import os
 import time
+from decimal import Decimal, InvalidOperation
 from typing import Any
 
 from sqladmin import Admin, ModelView
@@ -14,6 +15,9 @@ from starlette.routing import Route
 from sqlalchemy import text
 
 from markupsafe import Markup, escape
+from wtforms import SelectField
+from wtforms.validators import Optional as WtfOptional
+from sqlalchemy import select as sa_select
 
 from bot.misc import EnvKeys
 from bot.database.methods.audit import log_audit
@@ -76,7 +80,7 @@ from bot.database.main import Database
 from bot.database.models.main import (
     User, Role, Categories, Goods, ItemValues,
     BoughtGoods, Operations, Payments, ReferralEarnings,
-    AuditLog, PromoCodes, CartItems, Reviews,
+    AuditLog, PromoCodes, CartItems, Reviews, promo_scope_for,
 )
 from bot.misc.metrics import get_metrics
 from bot.misc.caching import get_cache_manager
@@ -458,14 +462,28 @@ class PromoCodeAdmin(AuditModelView, model=PromoCodes):
     column_sortable_list = [PromoCodes.id, PromoCodes.code, PromoCodes.created_at]
     column_default_sort = (PromoCodes.id, True)
     form_columns = [PromoCodes.code, PromoCodes.discount_type, PromoCodes.discount_value,
-                    PromoCodes.scope, PromoCodes.category_id, PromoCodes.item_id,
-                    PromoCodes.max_uses, PromoCodes.expires_at, PromoCodes.is_active]
+                    PromoCodes.scope, PromoCodes.max_uses, PromoCodes.expires_at, PromoCodes.is_active]
+    form_overrides = {"discount_type": SelectField, "scope": SelectField}
     form_args = {
+        "discount_type": {
+            "choices": [
+                ("percent", "Percent (% off the price)"),
+                ("fixed", "Fixed amount off the price"),
+                ("balance", "Balance top-up (credit the user)"),
+            ],
+            "description": "How discount_value is applied.",
+        },
         "scope": {
+            "choices": [
+                ("global", "Global (whole shop)"),
+                ("category", "Category (pick one in the Category field)"),
+                ("item", "Item (pick one in the Item field)"),
+            ],
             "description": (
-                "global | category | item. Must match the binding: 'category' with "
-                "a category_id, 'item' with an item_id. This is what keeps a promo "
-                "scoped after its category/item is deleted."
+                "Where the promo applies. Must match the binding: 'category' "
+                "needs a Category selected, 'item' needs an Item selected, "
+                "'global' needs neither. This is what keeps a promo scoped after "
+                "its category/item is deleted."
             ),
         },
     }
@@ -474,6 +492,84 @@ class PromoCodeAdmin(AuditModelView, model=PromoCodes):
     name = "Promo Code"
     name_plural = "Promo Codes"
     icon = "fa-solid fa-tag"
+
+    async def scaffold_form(self, *args, **kwargs):
+        """Add Category / Item as dropdowns of real records."""
+        Form = await super().scaffold_form(*args, **kwargs)
+
+        async with self.session_maker() as s:
+            cats = (await s.execute(
+                sa_select(Categories.id, Categories.name).order_by(Categories.name)
+            )).all()
+            items = (await s.execute(
+                sa_select(Goods.id, Goods.name).order_by(Goods.name)
+            )).all()
+
+        none_label = "— none (global) —"
+        cat_choices = [("", none_label)] + [(str(cid), name) for cid, name in cats]
+        item_choices = [("", none_label)] + [(str(gid), name) for gid, name in items]
+
+        def _coerce(v):
+            return int(v) if v not in (None, "", "None") else None
+
+        class PromoFormWithBindings(Form):
+            category_id = SelectField(
+                "Category", choices=cat_choices, coerce=_coerce,
+                validators=[WtfOptional()],
+                description="Only for scope = category.",
+            )
+            item_id = SelectField(
+                "Item", choices=item_choices, coerce=_coerce,
+                validators=[WtfOptional()],
+                description="Only for scope = item.",
+            )
+
+        return PromoFormWithBindings
+
+    async def on_model_change(self, data: dict, model: Any, is_created: bool, request: Request) -> None:
+        """Validate/normalize a promo before persisting."""
+        code = (data.get("code") or "").strip().upper()
+        if not code:
+            raise ValueError("Code is required.")
+        data["code"] = code
+
+        dtype = data.get("discount_type")
+        if dtype not in ("percent", "fixed", "balance"):
+            raise ValueError("discount_type must be one of: percent, fixed, balance.")
+
+        try:
+            dval = Decimal(str(data.get("discount_value")))
+        except (InvalidOperation, TypeError):
+            raise ValueError("discount_value must be a number.")
+        if dval < 0:
+            raise ValueError("discount_value must be >= 0.")
+        if dtype == "percent" and dval > 100:
+            raise ValueError("A percent discount_value must be between 0 and 100.")
+
+        # The SelectFields coerce to int or None; normalize anything else too.
+        def _as_id(v):
+            if v in (None, "", "None"):
+                return None
+            try:
+                return int(v)
+            except (TypeError, ValueError):
+                return None
+
+        category_id = _as_id(data.get("category_id"))
+        item_id = _as_id(data.get("item_id"))
+        data["category_id"] = category_id
+        data["item_id"] = item_id
+
+        if category_id is not None and item_id is not None:
+            raise ValueError("A promo cannot bind both a category and an item — choose one.")
+
+        scope = (data.get("scope") or "global").strip()
+        expected = promo_scope_for(category_id, item_id)
+        if scope != expected:
+            raise ValueError(
+                f"Scope '{scope}' does not match the binding — select '{expected}' "
+                f"(or set/clear the matching Category/Item)."
+            )
 
 
 class CartItemsAdmin(ModelView, model=CartItems):

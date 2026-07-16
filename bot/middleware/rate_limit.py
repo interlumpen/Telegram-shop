@@ -243,6 +243,10 @@ class RateLimitMiddleware(BaseMiddleware):
             'categories-page_': 'shop_view',
             'gp_': 'shop_view',
             'sp_': 'shop_view',
+            'bought-item:': 'shop_view',
+            'bought-goods-page_': 'shop_view',
+            'earning_detail:': 'shop_view',
+            'check': 'shop_view',
         }
 
     def _get_action_from_event(self, event: TelegramObject, data: Dict[str, Any] | None = None) -> str:

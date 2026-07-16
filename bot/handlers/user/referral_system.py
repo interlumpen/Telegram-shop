@@ -269,12 +269,24 @@ async def all_earnings_pagination_handler(call: CallbackQuery, state: FSMContext
 
 
 @router.callback_query(F.data.startswith("earning_detail:"))
-async def referral_callback_handler(call: CallbackQuery, state: FSMContext):
+async def earning_detail_handler(call: CallbackQuery, state: FSMContext):
     """
-    Show referral info, personal invite link, and additional buttons.
+    Show details for one of the caller's own referral earnings.
+
+    Scoped to the caller's referrer_id so one user cannot read another's
+    earning rows by enumerating ids.
     """
-    trash, earning_id, back_data = call.data.split(':', 2)
-    earning_info = await get_one_referral_earning(int(earning_id))
+    try:
+        trash, earning_id, back_data = call.data.split(':', 2)
+        earning_id = int(earning_id)
+    except (ValueError, IndexError):
+        await call.answer(localize("errors.invalid_data"), show_alert=True)
+        return
+
+    earning_info = await get_one_referral_earning(earning_id, referrer_id=call.from_user.id)
+    if not earning_info:
+        await call.answer(localize("errors.invalid_data"), show_alert=True)
+        return
     user_info = await call.message.bot.get_chat(earning_info['referral_id'])
 
     await call.message.edit_text(localize('referral.item.info',

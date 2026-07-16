@@ -1,6 +1,7 @@
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 
+import pytest
 from sqlalchemy import select
 
 from bot.database.main import Database
@@ -65,6 +66,17 @@ class TestBuyPromoValidation:
         ok, msg, data = await buy_item_transaction(800002, "P2", promo_code="FIX")
         assert ok, msg
         assert data["price"] == 70.0
+
+    async def test_over_100_percent_promo_clamps_to_zero_and_never_mints_balance(
+        self, user_factory, item_factory
+    ):
+        await user_factory(telegram_id=800011, balance=50)
+        await item_factory(name="P11", price=20, values=[("v", False)])
+        await _make_promo("OVER", "percent", "150")
+        ok, msg, data = await buy_item_transaction(800011, "P11", promo_code="OVER")
+        assert ok, msg
+        assert data["price"] == 0.0
+        assert data["new_balance"] == 50.0  # unchanged — no balance minted
 
     async def test_nonexistent_promo_invalid(self, user_factory, item_factory):
         await user_factory(telegram_id=800003, balance=1000)
@@ -234,6 +246,17 @@ class TestCartPromoValidation:
         await add_to_cart(810002, "C2", promo_code="CEXP")
         ok, msg, _ = await checkout_cart_transaction(810002)
         assert (ok, msg) == (False, "promo_expired_during_checkout")
+
+    async def test_expected_total_mismatch_aborts(self, user_factory, item_factory):
+        await user_factory(telegram_id=810003, balance=1000)
+        await item_factory(name="C3", price=100, values=[("v", False)])
+        await add_to_cart(810003, "C3")
+        ok, msg, _ = await checkout_cart_transaction(810003, expected_total=Decimal("90"))
+        assert (ok, msg) == (False, "price_changed")
+        # Matching expected total goes through.
+        ok, msg, results = await checkout_cart_transaction(810003, expected_total=Decimal("100"))
+        assert ok, msg
+        assert results[0]["price"] == 100.0
 
 
 # --- what the cart *displays* must match what checkout will charge ---

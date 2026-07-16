@@ -12,6 +12,7 @@ from bot.database.methods.update import set_cart_item_quantity
 from bot.database.methods.delete import remove_from_cart, clear_cart
 from bot.database.methods.transactions import checkout_cart_transaction
 from bot.keyboards.inline import back, simple_buttons, cart_keyboard
+from bot.database.methods.pricing import apply_promo_discount
 from bot.misc import EnvKeys
 from bot.i18n import localize
 
@@ -34,14 +35,8 @@ async def _resolve_promo_price(price: Decimal, promo_code: str | None, item_name
     if not valid:
         return None
 
-    if promo['discount_type'] == 'percent':
-        discount = price * Decimal(str(promo['discount_value'])) / 100
-        unit = price - discount
-        return (unit * quantity).quantize(Decimal("0.01"))
-
-    line = price * quantity
-    discount = min(Decimal(str(promo['discount_value'])), line)
-    return (line - discount).quantize(Decimal("0.01"))
+    # Same clamped math as checkout, so the displayed total matches what is charged.
+    return apply_promo_discount(price, promo['discount_type'], promo['discount_value'], quantity)
 
 
 async def _show_cart(call: CallbackQuery):
@@ -148,9 +143,13 @@ async def add_to_cart_handler(call: CallbackQuery, state: FSMContext):
 @router.callback_query(F.data.startswith("cart_qty:"))
 async def cart_qty_handler(call: CallbackQuery, state: FSMContext):
     """Step a cart line's quantity up or down. Format: cart_qty:{id}:{delta}"""
-    parts = call.data.split(":")
-    cart_item_id = int(parts[1])
-    delta = int(parts[2])
+    try:
+        parts = call.data.split(":")
+        cart_item_id = int(parts[1])
+        delta = int(parts[2])
+    except (ValueError, IndexError):
+        await call.answer(localize("errors.invalid_data"), show_alert=True)
+        return
 
     ok, code, _new_qty = await set_cart_item_quantity(cart_item_id, call.from_user.id, delta)
     if not ok:
@@ -174,7 +173,11 @@ async def view_cart_handler(call: CallbackQuery, state: FSMContext):
 
 @router.callback_query(F.data.startswith("cart_remove:"))
 async def remove_cart_item_handler(call: CallbackQuery, state: FSMContext):
-    cart_item_id = int(call.data.split(":")[1])
+    try:
+        cart_item_id = int(call.data.split(":")[1])
+    except (ValueError, IndexError):
+        await call.answer(localize("errors.invalid_data"), show_alert=True)
+        return
     removed = await remove_from_cart(cart_item_id, user_id=call.from_user.id)
     if removed:
         await call.answer(localize("cart.removed"))
@@ -261,6 +264,9 @@ async def cart_checkout_handler(call: CallbackQuery, state: FSMContext):
     count = await get_cart_count(user_id)
     total = await _calc_cart_total_with_promos(user_id)
 
+    # Remember the total the user is being asked to confirm, so checkout can detect a price/sale change and refuse to charge a different amount.
+    await state.update_data(cart_expected_total=str(total))
+
     buttons = [
         (localize("btn.yes"), "cart_checkout_confirm"),
         (localize("btn.no"), "cart"),
@@ -276,7 +282,11 @@ async def cart_checkout_confirm_handler(call: CallbackQuery, state: FSMContext):
     user_id = call.from_user.id
     await call.answer(localize("shop.purchase.processing"))
 
-    success, msg, results = await checkout_cart_transaction(user_id)
+    data = await state.get_data()
+    expected_raw = data.get("cart_expected_total")
+    expected_total = Decimal(expected_raw) if expected_raw is not None else None
+
+    success, msg, results = await checkout_cart_transaction(user_id, expected_total=expected_total)
 
     if not success:
         reason_map = {
@@ -287,6 +297,7 @@ async def cart_checkout_confirm_handler(call: CallbackQuery, state: FSMContext):
             "insufficient_funds": localize("shop.insufficient_funds"),
             "transaction_error": localize("errors.something_wrong"),
             "promo_expired_during_checkout": localize("cart.promo_expired"),
+            "price_changed": localize("cart.price_changed"),
         }
         await call.message.edit_text(
             localize("cart.checkout_fail", reason=reason_map.get(msg, msg)),
@@ -295,7 +306,8 @@ async def cart_checkout_confirm_handler(call: CallbackQuery, state: FSMContext):
         return
 
     total = _receipt_total(results)
-    username = call.from_user.username or call.from_user.first_name
+    from html import escape as _esc
+    username = _esc(call.from_user.username or call.from_user.first_name or "")
     dt = results[0]['bought_datetime'] if results else ""
 
     # Save results in state for cart_receipt back navigation

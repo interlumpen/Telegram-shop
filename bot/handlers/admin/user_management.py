@@ -1,5 +1,6 @@
 from decimal import Decimal
 from functools import partial
+from html import escape as _esc
 
 from aiogram import Router, F
 from aiogram.fsm.context import FSMContext
@@ -187,7 +188,7 @@ async def _show_referrals_page(call: CallbackQuery, state: FSMContext, user_id: 
     user_info = await call.message.bot.get_chat(user_id)
     await call.message.edit_text(
         localize(
-            "referrals.list.title") + f"\n(<a href='tg://user?id={user_id}'>{user_info.first_name}</a> - {user_id})",
+            "referrals.list.title") + f"\n(<a href='tg://user?id={user_id}'>{_esc(user_info.first_name or '')}</a> - {user_id})",
         reply_markup=markup
     )
     await state.update_data(admin_referrals_paginator=paginator.get_state())
@@ -239,7 +240,7 @@ async def admin_referral_earnings_handler(call: CallbackQuery, state: FSMContext
     if total == 0:
         referral_info = await call.message.bot.get_chat(referral_id)
         await call.message.edit_text(
-            localize("referral.earnings.empty", id=referral_id, name=referral_info.first_name),
+            localize("referral.earnings.empty", id=referral_id, name=_esc(referral_info.first_name or '')),
             reply_markup=back(f"admin-view-referrals_{user_id}")
         )
         return
@@ -258,7 +259,7 @@ async def admin_referral_earnings_handler(call: CallbackQuery, state: FSMContext
     )
 
     referral_info = await call.message.bot.get_chat(referral_id)
-    title_text = localize("referral.earnings.title", telegram_id=referral_id, name=referral_info.first_name)
+    title_text = localize("referral.earnings.title", telegram_id=referral_id, name=_esc(referral_info.first_name or ''))
     await call.message.edit_text(title_text, reply_markup=markup)
 
     # Save state
@@ -297,7 +298,7 @@ async def _show_all_earnings_page(call: CallbackQuery, state: FSMContext, user_i
 
     user_info = await call.message.bot.get_chat(user_id)
     await call.message.edit_text(
-        localize("all.earnings.title") + f"\n(<a href='tg://user?id={user_id}'>{user_info.first_name}</a> - {user_id})",
+        localize("all.earnings.title") + f"\n(<a href='tg://user?id={user_id}'>{_esc(user_info.first_name or '')}</a> - {user_id})",
         reply_markup=markup
     )
     await state.update_data(admin_all_earnings_paginator=paginator.get_state())
@@ -351,7 +352,7 @@ async def admin_earning_detail_handler(call: CallbackQuery):
         localize('referral.item.info',
                  id=earning_id,
                  telegram_id=earning_info['referral_id'],
-                 name=referral_info.first_name,
+                 name=_esc(referral_info.first_name or ''),
                  amount=earning_info['amount'],
                  currency=EnvKeys.PAY_CURRENCY,
                  date=earning_info['created_at'].strftime("%d.%m.%Y %H:%M"),
@@ -443,7 +444,7 @@ async def process_replenish_user_balance(message: Message, state: FSMContext):
         user_info = await message.bot.get_chat(user_id)
         await message.answer(
             localize('admin.users.balance.topped',
-                     name=user_info.first_name,
+                     name=_esc(user_info.first_name or ''),
                      amount=int(amount),
                      currency=EnvKeys.PAY_CURRENCY),
             reply_markup=back(f'check-user_{user_id}')
@@ -533,7 +534,7 @@ async def process_deduct_user_balance(message: Message, state: FSMContext):
         user_info = await message.bot.get_chat(user_id)
         await message.answer(
             localize('admin.users.balance.deducted',
-                     name=user_info.first_name,
+                     name=_esc(user_info.first_name or ''),
                      amount=int(amount),
                      currency=EnvKeys.PAY_CURRENCY),
             reply_markup=back(f'check-user_{user_id}')
@@ -598,7 +599,7 @@ async def block_user_handler(call: CallbackQuery):
 
     user_info = await call.message.bot.get_chat(user_id)
     await call.message.edit_text(
-        localize('admin.users.blocked.success', name=user_info.first_name),
+        localize('admin.users.blocked.success', name=_esc(user_info.first_name or '')),
         reply_markup=back(f'check-user_{user_id}')
     )
 
@@ -627,7 +628,7 @@ async def unblock_user_handler(call: CallbackQuery):
 
     user_info = await call.message.bot.get_chat(user_id)
     await call.message.edit_text(
-        localize('admin.users.unblocked.success', name=user_info.first_name),
+        localize('admin.users.unblocked.success', name=_esc(user_info.first_name or '')),
         reply_markup=back(f'check-user_{user_id}')
     )
 
