@@ -37,7 +37,7 @@ async def check_sub_channel(chat_member) -> bool:
 async def get_bot_info(event) -> str:
     """Bot information (name)"""
     bot = event.bot
-    me = await bot.get_me()
+    me = await bot.me()
     return me.username
 
 

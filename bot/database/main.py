@@ -16,14 +16,17 @@ class Base(DeclarativeBase):
 class Database(metaclass=SingletonMeta):
     BASE = Base
 
+    POOL_SIZE = 10
+    MAX_OVERFLOW = 20
+
     def __init__(self):
         self.__engine: AsyncEngine = create_async_engine(
             dsn(),
             echo=False,
             pool_pre_ping=True,
 
-            pool_size=20,
-            max_overflow=40,
+            pool_size=self.POOL_SIZE,
+            max_overflow=self.MAX_OVERFLOW,
             pool_timeout=30,
             pool_recycle=3600,
 
@@ -36,7 +39,9 @@ class Database(metaclass=SingletonMeta):
             },
         )
 
-        logging.info(f"Database pool initialized: size={20}, max_overflow={40}")
+        logging.info(
+            f"Database pool initialized: size={self.POOL_SIZE}, max_overflow={self.MAX_OVERFLOW}"
+        )
 
         self.__SessionLocal = async_sessionmaker(
             bind=self.__engine,

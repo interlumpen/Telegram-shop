@@ -39,6 +39,9 @@ class FakeCacheManager:
             del self.store[k]
         return len(to_delete)
 
+    async def check_health(self):
+        return True
+
     def clear(self):
         self.store.clear()
         self.hits = 0

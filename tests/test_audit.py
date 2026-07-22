@@ -1,6 +1,6 @@
 from sqlalchemy import select
 
-from bot.database.methods.audit import log_audit
+from bot.database.methods.audit import log_audit, log_audit_bg
 from bot.database.main import Database
 from bot.database.models.main import AuditLog
 
@@ -55,3 +55,17 @@ class TestLogAudit:
             assert entry.details is None
             assert entry.ip_address is None
             assert entry.timestamp is not None
+
+    async def test_log_audit_bg_creates_record(self):
+        log_audit_bg("bg_action", user_id=54321, details="bg details")
+
+        # Returns immediately; drain the scheduled background task first.
+        import asyncio
+        pending = [t for t in asyncio.all_tasks() if t is not asyncio.current_task()]
+        await asyncio.gather(*pending)
+
+        async with Database().session() as s:
+            entry = (await s.execute(select(AuditLog).filter(AuditLog.action == "bg_action"))).scalars().first()
+            assert entry is not None
+            assert entry.user_id == 54321
+            assert entry.details == "bg details"

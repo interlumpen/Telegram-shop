@@ -8,7 +8,7 @@ from bot.database.models import User, ItemValues, Goods, Categories, Operations,
 from bot.database.models.main import PromoCodes, CartItems, Reviews, StockSubscriptions, promo_scope_for
 from bot.database import Database
 from bot.database.methods.cache_utils import safe_create_task
-from bot.database.methods.read import invalidate_stats_cache, invalidate_item_cache
+from bot.database.methods.read import invalidate_stats_cache, invalidate_item_cache, invalidate_category_cache
 
 # Cart limits: distinct positions per cart, and units of any one position.
 CART_MAX_ITEMS = 10
@@ -55,6 +55,8 @@ async def create_item(item_name: str, item_description: str, item_price: int, ca
         )
 
     safe_create_task(invalidate_stats_cache())
+    # The category's cached item count changed.
+    safe_create_task(invalidate_category_cache(category_name))
 
 
 async def add_values_to_item(item_name: str, value: str, is_infinity: bool) -> bool:
@@ -96,6 +98,8 @@ async def create_category(category_name: str) -> None:
         s.add(Categories(name=category_name))
 
     safe_create_task(invalidate_stats_cache())
+    # Drops the cached categories:count
+    safe_create_task(invalidate_category_cache(category_name))
 
 
 async def create_operation(user_id: int, value: int, operation_time: datetime) -> None:

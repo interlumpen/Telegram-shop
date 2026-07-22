@@ -9,6 +9,8 @@ from bot.i18n import localize
 from bot.database.models import Permission
 from bot.database.methods import get_item_info_cached, delete_item, get_goods_info, delete_item_from_position, \
     query_items_in_position
+from bot.database.methods.read import invalidate_item_cache
+from bot.database.methods.cache_utils import safe_create_task
 from bot.keyboards.inline import back, simple_buttons, lazy_paginated_keyboard
 from bot.database.methods.audit import log_audit
 from bot.filters import HasPermissionFilter
@@ -280,6 +282,8 @@ async def process_delete_item_from_position(call: CallbackQuery, state: FSMConte
 
     position_name = item_info["item_name"]
     await delete_item_from_position(item_id)
+    # Removing a value changes the position's stock count/infinite flag.
+    safe_create_task(invalidate_item_cache(position_name))
 
     # Redraw the list page if needed
     if item_hash and item_name:

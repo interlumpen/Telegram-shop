@@ -4,30 +4,20 @@ from bot.misc.caching import get_cache_manager
 from bot.logger_mesh import logger
 
 
-async def redis_health_monitor():
-    """Monitor Redis health and restore connection every 30s"""
-    while True:
-        await asyncio.sleep(30)
-        cache = get_cache_manager()
-        if cache and not cache._healthy:
-            try:
-                await cache.redis.ping()
-                cache._healthy = True
-                logger.info("Redis connection restored")
-            except Exception:
-                logger.debug("Redis still unavailable")
-
-
 async def invalidate_stats_periodically():
-    """Invalidate statistics every hour"""
+    """Hourly janitor sweep for the stats caches.
+
+    The write path (invalidate_stats_cache) does targeted deletes; this sweep
+    only mops up stale dated keys (stats:daily:<old date>) once an hour.
+    """
     while True:
         await asyncio.sleep(3600)  # 1 hour
 
         cache = get_cache_manager()
         if cache:
             await cache.invalidate_pattern("stats:*")
-            await cache.invalidate_pattern("user_count")
-            await cache.invalidate_pattern("admin_count")
+            await cache.delete("user_count:")
+            await cache.delete("admin_count:")
             logger.info("Stats cache invalidated by scheduler")
 
 
@@ -67,11 +57,6 @@ class CacheScheduler:
         # Invalidation of outdated data once a day
         self.tasks.append(
             asyncio.create_task(daily_cleanup())
-        )
-
-        # Redis health monitor
-        self.tasks.append(
-            asyncio.create_task(redis_health_monitor())
         )
 
         logger.info("Cache scheduler started")

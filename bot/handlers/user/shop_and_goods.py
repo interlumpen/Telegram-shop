@@ -1,3 +1,4 @@
+import asyncio
 from decimal import Decimal
 from functools import partial
 from html import escape as html_escape
@@ -8,18 +9,19 @@ from aiogram.fsm.context import FSMContext
 from aiogram.exceptions import TelegramBadRequest
 
 from bot.database.methods import (
-    get_bought_item_info, check_value, query_categories, query_user_bought_items, get_item_info_cached,
+    get_bought_item_info, query_categories, query_user_bought_items, get_item_info_cached,
     select_item_values_amount_cached, effective_price
 )
 from bot.database.methods.read import (
     get_item_avg_rating, has_purchased_item, validate_promo_for_item,
     get_user_review, invalidate_rating_cache, get_item_info, is_subscribed_to_stock,
+    check_value_cached,
 )
 from bot.database.methods.create import create_review, subscribe_to_stock
 from bot.database.methods.delete import unsubscribe_from_stock
 from bot.database.methods.lazy_queries import query_item_reviews, query_goods_search, query_items_in_category
 from bot.database.methods.transactions import redeem_balance_promo
-from bot.database.methods.audit import log_audit
+from bot.database.methods.audit import log_audit_bg
 from bot.database.models import Permission
 from bot.keyboards import item_info, back, lazy_paginated_keyboard
 from bot.keyboards.inline import simple_buttons, rating_keyboard
@@ -53,8 +55,21 @@ async def _render_item_page(target, state: FSMContext, item_name: str, back_data
             await target.answer(localize("shop.item.not_found"))
         return
 
-    quantity = await select_item_values_amount_cached(item_name)
-    is_infinite = await check_value(item_name)
+    reviews_enabled = EnvKeys.REVIEWS_ENABLED == "1"
+
+    reads = [select_item_values_amount_cached(item_name), check_value_cached(item_name)]
+    if reviews_enabled:
+        reads.append(get_item_avg_rating(item_name))
+        reads.append(query_item_reviews(item_name, count_only=True))
+        if user_id:
+            reads.append(has_purchased_item(user_id, item_name))
+    results = await asyncio.gather(*reads)
+
+    quantity, is_infinite = results[0], results[1]
+    avg_rating = results[2] if reviews_enabled else None
+    review_count_val = results[3] if reviews_enabled else 0
+    purchased = results[4] if (reviews_enabled and user_id) else False
+
     quantity_line = (
         localize("shop.item.quantity_unlimited")
         if is_infinite
@@ -65,17 +80,6 @@ async def _render_item_page(target, state: FSMContext, item_name: str, back_data
     subscribed = bool(
         out_of_stock and user_id and await is_subscribed_to_stock(user_id, item_name)
     )
-
-    reviews_enabled = EnvKeys.REVIEWS_ENABLED == "1"
-    avg_rating = None
-    review_count_val = 0
-    purchased = False
-
-    if reviews_enabled:
-        avg_rating = await get_item_avg_rating(item_name)
-        review_count_val = await query_item_reviews(item_name, count_only=True)
-        if user_id:
-            purchased = await has_purchased_item(user_id, item_name)
 
     applied_promo = data.get('applied_promo')
 
@@ -160,6 +164,7 @@ async def _show_categories_page(call: CallbackQuery, state: FSMContext, page: in
     await state.update_data(
         categories_paginator=paginator.get_state(),
         category_page_items=list(page_items),
+        category_page_num=page,
     )
 
 
@@ -207,6 +212,7 @@ async def _show_goods_page(call: CallbackQuery, state: FSMContext,
         goods_paginator=paginator.get_state(),
         current_category=category_name,
         goods_page_items=list(page_items),
+        goods_page_num=page,
         categories_last_viewed_page=cat_page,
     )
     await state.set_state(ShopStates.viewing_goods)
@@ -226,7 +232,9 @@ async def items_list_callback_handler(call: CallbackQuery, state: FSMContext):
         await call.answer(localize("shop.item.not_found"), show_alert=True)
         return
 
-    category = await _page_item_at(query_categories, cat_page, idx)
+    category = await _page_item_from_state(state, 'category_page_items', 'category_page_num', cat_page, idx)
+    if category is None:
+        category = await _page_item_at(query_categories, cat_page, idx)
     if category is None:
         await call.answer(localize("shop.item.not_found"), show_alert=True)
         return
@@ -259,6 +267,23 @@ async def _page_item_at(query_func, page: int, idx: int):
     return page_items[idx]
 
 
+async def _page_item_from_state(state: FSMContext, list_key: str, page_key: str,
+                                page: int, idx: int):
+    """Resolve idx->name from the page list saved by the last render.
+
+    Avoids re-running the list query the user just saw. Returns None when the
+    state doesn't cover this page (restart, stale keyboard) — the caller then
+    falls back to _page_item_at.
+    """
+    data = await state.get_data()
+    if data.get(page_key) != page:
+        return None
+    items = data.get(list_key)
+    if not items or idx < 0 or idx >= len(items):
+        return None
+    return items[idx]
+
+
 async def _open_item(call: CallbackQuery, state: FSMContext, item_name: str, back_data: str):
     """Open an item card and record it for the on-screen (csrf) item context."""
     metrics = get_metrics()
@@ -285,8 +310,10 @@ async def item_info_callback_handler(call: CallbackQuery, state: FSMContext):
         await call.answer(localize("shop.item.not_found"), show_alert=True)
         return
 
-    category = (await state.get_data()).get('current_category', '')
-    item_name = await _page_item_at(partial(query_items_in_category, category), goods_page, idx)
+    item_name = await _page_item_from_state(state, 'goods_page_items', 'goods_page_num', goods_page, idx)
+    if not item_name:
+        category = (await state.get_data()).get('current_category', '')
+        item_name = await _page_item_at(partial(query_items_in_category, category), goods_page, idx)
     if not item_name:
         await call.answer(localize("shop.item.not_found"), show_alert=True)
         return
@@ -333,6 +360,7 @@ async def _show_search_page(target, state: FSMContext, query: str, page: int):
         search_paginator=paginator.get_state(),
         search_query=query,
         search_page_items=list(page_items),
+        search_page_num=page,
     )
     await state.set_state(ShopStates.viewing_search_results)
 
@@ -381,8 +409,10 @@ async def search_item_info_handler(call: CallbackQuery, state: FSMContext):
         await call.answer(localize("shop.item.not_found"), show_alert=True)
         return
 
-    query = (await state.get_data()).get('search_query', '')
-    item_name = await _page_item_at(partial(query_goods_search, query), page, idx)
+    item_name = await _page_item_from_state(state, 'search_page_items', 'search_page_num', page, idx)
+    if not item_name:
+        query = (await state.get_data()).get('search_query', '')
+        item_name = await _page_item_at(partial(query_goods_search, query), page, idx)
     if not item_name:
         await call.answer(localize("shop.item.not_found"), show_alert=True)
         return
@@ -515,7 +545,7 @@ async def redeem_promo_code_handler(message: Message, state: FSMContext):
             localize("promo.balance_redeemed", code=code, amount=amount, currency=EnvKeys.PAY_CURRENCY),
             reply_markup=back("profile"),
         )
-        await log_audit(
+        log_audit_bg(
             "promo_redeem", user_id=message.from_user.id,
             resource_type="PromoCode", resource_id=code,
         )

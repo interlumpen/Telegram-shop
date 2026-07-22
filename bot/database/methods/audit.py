@@ -67,3 +67,14 @@ async def log_audit(
                 s.add(entry)
     except Exception:
         audit_logger.warning("Failed to write audit entry to DB", exc_info=True)
+
+
+def log_audit_bg(action: str, **kwargs) -> None:
+    """Schedule log_audit without blocking the caller.
+
+    For request-path call sites where the reply must not wait for the audit
+    INSERT. Not usable with session= — an enlisted row must stay inside the
+    caller's transaction, so those calls remain awaited.
+    """
+    from bot.database.methods.cache_utils import safe_create_task
+    safe_create_task(log_audit(action, **kwargs))

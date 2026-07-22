@@ -5,7 +5,7 @@ from aiogram import BaseMiddleware
 from aiogram.types import TelegramObject, CallbackQuery, Message
 
 from bot.i18n import localize
-from bot.database.methods.audit import log_audit
+from bot.database.methods.audit import log_audit_bg
 from bot.database.models import Permission
 
 
@@ -81,8 +81,8 @@ class SecurityMiddleware(BaseMiddleware):
 
             # Checking critical actions
             if self.is_critical_action(event.data):
-                # Logging a critical action
-                await log_audit(
+                # Logging a critical action (off the request path)
+                log_audit_bg(
                     "critical_action",
                     user_id=user.id,
                     details=f"callback={event.data[:50]}",
@@ -102,7 +102,7 @@ class SecurityMiddleware(BaseMiddleware):
         # Check for suspicious patterns in the data
         if isinstance(event, CallbackQuery) and event.data:
             if check_suspicious_patterns(event.data):
-                await log_audit(
+                log_audit_bg(
                     "suspicious_callback",
                     level="WARNING",
                     user_id=user.id,
@@ -113,7 +113,7 @@ class SecurityMiddleware(BaseMiddleware):
 
         if isinstance(event, Message) and event.text:
             if check_suspicious_patterns(event.text):
-                await log_audit(
+                log_audit_bg(
                     "suspicious_message",
                     level="WARNING",
                     user_id=user.id,
@@ -132,6 +132,10 @@ class AuthenticationMiddleware(BaseMiddleware):
 
     def __init__(self):
         self.blocked_users: set[int] = set()
+        # True once blocked_users reflects the DB; until then per-update checks
+        # fall back to the database (single-instance deployment assumption:
+        # every block/unblock in this process keeps the set current).
+        self._blocked_loaded: bool = False
         self.admin_cache: Dict[int, tuple[int, float]] = {}  # user_id: (role, timestamp)
         self.cache_ttl = 300  # 5 minutes
         self._maintenance_mode: bool = False
@@ -164,17 +168,25 @@ class AuthenticationMiddleware(BaseMiddleware):
         if not user:
             return await handler(event, data)
 
-        from bot.database.methods import is_user_blocked
-        if await is_user_blocked(user.id):
-            self.blocked_users.add(user.id)
+        if self._blocked_loaded:
+            blocked = user.id in self.blocked_users
+        else:
+            # Startup load failed — retry the bulk load; if the DB is still
+            # unreachable for that, fall back to a per-update lookup.
+            await self._load_blocked_set()
+            if self._blocked_loaded:
+                blocked = user.id in self.blocked_users
+            else:
+                from bot.database.methods import is_user_blocked
+                blocked = await is_user_blocked(user.id)
+        if blocked:
             if isinstance(event, CallbackQuery):
                 await event.answer(localize("middleware.security.blocked"), show_alert=True)
             return None
-        self.blocked_users.discard(user.id)
 
         # Check bot
         if user.is_bot:
-            await log_audit("bot_interaction", level="WARNING", user_id=user.id)
+            log_audit_bg("bot_interaction", level="WARNING", user_id=user.id)
             return None
 
         # Maintenance mode: block regular users
@@ -197,7 +209,7 @@ class AuthenticationMiddleware(BaseMiddleware):
                 role = await self.get_user_role_cached(user.id)
                 if not Permission.has_any_admin_perm(role):
                     await event.answer(localize("middleware.security.not_admin"), show_alert=True)
-                    await log_audit("unauthorized_admin_access", level="WARNING", user_id=user.id)
+                    log_audit_bg("unauthorized_admin_access", level="WARNING", user_id=user.id)
                     return None
                 data['user_role'] = role
 
@@ -250,13 +262,18 @@ class AuthenticationMiddleware(BaseMiddleware):
         self.admin_cache.pop(user_id, None)
         _drop_redis_role(user_id)
 
-    async def load_blocked_users(self) -> None:
-        """Load blocked users from DB into memory cache on startup."""
+    async def _load_blocked_set(self) -> None:
+        """Load the blocked-user set from DB; on success it becomes authoritative."""
         from bot.database.methods.read import get_blocked_user_ids
         try:
             self.blocked_users = set(await get_blocked_user_ids())
+            self._blocked_loaded = True
         except Exception:
             pass  # Will fall back to per-request DB checks
+
+    async def load_blocked_users(self) -> None:
+        """Load blocked users from DB into memory cache on startup."""
+        await self._load_blocked_set()
 
         # Restore maintenance mode from Redis
         from bot.misc.caching import get_cache_manager
@@ -275,7 +292,7 @@ class AuthenticationMiddleware(BaseMiddleware):
         success = await set_user_blocked(user_id, True)
         if success:
             self.blocked_users.add(user_id)
-            await log_audit("block_user", user_id=user_id, resource_type="User", resource_id=str(user_id))
+            log_audit_bg("block_user", user_id=user_id, resource_type="User", resource_id=str(user_id))
         return success
 
     async def unblock_user(self, user_id: int) -> bool:
@@ -284,7 +301,7 @@ class AuthenticationMiddleware(BaseMiddleware):
         success = await set_user_blocked(user_id, False)
         if success:
             self.blocked_users.discard(user_id)
-            await log_audit("unblock_user", user_id=user_id, resource_type="User", resource_id=str(user_id))
+            log_audit_bg("unblock_user", user_id=user_id, resource_type="User", resource_id=str(user_id))
         return success
 
 
@@ -311,16 +328,23 @@ def _drop_redis_role(user_id: int) -> None:
         safe_create_task(cache.delete(f"auth:role:{user_id}"))
 
 
-def invalidate_auth_caches(user_id: int) -> None:
-    """Drop the role cache (Redis + in-memory) and blocked-set entry for one user.
+def invalidate_auth_caches(user_id: int, *, blocked: bool | None = None) -> None:
+    """Drop the role cache (Redis + in-memory) for one user and sync the blocked set.
 
-    Needed after a web-panel edit changes a user's role or unblocks them, so no
+    Needed after a web-panel edit changes a user's role or block state, so no
     worker keeps serving the stale permission/block state until TTL expiry.
+
+    The in-memory blocked set is the per-update source of truth, so callers
+    that change block state must pass ``blocked``; ``None`` (role-only change)
+    leaves the set untouched.
     """
     inst = _auth_middleware_instance
     if inst is not None:
         inst.admin_cache.pop(user_id, None)
-        inst.blocked_users.discard(user_id)
+        if blocked is True:
+            inst.blocked_users.add(user_id)
+        elif blocked is False:
+            inst.blocked_users.discard(user_id)
     _drop_redis_role(user_id)
 
 

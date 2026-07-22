@@ -4,12 +4,13 @@ from aiogram.enums.chat_type import ChatType
 from aiogram.fsm.context import FSMContext
 from aiogram.exceptions import TelegramBadRequest, TelegramForbiddenError
 
+import asyncio
 import datetime
 from html import escape as _esc
 
 from bot.database.methods import (
     select_max_role_id, create_user, check_role_cached, check_user,
-    select_user_operations, select_user_items, check_user_cached
+    select_user_operations_total, select_user_items, check_user_cached
 )
 from bot.database.methods.read import get_cart_count, invalidate_user_cache
 from bot.database.methods.lazy_queries import query_user_operations_history
@@ -142,11 +143,12 @@ async def profile_callback_handler(call: CallbackQuery, state: FSMContext):
     user_info = await check_user_cached(user_id)
 
     balance = user_info.get('balance')
-    operations = await select_user_operations(user_id)
-    overall_balance = sum(operations) if operations else 0
-    items = await select_user_items(user_id)
+    overall_balance, items, cart_count = await asyncio.gather(
+        select_user_operations_total(user_id),
+        select_user_items(user_id),
+        get_cart_count(user_id),
+    )
     referral = EnvKeys.REFERRAL_PERCENT
-    cart_count = await get_cart_count(user_id)
 
     markup = profile_keyboard(referral, items, cart_count=cart_count)
     text = (

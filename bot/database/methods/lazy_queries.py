@@ -7,13 +7,34 @@ from bot.database.models import (
     ReferralEarnings, Role, Operations
 )
 from bot.database.models.main import PromoCodes, Reviews
+from bot.misc.caching import get_cache_manager
+
+# Paginator COUNTs re-run on every page render; a short TTL absorbs that while
+# catalog edits stay visible within a minute (targeted invalidation hooks handle the common cases sooner).
+_COUNT_TTL = 60
+
+
+async def _cached_count(cache_key: str, compute) -> int:
+    cache = get_cache_manager()
+    if cache:
+        cached = await cache.get(cache_key)
+        if cached is not None:
+            return cached
+    count = await compute()
+    if cache:
+        await cache.set(cache_key, count, ttl=_COUNT_TTL)
+    return count
 
 
 async def query_categories(offset: int = 0, limit: int = 10, count_only: bool = False) -> Any:
     """Query categories with pagination"""
+    if count_only:
+        async def _count():
+            async with Database().session() as s:
+                return (await s.execute(select(func.count(Categories.id)))).scalar() or 0
+        return await _cached_count("categories:count", _count)
+
     async with Database().session() as s:
-        if count_only:
-            return (await s.execute(select(func.count(Categories.id)))).scalar() or 0
         result = await s.execute(
             select(Categories.name)
             .order_by(Categories.name.asc())
@@ -26,16 +47,22 @@ async def query_categories(offset: int = 0, limit: int = 10, count_only: bool = 
 async def query_items_in_category(category_name: str, offset: int = 0, limit: int = 10,
                                   count_only: bool = False) -> Any:
     """Query items in category with pagination"""
+    from bot.database.methods.read import check_category_cached
+    cat = await check_category_cached(category_name)
+    if not cat:
+        return 0 if count_only else []
+    cat_id = cat['id']
+
+    query = select(Goods.name).where(Goods.category_id == cat_id)
+    if count_only:
+        async def _count():
+            async with Database().session() as s:
+                return (await s.execute(
+                    select(func.count()).select_from(query.subquery())
+                )).scalar() or 0
+        return await _cached_count(f"category_items:{category_name}:count", _count)
+
     async with Database().session() as s:
-        cat_id = (await s.execute(
-            select(Categories.id).where(Categories.name == category_name)
-        )).scalar()
-        if not cat_id:
-            return 0 if count_only else []
-        query = select(Goods.name).where(Goods.category_id == cat_id)
-        if count_only:
-            count_result = await s.execute(select(func.count()).select_from(query.subquery()))
-            return count_result.scalar() or 0
         result = await s.execute(
             query.order_by(Goods.name.asc()).offset(offset).limit(limit)
         )

@@ -192,22 +192,23 @@ class UserAdmin(AuditModelView, model=User):
     name_plural = "Users"
     icon = "fa-solid fa-users"
 
-    async def _invalidate(self, model: Any) -> None:
+    async def _invalidate(self, model: Any, *, blocked: bool | None = None) -> None:
         # A web edit of balance/role_id/is_blocked would otherwise be served stale
         # from Redis (user/role, up to 600s) and from the middleware's in-memory
-        # role cache + blocked set (300s / until restart). Clear both.
+        # role cache + blocked set (until restart). Clear both; the blocked set
+        # is authoritative per-update, so pass the new block state explicitly.
         tid = getattr(model, "telegram_id", None)
         if tid is not None:
             safe_create_task(invalidate_user_cache(int(tid)))
-            invalidate_auth_caches(int(tid))
+            invalidate_auth_caches(int(tid), blocked=blocked)
 
     async def after_model_change(self, data: dict, model: Any, is_created: bool, request: Request) -> None:
         await super().after_model_change(data, model, is_created, request)
-        await self._invalidate(model)
+        await self._invalidate(model, blocked=bool(getattr(model, "is_blocked", False)))
 
     async def after_model_delete(self, model: Any, request: Request) -> None:
         await super().after_model_delete(model, request)
-        await self._invalidate(model)
+        await self._invalidate(model, blocked=False)
 
 
 _PERM_FLAGS = [

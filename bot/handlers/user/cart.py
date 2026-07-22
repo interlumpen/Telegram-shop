@@ -7,7 +7,8 @@ from aiogram.fsm.context import FSMContext
 from aiogram.exceptions import TelegramBadRequest
 
 from bot.database.methods.create import add_to_cart, CART_MAX_QTY_PER_ITEM
-from bot.database.methods.read import get_cart_items, get_cart_count, validate_promo_for_item
+from bot.database.methods.read import get_cart_items, validate_promo_for_item, \
+    validate_promos_for_cart
 from bot.database.methods.update import set_cart_item_quantity
 from bot.database.methods.delete import remove_from_cart, clear_cart
 from bot.database.methods.transactions import checkout_cart_transaction
@@ -39,10 +40,55 @@ async def _resolve_promo_price(price: Decimal, promo_code: str | None, item_name
     return apply_promo_discount(price, promo['discount_type'], promo['discount_value'], quantity)
 
 
+async def _cart_view_data(user_id: int) -> tuple[list[dict], dict[str, dict], dict[int, dict], Decimal]:
+    """Load everything a cart render or total needs in three queries total.
+
+    Returns (items, info_map, line_data, total); line_data maps cart line id
+    to {'line_total', 'discounted', 'on_sale', 'original'} using the same
+    clamped math as checkout, so the displayed total matches what is charged.
+    Lines whose item no longer exists are absent from line_data.
+    """
+    items = await get_cart_items(user_id)
+    if not items:
+        return [], {}, {}, Decimal(0)
+
+    from bot.database.methods.read import get_items_info
+    from bot.database.methods import effective_price
+    info_map = await get_items_info([item['item_name'] for item in items])
+    promo_results = await validate_promos_for_cart(user_id, items, info_map)
+
+    line_data: dict[int, dict] = {}
+    total = Decimal(0)
+    for item in items:
+        info = info_map.get(item['item_name'])
+        if not info:
+            continue
+        qty = item['quantity']
+        base_price, on_sale, original = effective_price(info)
+
+        discounted = None
+        res = promo_results.get(item['id'])
+        if res is not None and res[0]:
+            promo = res[2]
+            discounted = apply_promo_discount(
+                base_price, promo['discount_type'], promo['discount_value'], qty,
+            )
+
+        line_total = discounted if discounted is not None else (base_price * qty).quantize(Decimal("0.01"))
+        line_data[item['id']] = {
+            'line_total': line_total,
+            'discounted': discounted,
+            'on_sale': on_sale,
+            'original': original,
+        }
+        total += line_total
+    return items, info_map, line_data, total
+
+
 async def _show_cart(call: CallbackQuery):
     """Shared logic: render cart view."""
     user_id = call.from_user.id
-    items = await get_cart_items(user_id)
+    items, info_map, line_data, real_total = await _cart_view_data(user_id)
 
     if not items:
         await call.message.edit_text(
@@ -51,16 +97,12 @@ async def _show_cart(call: CallbackQuery):
         )
         return
 
-    from bot.database.methods.read import get_items_info
-    from bot.database.methods import effective_price
-    info_map = await get_items_info([item['item_name'] for item in items])
     lines = [localize("cart.title"), ""]
-    real_total = Decimal(0)
 
     for item in items:
-        info = info_map.get(item['item_name'])
         qty = item['quantity']
-        if not info:
+        ld = line_data.get(item['id'])
+        if ld is None:
             lines.append(localize(
                 "cart.item", name=item['item_name'], qty=qty,
                 price='?', currency=EnvKeys.PAY_CURRENCY,
@@ -68,39 +110,31 @@ async def _show_cart(call: CallbackQuery):
             continue
 
         # Sale price is the base; a promo code (if any) stacks on top of it.
-        base_price, on_sale, original = effective_price(info)
-        discounted = await _resolve_promo_price(
-            base_price, item.get('promo_code'), item['item_name'], user_id, qty,
-        )
+        line_total, original = ld['line_total'], ld['original']
 
-        if discounted is not None:
-            line_total = discounted
+        if ld['discounted'] is not None:
             lines.append(localize(
                 "cart.item_promo", name=item['item_name'], qty=qty,
                 original=(original * qty).quantize(Decimal("0.01")), price=line_total,
                 currency=EnvKeys.PAY_CURRENCY, code=item['promo_code'],
             ))
         elif item.get('promo_code'):
-            line_total = (base_price * qty).quantize(Decimal("0.01"))
             lines.append(localize(
                 "cart.item_promo_invalid", name=item['item_name'], qty=qty,
                 price=line_total, currency=EnvKeys.PAY_CURRENCY,
                 code=item['promo_code'],
             ))
-        elif on_sale:
-            line_total = (base_price * qty).quantize(Decimal("0.01"))
+        elif ld['on_sale']:
             lines.append(localize(
                 "cart.item_sale", name=item['item_name'], qty=qty,
                 original=(original * qty).quantize(Decimal("0.01")), price=line_total,
                 currency=EnvKeys.PAY_CURRENCY,
             ))
         else:
-            line_total = (base_price * qty).quantize(Decimal("0.01"))
             lines.append(localize(
                 "cart.item", name=item['item_name'], qty=qty,
                 price=line_total, currency=EnvKeys.PAY_CURRENCY,
             ))
-        real_total += line_total
 
     lines.append(localize("cart.total", total=real_total, currency=EnvKeys.PAY_CURRENCY))
 
@@ -240,29 +274,15 @@ def _receipt_total(results: list[dict]) -> Decimal:
 
 async def _calc_cart_total_with_promos(user_id: int) -> Decimal:
     """Calculate real cart total considering sales and promo codes on each item."""
-    from bot.database.methods.read import get_items_info
-    from bot.database.methods import effective_price
-    items = await get_cart_items(user_id)
-    info_map = await get_items_info([item['item_name'] for item in items])
-    total = Decimal(0)
-    for item in items:
-        info = info_map.get(item['item_name'])
-        if not info:
-            continue
-        qty = item['quantity']
-        base_price, _on_sale, _original = effective_price(info)
-        discounted = await _resolve_promo_price(
-            base_price, item.get('promo_code'), item['item_name'], user_id, qty,
-        )
-        total += discounted if discounted is not None else (base_price * qty).quantize(Decimal("0.01"))
+    _items, _info, _lines, total = await _cart_view_data(user_id)
     return total
 
 
 @router.callback_query(F.data == "cart_checkout")
 async def cart_checkout_handler(call: CallbackQuery, state: FSMContext):
     user_id = call.from_user.id
-    count = await get_cart_count(user_id)
-    total = await _calc_cart_total_with_promos(user_id)
+    items, _info, _lines, total = await _cart_view_data(user_id)
+    count = sum(item['quantity'] for item in items)
 
     # Remember the total the user is being asked to confirm, so checkout can detect a price/sale change and refuse to charge a different amount.
     await state.update_data(cart_expected_total=str(total))
@@ -330,8 +350,8 @@ async def cart_checkout_confirm_handler(call: CallbackQuery, state: FSMContext):
         reply_markup=_receipt_keyboard(results),
     )
 
-    from bot.database.methods.audit import log_audit
-    await log_audit(
+    from bot.database.methods.audit import log_audit_bg
+    log_audit_bg(
         "cart_checkout",
         user_id=user_id,
         resource_type="Cart",

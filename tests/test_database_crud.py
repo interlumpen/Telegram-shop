@@ -372,6 +372,19 @@ class TestBalanceOperations:
         ops = await select_user_operations(8006)
         assert len(ops) == 2
 
+    async def test_select_user_operations_total_matches_python_sum(self, user_factory):
+        from bot.database.methods.read import select_user_operations_total
+
+        await user_factory(telegram_id=8016)
+        assert await select_user_operations_total(8016) == Decimal("0")
+
+        await create_operation(8016, 100, NOW)
+        assert await select_user_operations_total(8016) == Decimal("100")
+
+        await create_operation(8016, 250, NOW)
+        ops = await select_user_operations(8016)
+        assert await select_user_operations_total(8016) == sum(ops)
+
     async def test_select_today_operations(self, user_factory):
         await user_factory(telegram_id=8007)
         await create_operation(8007, 300, NOW)

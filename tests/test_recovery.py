@@ -70,6 +70,20 @@ class TestRecoveryManager:
             p = (await s.execute(select(Payments).filter(Payments.external_id == "rec_inv_2"))).scalars().first()
             assert p.status == "failed"
 
+    async def test_health_check_does_not_call_telegram(self, fake_cache):
+        """The per-minute health check must not spend a Telegram API call —
+        polling already proves connectivity."""
+        self.manager.running = True
+
+        async def stop_after_first(_delay):
+            self.manager.running = False
+
+        with patch('bot.misc.services.recovery.asyncio.sleep', side_effect=stop_after_first):
+            await self.manager.periodic_health_check()
+
+        self.bot.get_me.assert_not_awaited()
+        assert fake_cache.store.get("health:check") == "ok"
+
     async def test_start_creates_tasks(self):
         # Patch the recovery methods to not actually run
         self.manager.recover_pending_payments = AsyncMock()

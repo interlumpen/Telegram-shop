@@ -9,14 +9,21 @@ from bot.database.methods.audit import log_audit
 
 async def delete_item(item_name: str) -> None:
     """Delete a product and all of its stock entries."""
+    category_name = None
     async with Database().session() as s:
         result = await s.execute(select(Goods).where(Goods.name == item_name))
         item = result.scalars().first()
         if item:
+            category_name = (await s.execute(
+                select(Categories.name).where(Categories.id == item.category_id)
+            )).scalar()
             await s.execute(sa_delete(ItemValues).where(ItemValues.item_id == item.id))
             await s.delete(item)
 
     safe_create_task(invalidate_item_cache(item_name))
+    if category_name:
+        # The category's cached item count changed.
+        safe_create_task(invalidate_category_cache(category_name))
 
 
 async def delete_only_items(item_name: str) -> None:

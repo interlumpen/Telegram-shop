@@ -157,9 +157,7 @@ class RecoveryManager:
                     await cache.check_health()
                     await cache.set("health:check", "ok", ttl=60)
 
-                me = await self.bot.get_me()
-
-                logger.debug(f"Health check passed: Bot @{me.username} is alive")
+                logger.debug("Health check passed: DB and cache are alive")
 
             except Exception as e:
                 logger.error(f"Health check failed: {e}")

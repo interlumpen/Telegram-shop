@@ -316,9 +316,9 @@ class PromoCodes(Database.BASE):
     current_uses: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     expires_at: Mapped[Optional[datetime.datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
     category_id: Mapped[Optional[int]] = mapped_column(
-        Integer, ForeignKey('categories.id', ondelete='SET NULL'), nullable=True)
+        Integer, ForeignKey('categories.id', ondelete='SET NULL'), nullable=True, index=True)
     item_id: Mapped[Optional[int]] = mapped_column(
-        Integer, ForeignKey('goods.id', ondelete='SET NULL'), nullable=True)
+        Integer, ForeignKey('goods.id', ondelete='SET NULL'), nullable=True, index=True)
     is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True, index=True)
     created_at: Mapped[datetime.datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now())

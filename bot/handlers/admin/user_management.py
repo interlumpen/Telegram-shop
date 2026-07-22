@@ -10,7 +10,7 @@ from aiogram.exceptions import TelegramBadRequest, TelegramForbiddenError
 from bot.i18n import localize
 from bot.database.models import Permission
 from bot.database.methods import (
-    select_user_operations, select_user_items, check_role_name_by_id, check_user_referrals, check_user_cached,
+    select_user_operations_total, select_user_items, check_role_name_by_id, check_user_referrals, check_user_cached,
     get_referral_earnings_stats, get_one_referral_earning,
     query_user_bought_items, query_user_referrals, query_referral_earnings_from_user, query_all_referral_earnings,
     is_user_blocked, admin_balance_change
@@ -38,8 +38,7 @@ async def _build_user_profile(bot, target_id: int, caller_perms: int = 0):
         return None
 
     user_info = await bot.get_chat(target_id)
-    operations = await select_user_operations(target_id)
-    overall_balance = sum(operations) if operations else 0
+    overall_balance = await select_user_operations_total(target_id)
     items_count = await select_user_items(target_id)
     role = await check_role_name_by_id(user.get('role_id'))
     referrals = await check_user_referrals(user.get('telegram_id'))

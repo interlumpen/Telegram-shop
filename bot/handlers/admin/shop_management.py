@@ -15,7 +15,7 @@ from bot.database.methods import (
     select_all_orders, select_today_operations, select_users_balance, select_all_operations,
     select_count_items, select_count_goods, select_count_categories, select_count_bought_items,
     select_bought_item, check_user_referrals, check_role_name_by_id, select_user_items,
-    select_user_operations, query_all_users, check_user_cached
+    select_user_operations_total, query_all_users, check_user_cached
 )
 from bot.database.methods.read import (
     get_roles_with_user_counts, select_unique_buyers, select_avg_order,
@@ -230,8 +230,7 @@ async def show_user_info(call: CallbackQuery):
 
     user = await check_user_cached(user_id)
     user_info = await call.message.bot.get_chat(user_id)
-    operations = await select_user_operations(user_id)
-    overall_balance = sum(operations) if operations else 0
+    overall_balance = await select_user_operations_total(user_id)
     items = await select_user_items(user_id)
     role = await check_role_name_by_id(user.get('role_id'))
     referrals = await check_user_referrals(user.get('telegram_id'))

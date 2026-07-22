@@ -522,6 +522,48 @@ class TestItemInfo:
 
         call.answer.assert_called_once()
 
+    async def test_item_info_resolves_from_state_without_requery(self, make_callback_query,
+                                                                  fsm_context, item_factory):
+        from bot.handlers.user.shop_and_goods import item_info_callback_handler
+
+        await item_factory(name="StateItem", price=100, category="StateCat", values=[("v", False)])
+
+        call = make_callback_query(data="itm:0:0", user_id=600025)
+        await fsm_context.update_data(
+            goods_page_items=["StateItem"],
+            goods_page_num=0,
+            current_category="StateCat",
+        )
+
+        # The page list saved by the last render must be enough — the list
+        # query is not re-run for the drill-down.
+        with patch('bot.handlers.user.shop_and_goods.query_items_in_category',
+                   new_callable=AsyncMock) as mock_q:
+            await item_info_callback_handler(call, fsm_context)
+
+        mock_q.assert_not_called()
+        call.message.edit_text.assert_called_once()
+
+    async def test_item_info_state_page_mismatch_falls_back(self, make_callback_query,
+                                                            fsm_context, item_factory):
+        from bot.handlers.user.shop_and_goods import item_info_callback_handler
+
+        await item_factory(name="FallbackItem", price=100, category="FallbackCat", values=[("v", False)])
+
+        # Keyboard says page 0 but state stored page 3 — must fall back to the DB path.
+        call = make_callback_query(data="itm:0:0", user_id=600026)
+        await fsm_context.update_data(
+            goods_page_items=["WrongItem"],
+            goods_page_num=3,
+            current_category="FallbackCat",
+        )
+
+        await item_info_callback_handler(call, fsm_context)
+
+        call.message.edit_text.assert_called_once()
+        data = await fsm_context.get_data()
+        assert data['csrf_item'] == 'FallbackItem'
+
     async def test_item_info_not_found_in_db(self, make_callback_query, fsm_context):
         from bot.handlers.user.shop_and_goods import item_info_callback_handler
 

@@ -58,8 +58,12 @@ and optional Redis caching.
 - **Admin** — an in‑chat admin menu and a **web panel** (SQLAdmin) with a built‑in help page,
   CSV export, and a full audit log. Broadcast messaging, user/balance management, catalog and
   promo management, statistics.
-- **Performance** — fully async DB (`asyncpg` + async SQLAlchemy). **Optional** Redis caching
-  and persistent FSM storage; the bot runs fine without Redis (in‑memory FSM, no caching).
+- **Performance** — fully async DB (`asyncpg` + async SQLAlchemy). Hot paths stay off the
+  database: per‑update blocked checks are served from memory, audit writes happen in the
+  background, cart promo validation is batched (no per‑line queries), paginator counts and
+  hot lookups are cached, and cache misses are single‑flighted so an expiring hot key doesn't
+  stampede the DB. **Optional** Redis caching and persistent FSM storage; the bot runs fine
+  without Redis (in‑memory FSM, no caching).
 - **Localization** — Russian and English.
 
 ## 🔒 Security
@@ -139,7 +143,7 @@ flowchart TD
         UV["uvicorn · Starlette<br/>SQLAdmin · /health · /metrics · /export"]
         RM["RecoveryManager<br/>CryptoPay sweep 5 min · health 60 s"]
         CM["CleanupManager<br/>daily retention"]
-        CS["CacheScheduler<br/>stats hourly · 03:00 · redis 30 s"]
+        CS["CacheScheduler<br/>stats hourly · daily 03:00"]
     end
 
     CP["CryptoPay API"]
@@ -370,8 +374,10 @@ cached stock count and notifies everyone waiting on that product, exactly as the
 ### Reliability
 
 Background workers recover stuck CryptoPay payments (checked every 5 min, verified against the
-API, idempotent), run periodic health checks, and clean up old audit logs / pending payments.
-Shutdown is graceful (tasks cancelled, metrics snapshot saved, connections closed).
+API, idempotent), run periodic DB/Redis health checks (which also replay cache invalidations
+deferred during a Redis outage), and clean up old audit logs / pending payments. File logging
+is queued off the event loop, so disk writes never stall update handling. Shutdown is graceful
+(tasks cancelled, metrics snapshot saved, log queues flushed, connections closed).
 
 ---
 
@@ -547,7 +553,7 @@ for it, just like the in‑chat flow.
 
 ## 🧪 Testing
 
-**648 tests** (`pytest`). The data layer runs against a real in‑memory async SQLite database
+**664 tests** (`pytest`). The data layer runs against a real in‑memory async SQLite database
 (real SQL, transactions, and constraints) — only external services are mocked (Telegram Bot
 API, CryptoPay, Redis). What's covered:
 

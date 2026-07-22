@@ -2,7 +2,7 @@ import asyncio
 from decimal import Decimal
 
 from bot.database.methods.read import invalidate_user_cache, invalidate_item_cache, invalidate_category_cache, \
-    invalidate_stats_cache
+    invalidate_stats_cache, check_value_cached
 
 from bot.database.methods.update import update_balance, set_role, \
     set_user_blocked
@@ -17,6 +17,7 @@ class TestCacheInvalidationFunctions:
     async def test_invalidate_user_cache(self, fake_cache):
         fake_cache.store["user:123"] = {"telegram_id": 123, "balance": 0}
         fake_cache.store["role:123"] = 1
+        fake_cache.store["auth:role:123"] = 1
         fake_cache.store["user_stats:123:x"] = 42
         fake_cache.store["user_items:123:y"] = [1, 2]
 
@@ -24,13 +25,33 @@ class TestCacheInvalidationFunctions:
 
         assert "user:123" not in fake_cache.store
         assert "role:123" not in fake_cache.store
+        assert "auth:role:123" not in fake_cache.store
         assert "user_stats:123:x" not in fake_cache.store
         assert "user_items:123:y" not in fake_cache.store
+
+    async def test_invalidate_user_cache_drops_middleware_role_entry(self, fake_cache):
+        import time as _time
+        from bot.middleware.security import (
+            AuthenticationMiddleware, set_auth_middleware, get_auth_middleware,
+        )
+        prev = get_auth_middleware()
+        mw = AuthenticationMiddleware()
+        mw.admin_cache[123] = (4, _time.time())
+        mw.blocked_users.add(123)
+        set_auth_middleware(mw)
+        try:
+            await invalidate_user_cache(123)
+            assert 123 not in mw.admin_cache
+            # Only the role entry is dropped; block state must not change.
+            assert 123 in mw.blocked_users
+        finally:
+            set_auth_middleware(prev)
 
     async def test_invalidate_item_cache(self, fake_cache):
         fake_cache.store["item:Test"] = {"name": "Test"}
         fake_cache.store["item_info:Test"] = {"name": "Test", "price": 100}
         fake_cache.store["item_values:Test"] = 5
+        fake_cache.store["item_infinite:Test"] = True
         fake_cache.store["category:Cat1"] = {"name": "Cat1"}
 
         await invalidate_item_cache("Test")
@@ -38,7 +59,23 @@ class TestCacheInvalidationFunctions:
         assert "item:Test" not in fake_cache.store
         assert "item_info:Test" not in fake_cache.store
         assert "item_values:Test" not in fake_cache.store
+        assert "item_infinite:Test" not in fake_cache.store
         assert "category:Cat1" in fake_cache.store
+
+    async def test_check_value_cached_serves_from_cache(self, fake_cache, monkeypatch):
+        calls = 0
+
+        async def fake_check_value(item_name):
+            nonlocal calls
+            calls += 1
+            return False
+
+        monkeypatch.setattr('bot.database.methods.read.check_value', fake_check_value)
+
+        assert await check_value_cached("CachedItem") is False
+        assert await check_value_cached("CachedItem") is False
+        # Second call must be a cache hit (False is cached too).
+        assert calls == 1
 
     async def test_invalidate_item_cache_with_category_drops_only_that_key(self, fake_cache):
         fake_cache.store["item_info:Test"] = {"name": "Test"}
@@ -54,23 +91,87 @@ class TestCacheInvalidationFunctions:
     async def test_invalidate_category_cache(self, fake_cache):
         fake_cache.store["category:Cat"] = {"name": "Cat"}
         fake_cache.store["category_items:Cat:page1"] = [1, 2, 3]
+        fake_cache.store["category_items:Cat:count"] = 3
+        fake_cache.store["categories:count"] = 7
 
         await invalidate_category_cache("Cat")
 
         assert "category:Cat" not in fake_cache.store
         assert "category_items:Cat:page1" not in fake_cache.store
+        assert "category_items:Cat:count" not in fake_cache.store
+        assert "categories:count" not in fake_cache.store
+
+    async def test_paginator_counts_are_cached_and_invalidated(self, fake_cache, category_factory):
+        from bot.database.methods.lazy_queries import query_categories, query_items_in_category
+        from bot.database.methods.create import create_item
+
+        await category_factory("CountCat")
+
+        # First count goes to the DB and lands in the cache...
+        assert await query_categories(count_only=True) >= 1
+        assert "categories:count" in fake_cache.store
+        # ...subsequent counts are served from it.
+        fake_cache.store["categories:count"] = 99
+        assert await query_categories(count_only=True) == 99
+
+        assert await query_items_in_category("CountCat", count_only=True) == 0
+        assert fake_cache.store["category_items:CountCat:count"] == 0
+
+        # Creating an item drops the cached per-category count
+        # (drain the scheduled invalidation task first).
+        await create_item("CountItem", "d", 10, "CountCat")
+        pending = [t for t in asyncio.all_tasks() if t is not asyncio.current_task()]
+        await asyncio.gather(*pending)
+        assert "category_items:CountCat:count" not in fake_cache.store
+        assert await query_items_in_category("CountCat", count_only=True) == 1
 
     async def test_invalidate_stats_cache(self, fake_cache):
-        fake_cache.store["stats:daily"] = 10
-        fake_cache.store["stats:total"] = 100
-        fake_cache.store["user_count"] = 50
-        fake_cache.store["admin_count"] = 3
+        import datetime as _dt
+        today_local = _dt.date.today().isoformat()
+        today_utc = _dt.datetime.now(_dt.timezone.utc).date().isoformat()
+        # Real key shapes: async_cached appends a colon to zero-arg functions;
+        # stats:daily is keyed by date.
+        fake_cache.store[f"stats:daily:{today_local}"] = 10
+        fake_cache.store[f"stats:daily:{today_utc}"] = 10
+        fake_cache.store["stats:global"] = 100
+        fake_cache.store["user_count:"] = 50
+        fake_cache.store["admin_count:"] = 3
+        fake_cache.store["stats:daily:2000-01-01"] = 1  # old date — janitor's job
 
         await invalidate_stats_cache()
 
-        assert "stats:daily" not in fake_cache.store
-        assert "stats:total" not in fake_cache.store
-        assert "user_count" not in fake_cache.store
+        assert f"stats:daily:{today_local}" not in fake_cache.store
+        assert f"stats:daily:{today_utc}" not in fake_cache.store
+        assert "stats:global" not in fake_cache.store
+        assert "user_count:" not in fake_cache.store
+        assert "admin_count:" not in fake_cache.store
+        # Targeted invalidation intentionally leaves stale dated keys to the
+        # hourly scheduler sweep.
+        assert "stats:daily:2000-01-01" in fake_cache.store
+
+    async def test_async_cached_single_flight(self, fake_cache):
+        from bot.database.methods.read import async_cached
+
+        started = 0
+        release = asyncio.Event()
+
+        @async_cached(ttl=60, key_prefix="sf_test")
+        async def slow(key):
+            nonlocal started
+            started += 1
+            await release.wait()
+            return 42
+
+        t1 = asyncio.create_task(slow("k"))
+        t2 = asyncio.create_task(slow("k"))
+        await asyncio.sleep(0)  # let both tasks reach the miss path
+        await asyncio.sleep(0)
+        release.set()
+
+        assert await t1 == 42
+        assert await t2 == 42
+        # Both callers got the value, but the body ran exactly once.
+        assert started == 1
         assert "admin_count" not in fake_cache.store
 
     async def test_invalidate_preserves_other_keys(self, fake_cache):
@@ -156,7 +257,7 @@ class TestCacheInvalidationAfterMutations:
         user = await user_factory(telegram_id=100001)
         user_id = user["telegram_id"]
         fake_cache.store[f"user:{user_id}"] = {"telegram_id": user_id, "balance": 0}
-        fake_cache.store["user_count"] = 1
+        fake_cache.store["user_count:"] = 1
 
         success, msg = await process_payment_with_referral(
             user_id=user_id,
@@ -169,7 +270,7 @@ class TestCacheInvalidationAfterMutations:
 
         assert success is True
         assert f"user:{user_id}" not in fake_cache.store
-        assert "user_count" not in fake_cache.store
+        assert "user_count:" not in fake_cache.store
 
     async def test_payment_with_referral_invalidates_referrer_cache(
             self, user_factory, fake_cache

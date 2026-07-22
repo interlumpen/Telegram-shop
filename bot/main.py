@@ -217,6 +217,10 @@ async def _shutdown(ctx: AppContext, bot: Bot) -> None:
 
     logging.info("Shutdown completed")
 
+    # Flush queued file-log records (also registered via atexit as a fallback).
+    from bot.logger_mesh import shutdown_logging
+    shutdown_logging()
+
 
 # ---------------------------------------------------------------------------
 # Run loop
@@ -227,18 +231,6 @@ def _configure_logging() -> None:
         console=EnvKeys.LOG_TO_STDOUT == "1",
         debug=EnvKeys.DEBUG == "1"
     )
-
-    log_level = logging.DEBUG if EnvKeys.DEBUG == "1" else logging.INFO
-    logging.basicConfig(
-        level=log_level,
-        format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-    )
-
-    # Disconnect unnecessary logs from aiogram
-    logging.getLogger("aiogram.dispatcher").setLevel(logging.WARNING)
-    logging.getLogger("aiogram.event").setLevel(logging.WARNING)
-    logging.getLogger("aiogram.middlewares").setLevel(logging.WARNING)
-    logging.getLogger("uvicorn").setLevel(logging.WARNING)
 
 
 _ALLOWED_UPDATES = [

@@ -156,9 +156,10 @@ async def set_cart_item_quantity(cart_item_id: int, user_id: int, delta: int) ->
 async def is_user_blocked(telegram_id: int) -> bool:
     """Check if user is blocked."""
     async with Database().session() as s:
-        result = await s.execute(select(User).where(User.telegram_id == telegram_id))
-        user = result.scalars().first()
-        return user.is_blocked if user else False
+        result = await s.execute(
+            select(User.is_blocked).where(User.telegram_id == telegram_id)
+        )
+        return bool(result.scalar())
 
 
 async def update_category(category_name: str, new_name: str) -> None:

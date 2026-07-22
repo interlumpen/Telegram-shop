@@ -1,9 +1,25 @@
 import time
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+from aiogram.types import CallbackQuery
 
-from bot.middleware.security import check_suspicious_patterns, SecurityMiddleware, AuthenticationMiddleware
+from bot.middleware.security import (
+    check_suspicious_patterns, SecurityMiddleware, AuthenticationMiddleware,
+    invalidate_auth_caches, set_auth_middleware, get_auth_middleware,
+)
 from bot.middleware.rate_limit import RateLimiter, RateLimitConfig, RedisRateLimiter
+
+
+def _auth_callback(user_id: int, data: str = "profile") -> AsyncMock:
+    """A CallbackQuery mock that passes the middleware's isinstance checks."""
+    call = AsyncMock(spec=CallbackQuery)
+    call.data = data
+    call.from_user = MagicMock()
+    call.from_user.id = user_id
+    call.from_user.is_bot = False
+    call.answer = AsyncMock()
+    return call
 
 
 class TestSuspiciousPatterns:
@@ -253,6 +269,63 @@ class TestAuthenticationMiddleware:
     async def test_block_nonexistent_user(self):
         result = await self.auth.block_user(999999999)
         assert result is False
+
+    async def test_blocked_check_served_from_memory(self, monkeypatch):
+        self.auth._blocked_loaded = True
+        self.auth.blocked_users.add(300001)
+        db_check = AsyncMock(return_value=False)
+        monkeypatch.setattr('bot.database.methods.is_user_blocked', db_check)
+
+        handler = AsyncMock()
+        call = _auth_callback(300001)
+        result = await self.auth(handler, call, {})
+
+        assert result is None
+        handler.assert_not_awaited()
+        call.answer.assert_awaited_once()
+        db_check.assert_not_awaited()
+
+    async def test_unblocked_user_passes_without_db_query(self, monkeypatch, user_factory):
+        await user_factory(telegram_id=300002)
+        self.auth._blocked_loaded = True
+        db_check = AsyncMock(return_value=False)
+        monkeypatch.setattr('bot.database.methods.is_user_blocked', db_check)
+
+        handler = AsyncMock()
+        await self.auth(handler, _auth_callback(300002), {})
+
+        handler.assert_awaited_once()
+        db_check.assert_not_awaited()
+
+    async def test_failed_startup_load_recovers_lazily(self, user_factory):
+        await user_factory(telegram_id=300003)
+        await self.auth.block_user(300003)
+        # Simulate a failed startup load: empty set, flag down.
+        self.auth._blocked_loaded = False
+        self.auth.blocked_users = set()
+
+        handler = AsyncMock()
+        result = await self.auth(handler, _auth_callback(300003), {})
+
+        assert result is None
+        handler.assert_not_awaited()
+        assert self.auth._blocked_loaded is True
+        assert 300003 in self.auth.blocked_users
+
+    async def test_invalidate_auth_caches_syncs_blocked_set(self):
+        prev = get_auth_middleware()
+        set_auth_middleware(self.auth)
+        try:
+            invalidate_auth_caches(300004, blocked=True)
+            assert 300004 in self.auth.blocked_users
+            invalidate_auth_caches(300004, blocked=False)
+            assert 300004 not in self.auth.blocked_users
+            # Role-only invalidation must not unblock.
+            self.auth.blocked_users.add(300005)
+            invalidate_auth_caches(300005)
+            assert 300005 in self.auth.blocked_users
+        finally:
+            set_auth_middleware(prev)
 
 
 class _FakeRedis:

@@ -1,3 +1,4 @@
+import asyncio
 import json
 from typing import Optional, Any
 from redis.asyncio import Redis
@@ -199,12 +200,20 @@ class CacheManager:
             await self.invalidate_pattern(pattern)
 
 
+# Single-flight locks for cache misses (in-process; single-instance deployment).
+_result_locks: dict[str, asyncio.Lock] = {}
+
+
 def cache_result(
         ttl: int = 300,
         key_prefix: str = "",
         key_func: Optional[callable] = None
 ):
-    """Decorator for caching function results"""
+    """Decorator for caching function results.
+
+    Misses are single-flighted: when a hot key (e.g. stats:global) expires,
+    concurrent callers wait for one recomputation instead of all running it.
+    """
 
     def decorator(func):
         @wraps(func)
@@ -219,23 +228,30 @@ def cache_result(
                 key_parts.extend(f"{k}={v}" for k, v in sorted(kwargs.items()))
                 cache_key = ":".join(key_parts)
 
-            # Trying to get from the cache
             cache_manager = get_cache_manager()
-            if cache_manager:
-                cached = await cache_manager.get(cache_key)
-                if cached is not None:
-                    logger.debug(f"Cache hit for {cache_key}")
-                    return cached
+            if not cache_manager:
+                return await func(*args, **kwargs)
 
-            # Call the original function
-            result = await func(*args, **kwargs)
+            cached = await cache_manager.get(cache_key)
+            if cached is not None:
+                logger.debug(f"Cache hit for {cache_key}")
+                return cached
 
-            # Save to cache
-            if cache_manager and result is not None:
-                await cache_manager.set(cache_key, result, ttl)
-                logger.debug(f"Cache set for {cache_key}")
+            lock = _result_locks.setdefault(cache_key, asyncio.Lock())
+            try:
+                async with lock:
+                    cached = await cache_manager.get(cache_key)
+                    if cached is not None:
+                        return cached
 
-            return result
+                    result = await func(*args, **kwargs)
+
+                    if result is not None:
+                        await cache_manager.set(cache_key, result, ttl)
+                        logger.debug(f"Cache set for {cache_key}")
+                    return result
+            finally:
+                _result_locks.pop(cache_key, None)
 
         return wrapper
 

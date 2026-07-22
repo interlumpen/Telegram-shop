@@ -127,3 +127,34 @@ class TestIsSafeItemName:
     def test_single_char(self):
         from bot.handlers.other import is_safe_item_name
         assert is_safe_item_name("A") is True
+
+
+class TestLoggingConfig:
+    def test_file_logging_goes_through_queue_handlers(self, tmp_path, monkeypatch):
+        """File handlers must sit behind a QueueListener so disk writes never
+        block the event loop; shutdown flushes the queue."""
+        from logging.handlers import QueueHandler
+        import bot.logger_mesh as lm
+
+        monkeypatch.setattr('bot.misc.env.EnvKeys.LOG_TO_FILE', '1')
+        monkeypatch.setattr('bot.misc.env.EnvKeys.BOT_LOGFILE', str(tmp_path / 'bot.log'))
+        monkeypatch.setattr('bot.misc.env.EnvKeys.BOT_AUDITFILE', str(tmp_path / 'audit.log'))
+
+        prev_bot = lm.logger.handlers[:]
+        prev_audit = lm.audit_logger.handlers[:]
+        try:
+            logger, audit_logger = lm.configure_logging(console=False)
+
+            assert any(isinstance(h, QueueHandler) for h in logger.handlers)
+            assert any(isinstance(h, QueueHandler) for h in audit_logger.handlers)
+            assert len(lm._listeners) == 2
+
+            logger.info("queued line")
+            lm.shutdown_logging()
+
+            assert lm._listeners == []
+            assert "queued line" in (tmp_path / 'bot.log').read_text(encoding='utf-8')
+        finally:
+            lm.shutdown_logging()
+            lm.logger.handlers[:] = prev_bot
+            lm.audit_logger.handlers[:] = prev_audit

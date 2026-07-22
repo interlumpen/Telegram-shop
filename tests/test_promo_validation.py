@@ -456,3 +456,66 @@ class TestRedeemBalancePromo:
         await _mark_used("RUSED", 830007)
         ok, key, _ = await redeem_balance_promo("RUSED", 830007)
         assert (ok, key) == (False, "promo.already_used")
+
+
+# --- validate_promos_for_cart (batch) ---
+
+class TestBatchCartPromoValidation:
+    async def test_batch_matches_single_validator(self, user_factory, item_factory):
+        """The batch validator must give the same verdicts as validate_promo_for_item."""
+        from bot.database.methods.read import (
+            get_cart_items, get_items_info, validate_promos_for_cart,
+        )
+
+        uid = 840001
+        await user_factory(telegram_id=uid, balance=1000)
+        await item_factory(name="BC1", price=100, values=[("v", False)])
+        await item_factory(name="BC2", price=50, values=[("v", False)])
+        await item_factory(name="BC3", price=80, values=[("v", False)])
+        await item_factory(name="BC4", price=60, values=[("v", False)])
+        await item_factory(name="BC5", price=40, values=[("v", False)])
+
+        await _make_promo("BOK", "percent", "10")                     # valid
+        await _make_promo("BEXP", "percent", "10", expires_at=_past())  # expired
+        await _make_promo("BUSED", "percent", "10")                   # already used
+        await _mark_used("BUSED", uid)
+        bound_to = await _goods("BC1")
+        await _make_promo("BITEM", "percent", "10", item_id=bound_to.id)  # wrong item for BC4
+
+        await add_to_cart(uid, "BC1", promo_code="BOK")
+        await add_to_cart(uid, "BC2", promo_code="BEXP")
+        await add_to_cart(uid, "BC3", promo_code="BUSED")
+        await add_to_cart(uid, "BC4", promo_code="BITEM")
+        await add_to_cart(uid, "BC5")  # plain line, no promo
+
+        items = await get_cart_items(uid)
+        info_map = await get_items_info([i['item_name'] for i in items])
+        batch = await validate_promos_for_cart(uid, items, info_map)
+
+        checked = 0
+        for ln in items:
+            if not ln.get('promo_code'):
+                assert ln['id'] not in batch
+                continue
+            valid_s, err_s, promo_s = await validate_promo_for_item(
+                ln['promo_code'], ln['item_name'], uid,
+            )
+            valid_b, err_b, promo_b = batch[ln['id']]
+            assert (valid_b, err_b) == (valid_s, err_s), ln['promo_code']
+            if valid_s:
+                assert promo_b['code'] == promo_s['code']
+            checked += 1
+        assert checked == 4
+
+    async def test_batch_empty_without_promos(self, user_factory, item_factory):
+        from bot.database.methods.read import (
+            get_cart_items, get_items_info, validate_promos_for_cart,
+        )
+        uid = 840002
+        await user_factory(telegram_id=uid, balance=100)
+        await item_factory(name="BC6", price=10, values=[("v", False)])
+        await add_to_cart(uid, "BC6")
+
+        items = await get_cart_items(uid)
+        info_map = await get_items_info([i['item_name'] for i in items])
+        assert await validate_promos_for_cart(uid, items, info_map) == {}

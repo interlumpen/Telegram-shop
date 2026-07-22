@@ -1,6 +1,8 @@
+import asyncio
 import datetime
 from decimal import Decimal
 from functools import wraps
+from types import SimpleNamespace
 from typing import Optional, Dict, TypeVar, Callable, Any, Coroutine
 
 from sqlalchemy import func, exists, select, inspect as sa_inspect
@@ -13,8 +15,18 @@ from bot.misc.caching import get_cache_manager
 F = TypeVar('F', bound=Callable[..., Coroutine[Any, Any, Any]])
 
 
+# Single-flight locks for cache misses, keyed by cache key. In-process only —
+# sufficient for the single-instance deployment; with several workers each
+# process would recompute at most once per expiry.
+_cache_locks: dict[str, "asyncio.Lock"] = {}
+
+
 def async_cached(ttl: int = 300, key_prefix: str = "", cache_empty: bool = True) -> Callable[[F], F]:
-    """Decorator for async functions with caching."""
+    """Decorator for async functions with caching.
+
+    Misses are single-flighted: concurrent callers of the same key wait for
+    one computation instead of all hitting the DB when a hot key expires.
+    """
 
     def decorator(async_func: F) -> F:
         @wraps(async_func)
@@ -22,17 +34,30 @@ def async_cached(ttl: int = 300, key_prefix: str = "", cache_empty: bool = True)
             cache_key = f"{key_prefix or async_func.__name__}:{':'.join(str(arg) for arg in args)}"
 
             cache = get_cache_manager()
-            if cache:
-                cached_value = await cache.get(cache_key)
-                if cached_value is not None:
-                    return cached_value
+            if not cache:
+                return await async_func(*args, **kwargs)
 
-            result = await async_func(*args, **kwargs)
+            cached_value = await cache.get(cache_key)
+            if cached_value is not None:
+                return cached_value
 
-            if cache and result is not None and (cache_empty or result):
-                await cache.set(cache_key, result, ttl)
+            lock = _cache_locks.setdefault(cache_key, asyncio.Lock())
+            try:
+                async with lock:
+                    cached_value = await cache.get(cache_key)
+                    if cached_value is not None:
+                        return cached_value
 
-            return result
+                    result = await async_func(*args, **kwargs)
+
+                    if result is not None and (cache_empty or result):
+                        await cache.set(cache_key, result, ttl)
+                    return result
+            finally:
+                # Waiters already hold a reference to this lock object; a
+                # late-arriving task simply creates a fresh one. Keeps the
+                # dict from growing unboundedly.
+                _cache_locks.pop(cache_key, None)
 
         return async_wrapper
 
@@ -410,6 +435,15 @@ async def select_user_operations(user_id: int | str) -> list[float]:
         return [row[0] for row in result.all()]
 
 
+async def select_user_operations_total(user_id: int | str) -> Decimal:
+    """Total of a user's operations, summed server-side (avoids pulling every row)."""
+    async with Database().session() as s:
+        return (await s.execute(
+            select(func.coalesce(func.sum(Operations.operation_value), 0))
+            .where(Operations.user_id == user_id)
+        )).scalar() or Decimal(0)
+
+
 async def check_user_referrals(user_id: int) -> int:
     """Return count of referrals of the user."""
     async with Database().session() as s:
@@ -492,6 +526,12 @@ async def select_item_values_amount_cached(item_name: str):
     return await select_item_values_amount(item_name)
 
 
+@async_cached(ttl=300, key_prefix="item_infinite")
+async def check_value_cached(item_name: str):
+    """Cached check_value (whether the item has an infinite value)."""
+    return bool(await check_value(item_name))
+
+
 @async_cached(ttl=60, key_prefix="user_count")
 async def get_user_count_cached():
     """Cached number of users"""
@@ -506,13 +546,21 @@ async def select_admins_cached():
 
 # Cache invalidation functions
 async def invalidate_user_cache(user_id: int):
-    """Invalidate user cache"""
+    """Invalidate user cache (both role caches: read-side and auth middleware)."""
     cache = get_cache_manager()
     if cache:
         await cache.delete(f"user:{user_id}")
         await cache.delete(f"role:{user_id}")
+        await cache.delete(f"auth:role:{user_id}")
         await cache.invalidate_pattern(f"user_stats:{user_id}:*")
         await cache.invalidate_pattern(f"user_items:{user_id}:*")
+
+    # The auth middleware keeps its own in-process role cache; drop that entry
+    # too so a role change takes effect before its TTL.
+    from bot.middleware.security import get_auth_middleware
+    mw = get_auth_middleware()
+    if mw is not None:
+        mw.admin_cache.pop(user_id, None)
 
 
 async def invalidate_item_cache(item_name: str, category_name: str = None):
@@ -522,8 +570,10 @@ async def invalidate_item_cache(item_name: str, category_name: str = None):
         await cache.delete(f"item:{item_name}")
         await cache.delete(f"item_info:{item_name}")
         await cache.delete(f"item_values:{item_name}")
+        await cache.delete(f"item_infinite:{item_name}")
         if category_name:
             await cache.delete(f"category:{category_name}")
+            await cache.delete(f"category_items:{category_name}:count")
 
 
 async def invalidate_category_cache(category_name: str):
@@ -531,16 +581,27 @@ async def invalidate_category_cache(category_name: str):
     cache = get_cache_manager()
     if cache:
         await cache.delete(f"category:{category_name}")
+        await cache.delete("categories:count")
         await cache.invalidate_pattern(f"category_items:{category_name}:*")
 
 
 async def invalidate_stats_cache():
-    """Invalidate the entire statistics cache"""
+    """Invalidate the statistics caches with targeted deletes (no Redis SCAN).
+
+    This runs on nearly every write (purchases, balance changes, catalog
+    edits), so it must not use invalidate_pattern — a SCAN per write. Keys
+    match how they are built: async_cached appends a colon to zero-arg
+    functions (user_count:/admin_count:), stats:daily is keyed by the
+    dashboard's local date (UTC included for the midnight window). The hourly
+    scheduler sweep janitors any stale dated keys.
+    """
     cache = get_cache_manager()
     if cache:
-        await cache.invalidate_pattern("stats:*")
-        await cache.delete("user_count")
-        await cache.delete("admin_count")
+        today_local = datetime.date.today().isoformat()
+        today_utc = datetime.datetime.now(datetime.timezone.utc).date().isoformat()
+        for key in {"stats:global", f"stats:daily:{today_local}",
+                    f"stats:daily:{today_utc}", "user_count:", "admin_count:"}:
+            await cache.delete(key)
 
 
 # --- Promo codes ---
@@ -550,7 +611,8 @@ async def get_promo_code(code: str) -> dict | None:
     return await _fetch_one_dict(PromoCodes, PromoCodes.code == code.upper())
 
 
-async def promo_rule_error(s, promo, user_id, *, goods=None, require_balance=False) -> str | None:
+async def promo_rule_error(s, promo, user_id, *, goods=None, require_balance=False,
+                           used: bool | None = None) -> str | None:
     """Shared promo-code business rules; returns a canonical error code or None if valid.
 
     Canonical codes: not_found, inactive, wrong_type, expired, max_uses, already_used, wrong_item, wrong_category
@@ -560,6 +622,9 @@ async def promo_rule_error(s, promo, user_id, *, goods=None, require_balance=Fal
     - ``promo``: the already-fetched PromoCodes row (or None).
     - ``goods``: the Goods row the promo applies to, for item/category binding (ignored when ``require_balance`` is True).
     - ``require_balance``: True for balance-type redemption, False for discount promos.
+    - ``used``: pre-computed "already used by this user" flag; when None (the
+      default) it is looked up here. Batch callers pass it to avoid one
+      EXISTS query per promo.
     ``s`` is the caller's open session (so the per-user usage check joins the same transaction / row locks).
     """
     if not promo:
@@ -582,12 +647,13 @@ async def promo_rule_error(s, promo, user_id, *, goods=None, require_balance=Fal
     if 0 < promo.max_uses <= promo.current_uses:
         return "max_uses"
 
-    used = (await s.execute(
-        select(exists().where(
-            PromoCodeUsages.promo_id == promo.id,
-            PromoCodeUsages.user_id == user_id,
-        ))
-    )).scalar()
+    if used is None:
+        used = (await s.execute(
+            select(exists().where(
+                PromoCodeUsages.promo_id == promo.id,
+                PromoCodeUsages.user_id == user_id,
+            ))
+        )).scalar()
     if used:
         return "already_used"
 
@@ -637,6 +703,58 @@ async def validate_promo_for_item(
             return False, _VALIDATE_PROMO_ERRORS[err], {}
 
         return True, "", _obj_to_dict(promo, PromoCodes)
+
+
+async def validate_promos_for_cart(
+        user_id: int, lines: list[dict], info_map: dict[str, dict]
+) -> dict[int, tuple[bool, str, dict]]:
+    """Batch counterpart of validate_promo_for_item for a whole cart.
+
+    Same verdicts, but one session and one query per table (promos, usages)
+    for all lines instead of two queries per line; goods binding is checked
+    against the already-loaded ``info_map`` (from get_items_info) instead of
+    re-fetching each Goods row.
+
+    Returns {cart line id: (valid, error_key, promo_dict)} for lines that
+    carry a promo_code.
+    """
+    coded = [ln for ln in lines if ln.get('promo_code')]
+    if not coded:
+        return {}
+
+    codes = {ln['promo_code'].upper() for ln in coded}
+    async with Database().session() as s:
+        promos = (await s.execute(
+            select(PromoCodes).where(PromoCodes.code.in_(codes))
+        )).scalars().all()
+        promo_by_code = {p.code: p for p in promos}
+
+        used_ids: set[int] = set()
+        if promos:
+            used_ids = set((await s.execute(
+                select(PromoCodeUsages.promo_id).where(
+                    PromoCodeUsages.user_id == user_id,
+                    PromoCodeUsages.promo_id.in_([p.id for p in promos]),
+                )
+            )).scalars().all())
+
+        out: dict[int, tuple[bool, str, dict]] = {}
+        for ln in coded:
+            promo = promo_by_code.get(ln['promo_code'].upper())
+            info = info_map.get(ln['item_name'])
+            goods = (
+                SimpleNamespace(id=info['id'], category_id=info['category_id'])
+                if info else None
+            )
+            err = await promo_rule_error(
+                s, promo, user_id, goods=goods, require_balance=False,
+                used=(promo.id in used_ids) if promo else False,
+            )
+            if err:
+                out[ln['id']] = (False, _VALIDATE_PROMO_ERRORS[err], {})
+            else:
+                out[ln['id']] = (True, "", _obj_to_dict(promo, PromoCodes))
+        return out
 
 
 # --- Cart ---
