@@ -4,7 +4,10 @@ from aiogram.types import CallbackQuery, Message, InlineKeyboardButton, InlineKe
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 from aiogram.exceptions import TelegramBadRequest, TelegramForbiddenError
 
+from html import escape as _esc
+
 from bot.i18n import localize
+from bot.handlers.other import display_name
 from bot.database.models import Permission
 from bot.database.methods import (
     check_role_cached, check_user_cached, check_role_name_by_id,
@@ -14,6 +17,7 @@ from bot.database.methods import (
 from bot.keyboards import back, close, simple_buttons
 from bot.database.methods.audit import log_audit
 from bot.filters import HasPermissionFilter
+from bot.middleware.security import flush_all_role_caches, invalidate_auth_caches
 from bot.states import RoleMgmtFSM
 
 router = Router()
@@ -91,9 +95,9 @@ async def role_view_handler(call: CallbackQuery):
 
     user_count = await count_users_with_role(role_id)
     text = localize('admin.roles.detail',
-                     name=role['name'],
-                     perms=_format_permissions(role['permissions']),
-                     users=user_count)
+                    name=_esc(role['name']),
+                    perms=_format_permissions(role['permissions']),
+                    users=user_count)
 
     actions = []
     actions.append((localize('admin.roles.edit'), f"role_e_{role_id}"))
@@ -126,7 +130,7 @@ async def role_create_name(message: Message, state: FSMContext):
     await state.update_data(role_name=name, role_perms=0, caller_perms=caller_perms, mode='create')
     await state.set_state(RoleMgmtFSM.waiting_role_perms)
     await message.answer(
-        localize('admin.roles.select_perms', name=name),
+        localize('admin.roles.select_perms', name=_esc(name)),
         reply_markup=_build_perms_keyboard(0, caller_perms)
     )
 
@@ -181,7 +185,7 @@ async def role_edit_name(message: Message, state: FSMContext):
     await state.update_data(role_name=name)
     await state.set_state(RoleMgmtFSM.editing_role_perms)
     await message.answer(
-        localize('admin.roles.select_perms', name=name),
+        localize('admin.roles.select_perms', name=_esc(name)),
         reply_markup=_build_perms_keyboard(current_perms, caller_perms)
     )
 
@@ -255,21 +259,22 @@ async def _perms_done(call: CallbackQuery, state: FSMContext):
             )
         else:
             await log_audit("create_role", user_id=call.from_user.id,
-                      resource_type="Role", resource_id=str(role_id),
-                      details=f"name={name}, perms={perms}")
+                            resource_type="Role", resource_id=str(role_id),
+                            details=f"name={name}, perms={perms}")
             await call.message.edit_text(
-                localize('admin.roles.created', name=name),
+                localize('admin.roles.created', name=_esc(name)),
                 reply_markup=back('role_mgmt')
             )
     elif mode == 'edit':
         role_id = data.get('role_id')
         success, err = await update_role(role_id, name, perms)
         if success:
+            await flush_all_role_caches()
             await log_audit("update_role", user_id=call.from_user.id,
-                      resource_type="Role", resource_id=str(role_id),
-                      details=f"name={name}, perms={perms}")
+                            resource_type="Role", resource_id=str(role_id),
+                            details=f"name={name}, perms={perms}")
             await call.message.edit_text(
-                localize('admin.roles.updated', name=name),
+                localize('admin.roles.updated', name=_esc(name)),
                 reply_markup=back('role_mgmt')
             )
         else:
@@ -301,7 +306,7 @@ async def role_delete_prompt(call: CallbackQuery):
         (localize('btn.no'), f"role_v_{role_id}"),
     ]
     await call.message.edit_text(
-        localize('admin.roles.delete_confirm', name=role['name']),
+        localize('admin.roles.delete_confirm', name=_esc(role['name'])),
         reply_markup=simple_buttons(buttons, per_row=2)
     )
 
@@ -324,8 +329,8 @@ async def role_delete_confirm(call: CallbackQuery):
     success, err = await delete_role(role_id)
     if success:
         await log_audit("delete_role", user_id=call.from_user.id,
-                  resource_type="Role", resource_id=str(role_id),
-                  details=f"name={role['name']}")
+                        resource_type="Role", resource_id=str(role_id),
+                        details=f"name={role['name']}")
         await call.message.edit_text(
             localize('admin.roles.deleted'),
             reply_markup=back('role_mgmt')
@@ -402,25 +407,25 @@ async def assign_role_confirm(call: CallbackQuery):
     await set_role(target_id, role_id)
 
     # Invalidate the role cache (Redis + in-memory, every worker) so the new permissions take effect immediately instead of after TTL expiry.
-    from bot.middleware.security import invalidate_auth_caches
     invalidate_auth_caches(target_id)
 
-    user_info = await call.message.bot.get_chat(target_id)
     await call.message.edit_text(
-        localize('admin.roles.assigned', name=user_info.first_name, role=role['name']),
+        localize('admin.roles.assigned',
+                 name=_esc(await display_name(call.message.bot, target_id)),
+                 role=_esc(role['name'])),
         reply_markup=back(f'check-user_{target_id}')
     )
 
     try:
         await call.message.bot.send_message(
             chat_id=target_id,
-            text=localize('admin.roles.assigned_notify', role=role['name']),
+            text=localize('admin.roles.assigned_notify', role=_esc(role['name'])),
             reply_markup=close()
         )
     except (TelegramBadRequest, TelegramForbiddenError) as e:
         await log_audit("assign_role_notify_fail", level="ERROR", user_id=target_id, details=str(e))
 
-    admin_info = await call.message.bot.get_chat(call.from_user.id)
+    admin_name = await display_name(call.message.bot, call.from_user.id)
     await log_audit("assign_role", user_id=call.from_user.id,
-              resource_type="User", resource_id=str(target_id),
-              details=f"admin={admin_info.first_name}, role={role['name']}")
+                    resource_type="User", resource_id=str(target_id),
+                    details=f"admin={admin_name}, role={role['name']}")

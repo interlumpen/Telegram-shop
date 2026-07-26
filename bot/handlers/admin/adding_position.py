@@ -1,5 +1,3 @@
-from urllib.parse import urlparse
-
 from aiogram import Router, F
 from aiogram.exceptions import TelegramForbiddenError, TelegramNotFound, TelegramBadRequest
 from aiogram.types import CallbackQuery, Message
@@ -8,18 +6,16 @@ from bot.database.models import Permission
 from bot.database.methods import (
     check_category_cached, get_item_info_cached, create_item, add_values_to_item
 )
-from bot.handlers.other import _parse_channel_username, is_safe_item_name
-from bot.handlers.admin._common import _notify_restock_safe
+from bot.handlers.other import _parse_channel_username, is_safe_item_name, display_name
+from bot.handlers.admin._common import _notify_restock_safe, parse_price
 from bot.keyboards.inline import back, question_buttons, simple_buttons
 from bot.database.methods.audit import log_audit
 from bot.filters import HasPermissionFilter
 from bot.misc import EnvKeys
-from bot.i18n import localize
+from bot.i18n import localize, esc
 from bot.states import AddItemFSM
 
 router = Router()
-
-MAX_ITEM_PRICE = 99_999_999
 
 
 @router.callback_query(F.data == 'add_item', HasPermissionFilter(permission=Permission.CATALOG_MANAGE))
@@ -72,12 +68,8 @@ async def add_item_price(message: Message, state):
     """
     Validate price and ask for category.
     """
-    price_text = (message.text or "").strip()
-    if not (price_text.isascii() and price_text.isdigit()):
-        await message.answer(localize('admin.goods.add.price.invalid'), reply_markup=back('goods_management'))
-        return
-    price = int(price_text)
-    if price < 1 or price > MAX_ITEM_PRICE:
+    price = parse_price(message.text)
+    if price is None:
         await message.answer(localize('admin.goods.add.price.invalid'), reply_markup=back('goods_management'))
         return
 
@@ -145,7 +137,7 @@ async def collect_item_value(message: Message, state):
 
     # Show progress + “Finish adding” button
     await message.answer(
-        localize('admin.goods.add.values.added', value=value, count=len(values)),
+        localize('admin.goods.add.values.added', value=esc(value), count=len(values)),
         reply_markup=simple_buttons([
             (localize('btn.add_values_finish'), "finish_adding_items"),
             (localize('btn.back'), "goods_management")
@@ -217,7 +209,7 @@ async def finish_adding_items_callback_handler(call: CallbackQuery, state):
                 chat_id=chat_id,
                 text=(
                     f"🎁 {localize('shop.group.new_upload')}\n"
-                    f"🏷️ {localize('shop.group.item')}: <b>{item_name}</b>\n"
+                    f"🏷️ {localize('shop.group.item')}: <b>{esc(item_name)}</b>\n"
                     f"📦 {localize('shop.group.count')}: <b>{added}</b>"
                 ),
                 parse_mode='HTML'
@@ -229,8 +221,9 @@ async def finish_adding_items_callback_handler(call: CallbackQuery, state):
         except TelegramBadRequest as e:
             await call.answer(localize("errors.channel.telegram_bad_request", e=e))
 
-    admin_info = await call.message.bot.get_chat(call.from_user.id)
-    await log_audit("create_item", user_id=call.from_user.id, resource_type="Item", resource_id=item_name, details=f"admin={admin_info.first_name}")
+    admin_name = await display_name(call.message.bot, call.from_user.id)
+    await log_audit("create_item", user_id=call.from_user.id, resource_type="Item", resource_id=item_name,
+                    details=f"admin={admin_name}")
 
     await state.clear()
 
@@ -269,7 +262,7 @@ async def finish_adding_item_callback_handler(message: Message, state):
                 chat_id=chat_id,
                 text=(
                     f"🎁 {localize('shop.group.new_upload')}\n"
-                    f"🏷️ {localize('shop.group.item')}: <b>{item_name}</b>\n"
+                    f"🏷️ {localize('shop.group.item')}: <b>{esc(item_name)}</b>\n"
                     f"📦 {localize('shop.group.count')}: <b>∞</b>"
                 ),
                 parse_mode='HTML'
@@ -282,7 +275,8 @@ async def finish_adding_item_callback_handler(message: Message, state):
             await message.answer(localize("errors.channel.telegram_bad_request", e=e))
 
     await message.answer(localize('admin.goods.add.single.created'), reply_markup=back('goods_management'))
-    admin_info = await message.bot.get_chat(message.from_user.id)
-    await log_audit("create_item", user_id=message.from_user.id, resource_type="Item", resource_id=item_name, details=f"admin={admin_info.first_name}, infinite=true")
+    admin_name = await display_name(message.bot, message.from_user.id)
+    await log_audit("create_item", user_id=message.from_user.id, resource_type="Item", resource_id=item_name,
+                    details=f"admin={admin_name}, infinite=true")
 
     await state.clear()

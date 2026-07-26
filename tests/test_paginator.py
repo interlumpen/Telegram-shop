@@ -75,15 +75,15 @@ class TestLazyPaginator:
         assert len(p._cache) <= 3  # cache_pages + nearby
 
     @pytest.mark.asyncio
-    async def test_state_round_trip(self):
+    async def test_tracks_current_page(self):
+        """The paginator is per-render; the page number travels in callback_data
+        rather than through FSM state, so a fresh instance starts at page 0."""
         p = LazyPaginator(_mock_query, per_page=10)
         await p.get_page(1)
-        state = p.get_state()
-        assert state['current_page'] == 1
-        assert 'total_count' not in state
+        assert p.current_page == 1
 
-        p2 = LazyPaginator(_mock_query, per_page=10, state=state)
-        assert p2.current_page == 1
+        p2 = LazyPaginator(_mock_query, per_page=10)
+        assert p2.current_page == 0
         assert p2._total_count is None
         assert await p2.get_total_count() == 25
 

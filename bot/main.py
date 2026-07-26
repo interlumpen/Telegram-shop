@@ -38,6 +38,7 @@ class AppContext:
     cleanup_manager: Optional[CleanupManager] = None
     cache_scheduler: Optional[CacheScheduler] = None
     admin_server: Optional["object"] = None  # uvicorn.Server, imported lazily
+    admin_server_task: Optional[asyncio.Task] = None
     webhook_active: bool = False
 
 
@@ -69,10 +70,13 @@ def _register_middlewares(
     logging.info("Security middleware initialized")
 
 
-async def _setup_caching() -> Optional[CacheScheduler]:
+async def _setup_caching(storage) -> Optional[CacheScheduler]:
     """Initialize the Redis cache manager, warm critical caches and start the
-    cache scheduler. Returns the started scheduler, or None when Redis is off."""
-    storage = get_redis_storage()
+    cache scheduler. Returns the started scheduler, or None when Redis is off.
+
+    Reuses the dispatcher's storage rather than opening a second connection, so
+    the cache and the FSM agree on whether Redis is actually available.
+    """
     if not isinstance(storage, RedisStorage):
         logging.warning("Redis not available - caching disabled")
         return None
@@ -107,11 +111,12 @@ async def _start_admin_server(bot: Bot):
         log_level="warning",
     )
     server = uvicorn.Server(config)
-    asyncio.create_task(server.serve())
-    return server
+    # Keep a strong reference: the loop only holds a weak one, so a task nobody references can be garbage-collected mid-run.
+    task = asyncio.create_task(server.serve())
+    return server, task
 
 
-async def _startup(dp: Dispatcher, bot: Bot, ctx: AppContext) -> None:
+async def _startup(dp: Dispatcher, bot: Bot, ctx: AppContext, storage) -> None:
     """Wire the application together, mutating `ctx` with started components."""
     # Registration of handlers and models
     register_all_handlers(dp)
@@ -133,7 +138,7 @@ async def _startup(dp: Dispatcher, bot: Bot, ctx: AppContext) -> None:
     _register_middlewares(dp, analytics_middleware, auth_middleware, security_middleware)
 
     # Caching (optional Redis) and background services
-    ctx.cache_scheduler = await _setup_caching()
+    ctx.cache_scheduler = await _setup_caching(storage)
 
     ctx.recovery_manager = RecoveryManager(bot)
     await ctx.recovery_manager.start()
@@ -141,7 +146,7 @@ async def _startup(dp: Dispatcher, bot: Bot, ctx: AppContext) -> None:
     ctx.cleanup_manager = CleanupManager()
     await ctx.cleanup_manager.start()
 
-    ctx.admin_server = await _start_admin_server(bot)
+    ctx.admin_server, ctx.admin_server_task = await _start_admin_server(bot)
 
     logging.info(f"Recovery and admin panel initialized on {EnvKeys.ADMIN_HOST}:{EnvKeys.ADMIN_PORT}")
 
@@ -259,6 +264,9 @@ async def _run_webhook(dp: Dispatcher, bot: Bot, ctx: AppContext) -> None:
     from starlette.routing import Route
     from aiogram.types import Update
 
+    # Strong references to in-flight update tasks (the loop keeps only weak ones).
+    pending: set[asyncio.Task] = set()
+
     async def webhook_handler(request: Request) -> Response:
         """Process incoming webhook updates"""
         # Verify secret token
@@ -268,8 +276,16 @@ async def _run_webhook(dp: Dispatcher, bot: Bot, ctx: AppContext) -> None:
                 return Response(status_code=403)
 
         body = await request.body()
-        update = Update.model_validate_raw(body)
-        await dp.feed_update(bot=bot, update=update)
+        try:
+            update = Update.model_validate_raw(body)
+        except Exception as e:
+            # A malformed body is not worth a 500 — Telegram would retry it.
+            logging.warning(f"Discarding unparseable webhook update: {e}")
+            return Response(status_code=200)
+
+        task = asyncio.create_task(dp.feed_update(bot=bot, update=update))
+        pending.add(task)
+        task.add_done_callback(pending.discard)
         return Response(status_code=200)
 
     # The admin server is already running, patch its app's routes.
@@ -287,8 +303,8 @@ async def start_bot() -> None:
     _configure_logging()
     EnvKeys.validate()
 
-    # Retrieve storage (Redis or Memory)
-    storage = get_redis_storage() or MemoryStorage()
+    # Retrieve storage (Redis or Memory). get_redis_storage pings first, so a None here means Redis is genuinely unreachable, not merely unconfigured.
+    storage = await get_redis_storage() or MemoryStorage()
     if isinstance(storage, MemoryStorage):
         logging.warning(
             "Using MemoryStorage - FSM states will be lost on restart! "
@@ -309,7 +325,7 @@ async def start_bot() -> None:
         bot_info = await bot.get_me()
         logging.info(f"Starting bot: @{bot_info.username} (ID: {bot_info.id})")
 
-        await _startup(dp, bot, ctx)
+        await _startup(dp, bot, ctx, storage)
 
         try:
             if EnvKeys.WEBHOOK_ENABLED == "1" and EnvKeys.WEBHOOK_URL:

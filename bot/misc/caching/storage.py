@@ -41,15 +41,18 @@ class CustomRedisStorage(RedisStorage):
         return self.key_builder.build(key, part)
 
 
-def get_redis_storage() -> Optional[RedisStorage]:
+async def get_redis_storage() -> Optional[RedisStorage]:
     """
     Create Redis storage with proper configuration.
-    Returns None if Redis is disabled or not available.
+    Returns None if Redis is disabled or not reachable.
+
+    The connection is verified with a PING before the storage is handed back.
     """
     if EnvKeys.REDIS_ENABLED != "1":
         logging.info("Redis is disabled via REDIS_ENABLED=0")
         return None
 
+    redis = None
     try:
         redis = Redis(
             host=EnvKeys.REDIS_HOST,
@@ -60,6 +63,8 @@ def get_redis_storage() -> Optional[RedisStorage]:
             socket_connect_timeout=5,
             socket_timeout=5,
         )
+
+        await redis.ping()
 
         # Use custom storage with TTL
         storage = CustomRedisStorage(
@@ -72,5 +77,13 @@ def get_redis_storage() -> Optional[RedisStorage]:
         return storage
 
     except Exception as e:
-        logging.error(f"Failed to create Redis storage: {e}")
+        logging.error(
+            "Redis at %s:%s is unreachable (%s) - falling back to in-memory storage",
+            EnvKeys.REDIS_HOST, EnvKeys.REDIS_PORT, e,
+        )
+        if redis is not None:
+            try:
+                await redis.aclose()
+            except Exception:
+                pass
         return None

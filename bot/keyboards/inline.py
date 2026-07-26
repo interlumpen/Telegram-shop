@@ -138,7 +138,7 @@ async def lazy_paginated_keyboard(
 
 
 def item_info(
-        item_name: str, back_data: str, avg_rating: float = None,
+        back_data: str, avg_rating: float = None,
         review_count: int = 0, has_purchased: bool = False,
         applied_promo: str = None, reviews_enabled: bool = True,
         out_of_stock: bool = False, subscribed: bool = False,
@@ -158,9 +158,9 @@ def item_info(
         kb.button(text=localize("btn.apply_promo"), callback_data="apply_promo")
     if reviews_enabled:
         if review_count > 0:
-            kb.button(text=localize("btn.view_reviews", count=review_count), callback_data=f"reviews:{item_name}:0")
+            kb.button(text=localize("btn.view_reviews", count=review_count), callback_data="reviews:0")
         if has_purchased:
-            kb.button(text=localize("btn.leave_review"), callback_data=f"review:{item_name}")
+            kb.button(text=localize("btn.leave_review"), callback_data="review")
     if out_of_stock:
         if subscribed:
             kb.button(text=localize("btn.notify_stock_off"), callback_data="unsub_stock")
@@ -245,7 +245,7 @@ def check_sub(channel_username: str) -> InlineKeyboardMarkup:
     return kb.as_markup()
 
 
-def rating_keyboard(item_name: str) -> InlineKeyboardMarkup:
+def rating_keyboard() -> InlineKeyboardMarkup:
     """Rating selection keyboard (1-5 stars)."""
     kb = InlineKeyboardBuilder()
     for i in range(1, 6):

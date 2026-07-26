@@ -24,12 +24,16 @@ from bot.database.methods.read import (
 from bot.keyboards import back, simple_buttons, lazy_paginated_keyboard
 from bot.filters import HasPermissionFilter, HasAnyPermissionFilter
 from bot.handlers.admin._common import user_profile_lines
+from bot.handlers.other import display_name
 from bot.database.methods.audit import log_audit
 from bot.misc import EnvKeys, LazyPaginator, sanitize_html, SearchQuery, StatsCache, get_cache_manager
-from bot.i18n import localize
+from bot.i18n import localize, esc
 from bot.states import GoodsFSM
 
 router = Router()
+
+# Telegram's upload ceiling for send_document.
+MAX_LOG_UPLOAD_BYTES = 50 * 1024 * 1024
 
 # Initialize StatsCache as a global variable
 stats_cache: Optional[StatsCache] = None
@@ -47,6 +51,8 @@ def init_stats_cache():
 @router.callback_query(F.data == "shop_management", HasAnyPermissionFilter(
     permissions=Permission.CATALOG_MANAGE | Permission.STATS_VIEW
 ))
+
+
 async def shop_callback_handler(call: CallbackQuery):
     """
     Open shop-management main menu.
@@ -75,16 +81,26 @@ async def logs_callback_handler(call: CallbackQuery):
     Send bot logs (audit and bot) files if they exist and are not empty.
     """
     files_to_send = []
+    oversized = []
 
-    # Check audit log file
-    audit_file_path = Path(EnvKeys.BOT_AUDITFILE)
-    if audit_file_path.exists() and audit_file_path.stat().st_size > 0:
-        files_to_send.append(('audit', audit_file_path))
+    for log_type, raw_path in (('audit', EnvKeys.BOT_AUDITFILE), ('bot', EnvKeys.BOT_LOGFILE)):
+        path = Path(raw_path)
+        if not path.exists():
+            continue
+        size = path.stat().st_size
+        if size == 0:
+            continue
+        # send_document rejects anything past Telegram's 50 MB limit; say so instead of letting the upload fail with an opaque API error.
+        if size > MAX_LOG_UPLOAD_BYTES:
+            oversized.append(path.name)
+            continue
+        files_to_send.append((log_type, path))
 
-    # Check bot log file
-    bot_file_path = Path(EnvKeys.BOT_LOGFILE)
-    if bot_file_path.exists() and bot_file_path.stat().st_size > 0:
-        files_to_send.append(('bot', bot_file_path))
+    if oversized:
+        await call.answer(
+            localize("admin.shop.logs.too_large", files=", ".join(oversized)),
+            show_alert=True,
+        )
 
     if files_to_send:
         for log_type, file_path in files_to_send:
@@ -187,8 +203,7 @@ _PERM_LABELS = {
 
 async def _show_users_page(call: CallbackQuery, state: FSMContext, page: int):
     """Render one page of the all-users list (shared by the view and paginate handlers)."""
-    paginator_state = (await state.get_data()).get('users_paginator') if page > 0 else None
-    paginator = LazyPaginator(query_all_users, per_page=10, state=paginator_state)
+    paginator = LazyPaginator(query_all_users, per_page=10)
 
     markup = await lazy_paginated_keyboard(
         paginator=paginator,
@@ -200,7 +215,6 @@ async def _show_users_page(call: CallbackQuery, state: FSMContext, page: int):
     )
 
     await call.message.edit_text(localize("admin.shop.users.title"), reply_markup=markup)
-    await state.update_data(users_paginator=paginator.get_state())
 
 
 @router.callback_query(F.data == "users_list", HasPermissionFilter(Permission.USERS_MANAGE))
@@ -223,20 +237,29 @@ async def navigate_users(call: CallbackQuery, state: FSMContext):
 async def show_user_info(call: CallbackQuery):
     """
     Show detailed info for selected user.
+    Callback data format: show-user_user-{user_id}
     """
-    query = call.data[10:]
-    _, user_id = query.split("-")
-    user_id = int(user_id)
+    try:
+        user_id = int(call.data[len("show-user_"):].split("-", 1)[1])
+    except (ValueError, IndexError):
+        await call.answer(localize("errors.invalid_data"), show_alert=True)
+        return
 
     user = await check_user_cached(user_id)
-    user_info = await call.message.bot.get_chat(user_id)
-    overall_balance = await select_user_operations_total(user_id)
-    items = await select_user_items(user_id)
-    role = await check_role_name_by_id(user.get('role_id'))
-    referrals = await check_user_referrals(user.get('telegram_id'))
+    if not user:
+        await call.answer(localize("admin.users.not_found"), show_alert=True)
+        return
+
+    first_name, overall_balance, items, role, referrals = await asyncio.gather(
+        display_name(call.message.bot, user_id),
+        select_user_operations_total(user_id),
+        select_user_items(user_id),
+        check_role_name_by_id(user.get('role_id')),
+        check_user_referrals(user.get('telegram_id')),
+    )
 
     text = '\n'.join(user_profile_lines(
-        user, user_info.first_name, user_id,
+        user, first_name, user_id,
         overall_balance=overall_balance, items_count=items,
         role=role, referrals=referrals, include_referral_id=True,
     )) + '\n'
@@ -282,7 +305,7 @@ async def process_item_show(message: Message, state: FSMContext):
             safe_value = sanitize_html(item['value'])
 
             text = (
-                f"{localize('purchases.item.name', name=item['item_name'])}\n"
+                f"{localize('purchases.item.name', name=esc(item['item_name']))}\n"
                 f"{localize('purchases.item.price', amount=item['price'], currency=EnvKeys.PAY_CURRENCY)}\n"
                 f"{localize('purchases.item.datetime', dt=item['bought_datetime'])}\n"
                 f"{localize('purchases.item.buyer', buyer=item['buyer_id'])}\n"

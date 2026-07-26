@@ -15,7 +15,7 @@ from bot.database.methods.transactions import checkout_cart_transaction
 from bot.keyboards.inline import back, simple_buttons, cart_keyboard
 from bot.database.methods.pricing import apply_promo_discount
 from bot.misc import EnvKeys
-from bot.i18n import localize
+from bot.i18n import localize, esc
 
 router = Router()
 
@@ -101,10 +101,12 @@ async def _show_cart(call: CallbackQuery):
 
     for item in items:
         qty = item['quantity']
+        name = esc(item['item_name'])
+        code = esc(item.get('promo_code'))
         ld = line_data.get(item['id'])
         if ld is None:
             lines.append(localize(
-                "cart.item", name=item['item_name'], qty=qty,
+                "cart.item", name=name, qty=qty,
                 price='?', currency=EnvKeys.PAY_CURRENCY,
             ))
             continue
@@ -114,25 +116,25 @@ async def _show_cart(call: CallbackQuery):
 
         if ld['discounted'] is not None:
             lines.append(localize(
-                "cart.item_promo", name=item['item_name'], qty=qty,
+                "cart.item_promo", name=name, qty=qty,
                 original=(original * qty).quantize(Decimal("0.01")), price=line_total,
-                currency=EnvKeys.PAY_CURRENCY, code=item['promo_code'],
+                currency=EnvKeys.PAY_CURRENCY, code=code,
             ))
         elif item.get('promo_code'):
             lines.append(localize(
-                "cart.item_promo_invalid", name=item['item_name'], qty=qty,
+                "cart.item_promo_invalid", name=name, qty=qty,
                 price=line_total, currency=EnvKeys.PAY_CURRENCY,
-                code=item['promo_code'],
+                code=code,
             ))
         elif ld['on_sale']:
             lines.append(localize(
-                "cart.item_sale", name=item['item_name'], qty=qty,
+                "cart.item_sale", name=name, qty=qty,
                 original=(original * qty).quantize(Decimal("0.01")), price=line_total,
                 currency=EnvKeys.PAY_CURRENCY,
             ))
         else:
             lines.append(localize(
-                "cart.item", name=item['item_name'], qty=qty,
+                "cart.item", name=name, qty=qty,
                 price=line_total, currency=EnvKeys.PAY_CURRENCY,
             ))
 
@@ -326,8 +328,7 @@ async def cart_checkout_confirm_handler(call: CallbackQuery, state: FSMContext):
         return
 
     total = _receipt_total(results)
-    from html import escape as _esc
-    username = _esc(call.from_user.username or call.from_user.first_name or "")
+    username = esc(call.from_user.username or call.from_user.first_name)
     dt = results[0]['bought_datetime'] if results else ""
 
     # Save results in state for cart_receipt back navigation
@@ -373,7 +374,7 @@ async def cart_receipt_handler(call: CallbackQuery, state: FSMContext):
         )
         return
 
-    username = call.from_user.username or call.from_user.first_name
+    username = esc(call.from_user.username or call.from_user.first_name)
     dt = results[0].get("bought_datetime", "")
 
     await call.message.edit_text(

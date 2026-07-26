@@ -2,8 +2,11 @@ import asyncio
 import json
 from typing import Optional, Any
 from redis.asyncio import Redis
+from redis.exceptions import RedisError
 from functools import wraps
 from bot.logger_mesh import logger
+
+_REDIS_DOWN = (RedisError, ConnectionError, TimeoutError, OSError)
 
 
 class CacheManager:
@@ -13,8 +16,9 @@ class CacheManager:
     # on overflow fall back to replaying the known cache-key prefixes on recovery.
     _PENDING_CAP = 5000
     _KNOWN_PREFIXES = (
-        "user:", "role:", "auth:role:", "category:", "item_info:", "item_values:",
-        "user_count:", "stats:",
+        "user:", "role:", "auth:role:", "category:", "category_items:",
+        "item_info:", "item_values:", "item_infinite:", "avg_rating:",
+        "user_count:", "admin_count:", "user_stats:", "user_items:", "stats:",
     )
 
     def __init__(self, redis_client: Redis):
@@ -72,7 +76,7 @@ class CacheManager:
                 except (json.JSONDecodeError, TypeError):
                     return value
 
-        except (ConnectionError, TimeoutError, OSError) as e:
+        except _REDIS_DOWN as e:
             self._healthy = False
             logger.warning(f"Redis unavailable (get): {e}")
             return None
@@ -109,7 +113,7 @@ class CacheManager:
             await self.redis.setex(key, ttl, serialized)
             return True
 
-        except (ConnectionError, TimeoutError, OSError) as e:
+        except _REDIS_DOWN as e:
             self._healthy = False
             logger.warning(f"Redis unavailable (set): {e}")
             return False
@@ -126,7 +130,7 @@ class CacheManager:
         try:
             await self.redis.delete(key)
             return True
-        except (ConnectionError, TimeoutError, OSError) as e:
+        except _REDIS_DOWN as e:
             self._healthy = False
             self._defer_delete(key)
             logger.warning(f"Redis unavailable (delete): {e}")
@@ -165,7 +169,7 @@ class CacheManager:
             if keys:
                 return await self.redis.delete(*keys)
             return 0
-        except (ConnectionError, TimeoutError, OSError) as e:
+        except _REDIS_DOWN as e:
             self._healthy = False
             self._defer_pattern(pattern)
             logger.warning(f"Redis unavailable (invalidate): {e}")
@@ -237,7 +241,9 @@ def cache_result(
                 logger.debug(f"Cache hit for {cache_key}")
                 return cached
 
-            lock = _result_locks.setdefault(cache_key, asyncio.Lock())
+            lock = _result_locks.get(cache_key)
+            if lock is None:
+                lock = _result_locks[cache_key] = asyncio.Lock()
             try:
                 async with lock:
                     cached = await cache_manager.get(cache_key)

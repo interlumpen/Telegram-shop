@@ -12,6 +12,7 @@ from bot.database.methods import get_all_users
 from bot.keyboards import back, close, simple_buttons
 from bot.database.methods.audit import log_audit
 from bot.filters import HasPermissionFilter
+from bot.handlers.other import display_name
 from bot.misc import BroadcastMessage, sanitize_html
 from bot.misc.services import BroadcastManager, BroadcastStats
 from bot.states import BroadcastFSM
@@ -122,8 +123,9 @@ async def broadcast_messages(message: Message, state: FSMContext):
             await log_audit("broadcast_final_edit_fail", level="WARNING", details=str(e))
 
         # Logging
-        user_info = await message.bot.get_chat(admin_id)
-        await log_audit("broadcast_sent", user_id=user_info.id, details=f"admin={user_info.first_name}, delivered={stats.sent}/{stats.total}, duration={duration}s")
+        admin_name = await display_name(message.bot, admin_id)
+        await log_audit("broadcast_sent", user_id=admin_id,
+                        details=f"admin={admin_name}, delivered={stats.sent}/{stats.total}, duration={duration}s")
 
     except Exception as e:
         await message.answer(

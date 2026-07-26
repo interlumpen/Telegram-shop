@@ -336,3 +336,63 @@ class TestBuyItemHandler:
         await buy_item_callback_handler(call, fsm_context)
 
         call.answer.assert_called()
+
+
+class TestStarsAmountFromPayload:
+    def test_payload_amount_prefers_explicit_keys(self):
+        from bot.misc.services.payment import payload_amount
+
+        assert payload_amount({"amount": 25}) == 25
+        assert payload_amount({"amount_rub": 20, "stars": 19}) == 20
+        assert payload_amount({}) == 0
+        assert payload_amount({"amount": "nope"}) == 0
+
+    @pytest.mark.parametrize("requested", [20, 21, 30, 33, 50, 111])
+    async def test_stars_payment_credits_requested_amount(
+        self, make_message, user_factory, requested
+    ):
+        import json
+        import math
+        from bot.handlers.user.balance_and_payment import successful_payment_handler
+        from bot.misc.services.payment import currency_to_stars
+
+        await user_factory(telegram_id=400100 + requested, balance=0)
+
+        stars = currency_to_stars(requested)
+        assert stars == math.ceil(requested * 0.91)
+
+        msg = make_message(text="", user_id=400100 + requested)
+        msg.successful_payment = MagicMock()
+        msg.successful_payment.currency = "XTR"
+        msg.successful_payment.total_amount = stars
+        msg.successful_payment.invoice_payload = json.dumps(
+            {"op": "topup_balance_stars", "amount_rub": requested, "stars": stars}
+        )
+        msg.successful_payment.telegram_payment_charge_id = f"charge_{requested}"
+        msg.successful_payment.provider_payment_charge_id = None
+
+        await successful_payment_handler(msg)
+
+        user = await check_user(400100 + requested)
+        assert user['balance'] == Decimal(requested)
+
+    async def test_stars_payment_falls_back_when_payload_missing(
+        self, make_message, user_factory
+    ):
+        """No usable payload: the lossy reverse conversion is the last resort."""
+        from bot.handlers.user.balance_and_payment import successful_payment_handler
+
+        await user_factory(telegram_id=400199, balance=0)
+
+        msg = make_message(text="", user_id=400199)
+        msg.successful_payment = MagicMock()
+        msg.successful_payment.currency = "XTR"
+        msg.successful_payment.total_amount = 91
+        msg.successful_payment.invoice_payload = ""
+        msg.successful_payment.telegram_payment_charge_id = "charge_no_payload"
+        msg.successful_payment.provider_payment_charge_id = None
+
+        await successful_payment_handler(msg)
+
+        user = await check_user(400199)
+        assert user['balance'] == Decimal(100)

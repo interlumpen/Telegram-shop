@@ -1,10 +1,16 @@
 from __future__ import annotations
 from functools import lru_cache
+from html import escape as _html_escape
 from typing import Any
 
 from bot.misc import EnvKeys
 from .strings import TRANSLATIONS, DEFAULT_LOCALE
 from bot.logger_mesh import logger
+
+
+def esc(value: Any) -> str:
+    """Escape a value for interpolation into a message."""
+    return _html_escape("" if value is None else str(value), quote=False)
 
 
 @lru_cache(maxsize=1)

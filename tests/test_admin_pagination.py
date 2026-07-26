@@ -47,7 +47,6 @@ class TestAdminReferralsPagination:
         text, kwargs = _last_edit(call)
         assert isinstance(text, str)
         assert kwargs.get("reply_markup") is not None
-        assert (await fsm_context.get_data()).get("admin_referrals_paginator") is not None
 
     async def test_pagination(self, make_callback_query, fsm_context):
         await _referrer_with_referral(900003, 900013)
@@ -78,7 +77,6 @@ class TestAdminAllEarningsPagination:
         text, kwargs = _last_edit(call)
         assert isinstance(text, str)
         assert kwargs.get("reply_markup") is not None
-        assert (await fsm_context.get_data()).get("admin_all_earnings_paginator") is not None
 
     async def test_pagination(self, make_callback_query, fsm_context):
         await _referrer_with_referral(900103, 900113)
@@ -101,7 +99,6 @@ class TestUsersListPagination:
         text, kwargs = _last_edit(call)
         assert isinstance(text, str)
         assert kwargs.get("reply_markup") is not None
-        assert (await fsm_context.get_data()).get("users_paginator") is not None
 
     async def test_navigate(self, make_callback_query, fsm_context, user_factory):
         await user_factory(telegram_id=900202)
@@ -124,7 +121,6 @@ class TestShopCategoriesPagination:
         text, kwargs = _last_edit(call)
         assert isinstance(text, str)
         assert kwargs.get("reply_markup") is not None
-        assert (await fsm_context.get_data()).get("categories_paginator") is not None
 
     async def test_navigate(self, make_callback_query, fsm_context, category_factory):
         await category_factory("CatB")
@@ -177,3 +173,79 @@ class TestProfileViews:
         assert isinstance(text, str)
         assert kwargs.get("reply_markup") is not None
         assert "900302" in text
+
+
+class TestEveryNavPrefixHasAHandler:
+    # (module, nav prefix a handler must accept, a concrete payload it produces)
+    NAV_PREFIXES = [
+        ("bot.handlers.user.referral_system", "ref-earn_", "ref-earn_123_1"),
+        ("bot.handlers.user.referral_system", "referrals_page_", "referrals_page_1"),
+        ("bot.handlers.user.referral_system", "all_earnings_page_", "all_earnings_page_1"),
+        ("bot.handlers.admin.user_management", "admin-refearn_", "admin-refearn_1_2_1"),
+        ("bot.handlers.admin.user_management", "admin-refs-page_", "admin-refs-page_1_1"),
+        ("bot.handlers.admin.user_management", "admin-all-earn_", "admin-all-earn_1_page_1"),
+        ("bot.handlers.admin.user_management", "bought-goods-page_", "bought-goods-page_user_0"),
+        ("bot.handlers.admin.shop_management", "users-page_", "users-page_1"),
+        ("bot.handlers.user.shop_and_goods", "categories-page_", "categories-page_1"),
+        ("bot.handlers.user.shop_and_goods", "gp_", "gp_1"),
+        ("bot.handlers.user.shop_and_goods", "sp_", "sp_1"),
+        ("bot.handlers.admin.goods_management", "gip_", "gip_abcd1234_1"),
+        ("bot.handlers.admin.promo_management", "promos-page_", "promos-page_1"),
+    ]
+
+    def _all_routers(self):
+        from bot.handlers.admin import router as admin_router
+        from bot.handlers.user import router as user_router
+        from bot.handlers.other import router as other_router
+        return [admin_router, user_router, other_router]
+
+    def _matches(self, payload: str) -> bool:
+        """Whether any registered callback_query handler's filters accept payload."""
+        from aiogram.types import CallbackQuery
+        from unittest.mock import MagicMock
+
+        call = MagicMock(spec=CallbackQuery)
+        call.data = payload
+
+        def walk(router):
+            yield router
+            for sub in router.sub_routers:
+                yield from walk(sub)
+
+        for root in self._all_routers():
+            for router in walk(root):
+                for handler in router.callback_query.handlers:
+                    for f in handler.filters or ():
+                        # Only the F.data magic filters describe the payload shape.
+                        # Permission filters and state filters are separate
+                        # concerns and are deliberately ignored here.
+                        magic = getattr(f, "magic", None)
+                        if magic is None:
+                            continue
+                        try:
+                            if magic.resolve(call):
+                                return True
+                        except Exception:
+                            continue
+        return False
+
+    def test_generated_nav_payloads_are_routable(self):
+        unroutable = [
+            (module, prefix, payload)
+            for module, prefix, payload in self.NAV_PREFIXES
+            if not self._matches(payload)
+        ]
+        assert not unroutable, f"nav payloads with no handler: {unroutable}"
+
+    def test_the_probe_itself_detects_an_unrouted_payload(self):
+        """Guard against the check silently passing everything."""
+        assert self._matches("definitely-not-a-registered-prefix_1") is False
+
+    def test_probe_flags_the_two_historically_dead_prefixes(self):
+        """The prefixes these views used to generate had no handler at all.
+
+        Kept as a proof that the check above can actually fail — if either of
+        these ever became routable the probe would have stopped discriminating.
+        """
+        assert self._matches("ref_earnings_123_page_1") is False
+        assert self._matches("admin-ref-earn_1_2_page_1") is False

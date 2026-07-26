@@ -1,3 +1,4 @@
+import asyncio
 from unittest.mock import patch, AsyncMock
 
 from bot.database.methods.read import (
@@ -498,3 +499,44 @@ class TestBitwiseRegressions:
         await _perms_done(call, fsm_context)
 
         call.answer.assert_called_once()
+
+
+class TestRolePermissionCacheFlush:
+    async def test_editing_permissions_flushes_role_caches(
+        self, make_callback_query, fsm_context, fake_cache, role_factory
+    ):
+        from bot.handlers.admin.role_management import _perms_done
+        from bot.database.models import Permission
+        from bot.middleware.security import (
+            AuthenticationMiddleware, set_auth_middleware, get_auth_middleware,
+        )
+        import time as _time
+
+        role_id = await role_factory(name="TOFLUSH", permissions=Permission.USE | Permission.STATS_VIEW)
+
+        # Two users' bitmasks are cached in both layers.
+        fake_cache.store["role:501"] = 129
+        fake_cache.store["auth:role:501"] = 129
+        fake_cache.store["role:502"] = 129
+
+        prev = get_auth_middleware()
+        mw = AuthenticationMiddleware()
+        mw.admin_cache[501] = (129, _time.time())
+        set_auth_middleware(mw)
+        try:
+            call = make_callback_query(data="rp_done", user_id=500)
+            await fsm_context.update_data(
+                mode="edit", role_id=role_id, role_name="TOFLUSH",
+                role_perms=Permission.USE,
+                caller_perms=Permission.USE | Permission.STATS_VIEW | Permission.ADMINS_MANAGE,
+            )
+
+            await _perms_done(call, fsm_context)
+            await asyncio.sleep(0)
+
+            assert "role:501" not in fake_cache.store
+            assert "role:502" not in fake_cache.store
+            assert "auth:role:501" not in fake_cache.store
+            assert mw.admin_cache == {}
+        finally:
+            set_auth_middleware(prev)

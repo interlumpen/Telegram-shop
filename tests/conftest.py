@@ -78,7 +78,7 @@ def setup_test_database():
     from bot.database.main import Database
 
     # Reset singleton
-    Database._instance = None
+    Database.reset_instance()
 
     # Save original init
     original_init = Database.__init__
@@ -114,7 +114,7 @@ def setup_test_database():
     yield
 
     Database.__init__ = original_init
-    Database._instance = None
+    Database.reset_instance()
 
 
 @pytest.fixture(autouse=True)

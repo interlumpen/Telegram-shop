@@ -4,7 +4,7 @@ from sqlalchemy import desc
 from bot.database import Database
 from bot.database.models import (
     Categories, Goods, User, BoughtGoods, ItemValues,
-    ReferralEarnings, Role, Operations
+    ReferralEarnings, Operations
 )
 from bot.database.models.main import PromoCodes, Reviews
 from bot.misc.caching import get_cache_manager
@@ -110,7 +110,7 @@ async def query_user_bought_items(user_id: int, offset: int = 0, limit: int = 10
         result = await s.execute(
             select(BoughtGoods)
             .where(BoughtGoods.buyer_id == user_id)
-            .order_by(desc(BoughtGoods.bought_datetime))
+            .order_by(desc(BoughtGoods.bought_datetime), desc(BoughtGoods.id))
             .offset(offset)
             .limit(limit)
         )
@@ -175,7 +175,7 @@ async def query_user_referrals(user_id: int, offset: int = 0, limit: int = 10, c
             )
             .outerjoin(earnings_subq, User.telegram_id == earnings_subq.c.referral_id)
             .where(User.referral_id == user_id)
-            .order_by(desc(func.coalesce(earnings_subq.c.total_earned, 0)))
+            .order_by(desc(func.coalesce(earnings_subq.c.total_earned, 0)), User.telegram_id.asc())
             .offset(offset)
             .limit(limit)
         )
@@ -203,7 +203,7 @@ async def query_referral_earnings_from_user(referrer_id: int, referral_id: int, 
             count_result = await s.execute(select(func.count()).select_from(base.subquery()))
             return count_result.scalar() or 0
         result = await s.execute(
-            base.order_by(desc(ReferralEarnings.created_at)).offset(offset).limit(limit)
+            base.order_by(desc(ReferralEarnings.created_at), desc(ReferralEarnings.id)).offset(offset).limit(limit)
         )
         return result.scalars().all()
 
@@ -219,7 +219,7 @@ async def query_all_referral_earnings(referrer_id: int, offset: int = 0, limit: 
             count_result = await s.execute(select(func.count()).select_from(base.subquery()))
             return count_result.scalar() or 0
         result = await s.execute(
-            base.order_by(desc(ReferralEarnings.created_at)).offset(offset).limit(limit)
+            base.order_by(desc(ReferralEarnings.created_at), desc(ReferralEarnings.id)).offset(offset).limit(limit)
         )
         return result.scalars().all()
 
@@ -231,7 +231,7 @@ async def query_promo_codes(offset: int = 0, limit: int = 10, count_only: bool =
             return (await s.execute(select(func.count(PromoCodes.id)))).scalar() or 0
         result = await s.execute(
             select(PromoCodes)
-            .order_by(desc(PromoCodes.created_at))
+            .order_by(desc(PromoCodes.created_at), desc(PromoCodes.id))
             .offset(offset)
             .limit(limit)
         )
@@ -256,7 +256,7 @@ async def query_promo_codes(offset: int = 0, limit: int = 10, count_only: bool =
 async def query_user_operations_history(user_id: int, offset: int = 0, limit: int = 10,
                                         count_only: bool = False) -> Any:
     """Query user's full operations history (topups, purchases, referral bonuses) as UNION ALL"""
-    from sqlalchemy import literal_column, union_all, literal
+    from sqlalchemy import union_all, literal
     async with Database().session() as s:
         # 1. Top-ups (operations with positive value)
         topups = (
@@ -295,7 +295,7 @@ async def query_user_operations_history(user_id: int, offset: int = 0, limit: in
             return (await s.execute(select(func.count()).select_from(combined))).scalar() or 0
 
         result = await s.execute(
-            select(combined).order_by(combined.c.date.desc()).offset(offset).limit(limit)
+            select(combined).order_by(combined.c.date.desc(), combined.c.type, combined.c.id.desc()).offset(offset).limit(limit)
         )
         return [
             {
@@ -321,7 +321,7 @@ async def query_item_reviews(item_name: str, offset: int = 0, limit: int = 10,
             count_q = select(func.count()).select_from(base.subquery())
             return (await s.execute(count_q)).scalar() or 0
         result = await s.execute(
-            base.order_by(desc(Reviews.created_at)).offset(offset).limit(limit)
+            base.order_by(desc(Reviews.created_at), desc(Reviews.id)).offset(offset).limit(limit)
         )
         return [
             {

@@ -39,6 +39,7 @@ async def update_item(item_name: str, new_name: str, description: str, price, ca
     """
     # Names whose cache entries the commit invalidates. Collected inside the transaction, acted on only once it has succeeded.
     to_invalidate: list[str] = []
+    old_category: str | None = None
 
     try:
         async with Database().session() as s:
@@ -55,6 +56,11 @@ async def update_item(item_name: str, new_name: str, description: str, price, ca
             )).scalar()
             if not cat_id:
                 return False, "position_invalid"
+
+            if cat_id != goods.category_id:
+                old_category = (await s.execute(
+                    select(Categories.name).where(Categories.id == goods.category_id)
+                )).scalar()
 
             if new_name == item_name:
                 goods.description = description
@@ -84,6 +90,8 @@ async def update_item(item_name: str, new_name: str, description: str, price, ca
 
     for name in to_invalidate:
         safe_create_task(invalidate_item_cache(name, category))
+    if old_category:
+        safe_create_task(invalidate_category_cache(old_category))
 
     return True, None
 

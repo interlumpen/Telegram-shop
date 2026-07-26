@@ -16,13 +16,76 @@ from bot.database.methods.read import get_cart_count, invalidate_user_cache
 from bot.database.methods.lazy_queries import query_user_operations_history
 from bot.handlers.other import check_sub_channel, _parse_channel_username
 from bot.keyboards import main_menu, back, profile_keyboard, check_sub
-from bot.keyboards.inline import simple_buttons, lazy_paginated_keyboard
 from bot.misc import EnvKeys
 from bot.misc.metrics import get_metrics
 from bot.i18n import localize
 from bot.logger_mesh import logger
 
 router = Router()
+
+
+async def _ensure_user(user_id: int) -> dict | None:
+    """Return the user's row, registering them first if it is missing.
+
+    A stale keyboard (or a wiped database) can hand a callback from someone
+    with no row at all; every screen that reads user fields needs the row to
+    exist rather than blowing up on None.
+    """
+    user = await check_user_cached(user_id)
+    if user:
+        return user
+
+    await create_user(
+        telegram_id=user_id,
+        registration_date=datetime.datetime.now(datetime.timezone.utc),
+        referral_id=None,
+        role=1,
+    )
+    await invalidate_user_cache(user_id)
+    return await check_user_cached(user_id)
+
+
+def _channel_chat_id(channel_username: str) -> int | str:
+    """Resolve the chat id to query for the subscription check.
+
+    CHANNEL_ID wins when set (private channels have no username to address), but
+    a non-numeric value in the env must not take the handler down with it.
+    """
+    raw = EnvKeys.CHANNEL_ID
+    if raw:
+        try:
+            return int(raw)
+        except (TypeError, ValueError):
+            logger.warning("CHANNEL_ID=%r is not a valid chat id; falling back to @%s", raw, channel_username)
+    return f"@{channel_username}"
+
+
+async def _delete_quietly(message: Message) -> None:
+    """Delete a message, tolerating the cases Telegram refuses.
+
+    A message older than 48h, or one in a chat where the bot lost delete rights,
+    raises — and that must not abort a handler that already did its real work.
+    """
+    try:
+        await message.delete()
+    except (TelegramBadRequest, TelegramForbiddenError) as e:
+        logger.debug(f"Failed to delete message: {e}")
+
+
+async def _is_subscribed(bot, channel_username: str, user_id: int) -> bool | None:
+    """Whether the user is in the required channel.
+
+    Returns None when the check could not be performed (private channel, bad
+    link, bot not an admin) so callers can treat it as "don't block".
+    """
+    try:
+        chat_member = await bot.get_chat_member(
+            chat_id=_channel_chat_id(channel_username), user_id=user_id
+        )
+    except (TelegramBadRequest, TelegramForbiddenError) as e:
+        logger.warning(f"Channel subscription check failed for user {user_id}: {e}")
+        return None
+    return await check_sub_channel(chat_member)
 
 
 @router.message(F.text.startswith('/start'))
@@ -75,23 +138,17 @@ async def start(message: Message, state: FSMContext):
 
     channel_username = _parse_channel_username()
 
-    # Optional subscription check
-    try:
-        if channel_username:
-            chat_id = int(EnvKeys.CHANNEL_ID) if EnvKeys.CHANNEL_ID else f"@{channel_username}"
-            chat_member = await message.bot.get_chat_member(chat_id=chat_id, user_id=user_id)
-            if not await check_sub_channel(chat_member):
-                markup = check_sub(channel_username)
-                await message.answer(localize("subscribe.prompt"), reply_markup=markup)
-                await message.delete()
-                return
-    except (TelegramBadRequest, TelegramForbiddenError) as e:
-        # Ignore channel errors (private channel, wrong link, etc.)
-        logger.warning(f"Channel subscription check failed for user {user_id}: {e}")
+    # Optional subscription check. A failed check (None) does not block entry.
+    if channel_username:
+        subscribed = await _is_subscribed(message.bot, channel_username, user_id)
+        if subscribed is False:
+            await message.answer(localize("subscribe.prompt"), reply_markup=check_sub(channel_username))
+            await _delete_quietly(message)
+            return
 
     markup = main_menu(role=role_data, channel=channel_username, helper=EnvKeys.HELPER_ID)
     await message.answer(localize("menu.title"), reply_markup=markup)
-    await message.delete()
+    await _delete_quietly(message)
     await state.clear()
 
 
@@ -101,21 +158,13 @@ async def back_to_menu_callback_handler(call: CallbackQuery, state: FSMContext):
     Return user to the main menu.
     """
     user_id = call.from_user.id
-    user = await check_user_cached(user_id)
-    if not user:
-        await create_user(
-            telegram_id=user_id,
-            registration_date=datetime.datetime.now(datetime.timezone.utc),
-            referral_id=None,
-            role=1
-        )
-        user = await check_user_cached(user_id)
+    await _ensure_user(user_id)
 
-    role_id = user.get('role_id')
+    role = await check_role_cached(user_id) or 0
 
     channel_username = _parse_channel_username()
 
-    markup = main_menu(role=role_id, channel=channel_username, helper=EnvKeys.HELPER_ID)
+    markup = main_menu(role=role, channel=channel_username, helper=EnvKeys.HELPER_ID)
     await call.message.edit_text(localize("menu.title"), reply_markup=markup)
     await state.clear()
 
@@ -140,7 +189,10 @@ async def profile_callback_handler(call: CallbackQuery, state: FSMContext):
     """
     user_id = call.from_user.id
     tg_user = call.from_user
-    user_info = await check_user_cached(user_id)
+    user_info = await _ensure_user(user_id)
+    if not user_info:
+        await call.answer(localize("errors.something_wrong"), show_alert=True)
+        return
 
     balance = user_info.get('balance')
     overall_balance, items, cart_count = await asyncio.gather(
@@ -176,12 +228,11 @@ async def check_sub_to_channel(call: CallbackQuery, state: FSMContext):
     helper = EnvKeys.HELPER_ID
 
     if channel_username:
-        chat_id = int(EnvKeys.CHANNEL_ID) if EnvKeys.CHANNEL_ID else f"@{channel_username}"
-        chat_member = await call.bot.get_chat_member(chat_id=chat_id, user_id=user_id)
-        if await check_sub_channel(chat_member):
-            user = await check_user_cached(user_id)
-            role_id = user.get('role_id')
-            markup = main_menu(role_id, channel_username, helper)
+        # None (check unavailable) is treated as subscribed, matching /start: a misconfigured channel must not lock everyone out of the bot.
+        if await _is_subscribed(call.bot, channel_username, user_id) is not False:
+            await _ensure_user(user_id)
+            role = await check_role_cached(user_id) or 0
+            markup = main_menu(role, channel_username, helper)
             await call.message.edit_text(localize("menu.title"), reply_markup=markup)
             await state.clear()
             return

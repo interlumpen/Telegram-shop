@@ -2,7 +2,7 @@ import asyncio
 import logging
 from datetime import datetime, timedelta, timezone, time as dt_time
 
-from sqlalchemy import delete, select, func
+from sqlalchemy import delete
 
 logger = logging.getLogger(__name__)
 

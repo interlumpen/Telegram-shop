@@ -1,3 +1,4 @@
+import re
 import time
 from datetime import datetime
 from typing import Dict, Any, Optional, List
@@ -5,11 +6,26 @@ from collections import defaultdict
 
 from bot.logger_mesh import logger
 
+# A Prometheus label value must not carry a raw quote, backslash or newline — event names are derived from user-supplied callback_data,
+# so anything else would let a crafted payload forge extra metric lines.
+_PROM_NAME_RE = re.compile(r'^[a-zA-Z_][a-zA-Z0-9_]*$')
+
+
+def _prom_label(value: str) -> str:
+    """Return a label value safe to interpolate into the exposition format."""
+    cleaned = str(value).replace("-", "_").replace("/", "_").replace(" ", "_")
+    return cleaned if _PROM_NAME_RE.match(cleaned) else "other"
+
 
 class MetricsCollector:
     """Metrics builder for analytics"""
 
     MAX_CONVERSION_USERS = 50_000
+    # Event/timing names partly derive from user-supplied callback_data, so the
+    # key space is attacker-influenced. Cap the distinct series a collector will
+    # hold; everything past the cap folds into OVERFLOW_KEY.
+    MAX_SERIES = 500
+    OVERFLOW_KEY = "other"
 
     def __init__(self):
         # Initializing all attributes
@@ -20,13 +36,20 @@ class MetricsCollector:
         self.start_time = datetime.now()
         self.last_flush = datetime.now()
 
+    def _bounded_key(self, store: Dict[str, Any], key: str) -> str:
+        """Return `key`, or OVERFLOW_KEY once `store` is at its series cap."""
+        if key in store or len(store) < self.MAX_SERIES:
+            return key
+        return self.OVERFLOW_KEY
+
     def track_event(self, event_name: str, user_id: Optional[int] = None,
                     metadata: Optional[Dict] = None):
         """Event Tracking"""
-        self.events[event_name] += 1
+        self.events[self._bounded_key(self.events, event_name)] += 1
 
     def track_timing(self, operation: str, duration: float):
         """Tracking the time of an operation"""
+        operation = self._bounded_key(self.timings, operation)
         self.timings[operation].append(duration)
 
         # Hold only the last 1000 measurements
@@ -35,7 +58,7 @@ class MetricsCollector:
 
     def track_error(self, error_type: str, error_msg: str = None):
         """Error Tracking"""
-        self.errors[error_type] += 1
+        self.errors[self._bounded_key(self.errors, error_type)] += 1
 
         if error_msg:
             logger.error(f"Metric error [{error_type}]: {error_msg}")
@@ -94,21 +117,19 @@ class MetricsCollector:
 
         # Events
         for event, count in self.events.items():
-            # Clearing the event name for Prometheus (replacing invalid characters)
-            clean_event = event.replace("-", "_").replace("/", "_").replace(" ", "_")
-            lines.append(f'bot_events_total{{event="{clean_event}"}} {count}')
+            lines.append(f'bot_events_total{{event="{_prom_label(event)}"}} {count}')
 
         # Errors
         for error, count in self.errors.items():
-            clean_error = error.replace("-", "_").replace("/", "_").replace(" ", "_")
-            lines.append(f'bot_errors_total{{type="{clean_error}"}} {count}')
+            lines.append(f'bot_errors_total{{type="{_prom_label(error)}"}} {count}')
 
         # Timers
         for op, times in self.timings.items():
             if times:
                 avg_time = sum(times) / len(times)
-                clean_op = op.replace("-", "_").replace("/", "_").replace(" ", "_")
-                lines.append(f'bot_operation_duration_seconds{{operation="{clean_op}"}} {avg_time}')
+                lines.append(
+                    f'bot_operation_duration_seconds{{operation="{_prom_label(op)}"}} {avg_time}'
+                )
 
         # Add uptime
         uptime = (datetime.now() - self.start_time).total_seconds()
@@ -137,20 +158,19 @@ class AnalyticsMiddleware:
             # from_user may not exist or may be deleted
             pass
 
-        # Determine event type - check attributes but handle test mocks properly
         try:
             # Try to access text attribute to see if it exists and has a value
             text_value = getattr(event, 'text', None)
             if text_value is not None and text_value != "":
                 event_type = "message"
                 if text_value and text_value.startswith('/'):
-                    event_type = f"command_{text_value.split()[0][1:]}"
+                    event_type = f"command_{_prom_label(text_value.split()[0][1:])}"
             elif hasattr(event, 'data'):  # CallbackQuery (including data=None)
-                event_type = event.data.split('_')[0] if event.data else "unknown"
+                event_type = _prom_label(event.data.split('_')[0]) if event.data else "unknown"
         except AttributeError:
             # If we can't access text (deleted attribute), check for data
             if hasattr(event, 'data'):
-                event_type = event.data.split('_')[0] if event.data else "unknown"
+                event_type = _prom_label(event.data.split('_')[0]) if event.data else "unknown"
 
         # Event Tracking
         if event_type:

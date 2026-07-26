@@ -257,6 +257,7 @@ TRANSLATIONS: dict[str, dict[str, str]] = {
         # === Admin: Logs ===
         "admin.shop.logs.caption": "Логи бота",
         "admin.shop.logs.empty": "❗️ Логов пока нет",
+        "admin.shop.logs.too_large": "⚠️ Логи слишком велики для отправки ({files}) — забирайте их с диска.",
 
         # === Group Notifications ===
         "shop.group.new_upload": "Залив",
@@ -414,13 +415,17 @@ TRANSLATIONS: dict[str, dict[str, str]] = {
         "admin.promo.type.fixed": "💰 Фиксированная сумма",
         "admin.promo.prompt.value": "Введите размер скидки ({type}):",
         "admin.promo.prompt.max_uses": "Введите макс. число использований (0 = без лимита):",
-        "admin.promo.prompt.expires": "Введите срок действия (ГГГГ-ММ-ДД) или 0 — бессрочно:",
+        "admin.promo.prompt.expires": "Введите последний день действия (ГГГГ-ММ-ДД) — код работает до конца этого дня, или 0 — бессрочно:",
         "admin.promo.prompt.binding": "Привязать к категории/товару?\n\nОтправьте:\n• Название категории\n• Название товара\n• 0 — без привязки",
         "admin.promo.created": "✅ Промокод <code>{code}</code> создан!",
         "admin.promo.code_exists": "❌ Промокод с таким кодом уже существует.",
+        "admin.promo.invalid_code": "❌ Код может содержать только буквы, цифры и дефис (до 50 символов).",
         "admin.promo.deleted": "✅ Промокод удалён.",
         "admin.promo.toggled_on": "✅ Промокод активирован.",
         "admin.promo.toggled_off": "⛔ Промокод деактивирован.",
+        "admin.promo.btn.activate": "✅ Активировать",
+        "admin.promo.btn.deactivate": "⛔ Деактивировать",
+        "admin.promo.btn.delete": "🗑 Удалить",
         "admin.promo.detail": "🏷 <b>Промокод</b>: <code>{code}</code>\n📊 Тип: {discount_type}\n💰 Скидка: {discount_value}\n🔗 Применим к: {binding}\n🔢 Использований: {current_uses}/{max_uses}\n📅 Истекает: {expires_at}\n✅ Активен: {is_active}",
         "admin.promo.confirm_delete": "Удалить промокод <code>{code}</code>?",
         "admin.promo.invalid_value": "❌ Некорректное значение. Попробуйте ещё раз.",
@@ -787,6 +792,7 @@ TRANSLATIONS: dict[str, dict[str, str]] = {
         # === Admin: Logs ===
         "admin.shop.logs.caption": "Bot logs",
         "admin.shop.logs.empty": "❗️ No logs yet",
+        "admin.shop.logs.too_large": "⚠️ Logs are too large to send ({files}) — grab them from disk.",
 
         # === Group Notifications ===
         "shop.group.new_upload": "New stock",
@@ -944,13 +950,17 @@ TRANSLATIONS: dict[str, dict[str, str]] = {
         "admin.promo.type.fixed": "💰 Fixed amount",
         "admin.promo.prompt.value": "Enter discount value ({type}):",
         "admin.promo.prompt.max_uses": "Enter max uses (0 = unlimited):",
-        "admin.promo.prompt.expires": "Enter expiry date (YYYY-MM-DD) or 0 for no expiry:",
+        "admin.promo.prompt.expires": "Enter the last valid day (YYYY-MM-DD) — the code works through the end of that day, or 0 for no expiry:",
         "admin.promo.prompt.binding": "Bind to category/item?\n\nSend:\n• Category name\n• Item name\n• 0 — no binding",
         "admin.promo.created": "✅ Promo code <code>{code}</code> created!",
         "admin.promo.code_exists": "❌ Promo code already exists.",
+        "admin.promo.invalid_code": "❌ A code may contain only letters, digits and hyphens (up to 50 characters).",
         "admin.promo.deleted": "✅ Promo code deleted.",
         "admin.promo.toggled_on": "✅ Promo code activated.",
         "admin.promo.toggled_off": "⛔ Promo code deactivated.",
+        "admin.promo.btn.activate": "✅ Activate",
+        "admin.promo.btn.deactivate": "⛔ Deactivate",
+        "admin.promo.btn.delete": "🗑 Delete",
         "admin.promo.detail": "🏷 <b>Promo Code</b>: <code>{code}</code>\n📊 Type: {discount_type}\n💰 Discount: {discount_value}\n🔗 Applies to: {binding}\n🔢 Uses: {current_uses}/{max_uses}\n📅 Expires: {expires_at}\n✅ Active: {is_active}",
         "admin.promo.confirm_delete": "Delete promo code <code>{code}</code>?",
         "admin.promo.invalid_value": "❌ Invalid value. Try again.",

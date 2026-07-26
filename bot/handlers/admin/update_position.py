@@ -1,20 +1,19 @@
-from urllib.parse import urlparse
-
 from aiogram import Router, F
 from aiogram.exceptions import TelegramForbiddenError, TelegramBadRequest, TelegramNotFound
 from aiogram.types import CallbackQuery, Message
 
 from bot.database.models import Permission
 from bot.database.methods import get_item_info_cached, add_values_to_item, update_item, check_value, \
-    delete_only_items, get_category_name_by_id
-from bot.handlers.other import _parse_channel_username
-from bot.handlers.admin._common import _notify_restock_safe
+    get_category_name_by_id
+from bot.database.methods.transactions import replace_item_stock_and_meta
+from bot.handlers.other import _parse_channel_username, is_safe_item_name, display_name
+from bot.handlers.admin._common import _notify_restock_safe, parse_price
 
 from bot.keyboards.inline import back, question_buttons, simple_buttons
 from bot.database.methods.audit import log_audit
 from bot.filters import HasPermissionFilter
 from bot.misc import EnvKeys
-from bot.i18n import localize
+from bot.i18n import localize, esc
 from bot.states import UpdateItemFSM
 
 router = Router()
@@ -90,7 +89,7 @@ async def updating_item_values(message: Message, state):
     await state.update_data(item_values=values)
 
     await message.answer(
-        localize('admin.goods.add.values.added', value=message.text, count=len(values)),
+        localize('admin.goods.add.values.added', value=esc(message.text), count=len(values)),
         reply_markup=simple_buttons([
             (localize('btn.add_values_finish'), "finish_updating_items"),
             (localize('btn.back'), "goods_management")
@@ -154,7 +153,7 @@ async def updating_item_amount(call: CallbackQuery, state):
                 chat_id=chat_id,
                 text=(
                     f'🎁 {localize("shop.group.new_upload")}\n'
-                    f'🏷️ {localize("shop.group.item")}: <b>{item_name}</b>\n'
+                    f'🏷️ {localize("shop.group.item")}: <b>{esc(item_name)}</b>\n'
                     f'📦 {localize("shop.group.count")}: <b>{added}</b>'
                 ),
                 parse_mode='HTML'
@@ -166,9 +165,9 @@ async def updating_item_amount(call: CallbackQuery, state):
         except TelegramBadRequest as e:
             await call.answer(localize("errors.channel.telegram_bad_request", e=e))
 
-    admin_info = await call.message.bot.get_chat(call.from_user.id)
+    admin_name = await display_name(call.message.bot, call.from_user.id)
     await log_audit("add_item_values", user_id=call.from_user.id, resource_type="Item", resource_id=item_name,
-                    details=f"admin={admin_info.first_name}, added={added}")
+                    details=f"admin={admin_name}, added={added}")
     await state.clear()
 
 
@@ -200,7 +199,15 @@ async def check_item_name_for_update(message: Message, state):
 @router.message(UpdateItemFSM.waiting_item_new_name, F.text)
 async def update_item_name(message: Message, state):
     """Ask for item description."""
-    await state.update_data(item_new_name=message.text.strip())
+    new_name = (message.text or "").strip()
+    if not is_safe_item_name(new_name):
+        await message.answer(
+            localize('admin.goods.add.name.invalid'),
+            reply_markup=back('goods_management'),
+        )
+        return
+
+    await state.update_data(item_new_name=new_name)
     await message.answer(localize('admin.goods.update.prompt.description'), reply_markup=back('goods_management'))
     await state.set_state(UpdateItemFSM.waiting_item_description)
 
@@ -217,12 +224,12 @@ async def update_item_description(message: Message, state):
 @router.message(UpdateItemFSM.waiting_item_price, F.text)
 async def update_item_price(message: Message, state):
     """Validate price and ask about infinity mode."""
-    price_text = message.text.strip()
-    if not price_text.isdigit():
+    price = parse_price(message.text)
+    if price is None:
         await message.answer(localize('admin.goods.add.price.invalid'), reply_markup=back('goods_management'))
         return
 
-    await state.update_data(item_price=int(price_text))
+    await state.update_data(item_price=price)
     data = await state.get_data()
     item_old_name = data.get('item_old_name')
 
@@ -269,9 +276,9 @@ async def update_item_process(call: CallbackQuery, state):
             await state.clear()
             return
         await call.message.edit_text(localize('admin.goods.update.success'), reply_markup=back('goods_management'))
-        admin_info = await call.message.bot.get_chat(call.from_user.id)
+        admin_name = await display_name(call.message.bot, call.from_user.id)
         await log_audit("update_item", user_id=call.from_user.id, resource_type="Item", resource_id=item_new_name,
-                        details=f"admin={admin_info.first_name}, old_name={item_old_name}")
+                        details=f"admin={admin_name}, old_name={item_old_name}")
         await state.clear()
         return
 
@@ -295,22 +302,28 @@ async def update_item_process(call: CallbackQuery, state):
 @router.message(UpdateItemFSM.waiting_single_value, F.text)
 async def update_item_infinity(message: Message, state):
     """
-    Switch to infinite mode:
-    - purge current values,
-    - add a single value with is_infinity=True,
-    - update item meta.
+    Switch to infinite mode: replace the stock with one infinite value and update
+    the metadata — atomically, so a rejected rename cannot leave the position
+    with its stock already wiped.
     """
     data = await state.get_data()
     item_old_name = data.get('item_old_name')
     item_new_name = data.get('item_new_name')
-    item_description = data.get('item_description')
-    category = data.get('item_category')
-    price = data.get('item_price')
-    value = message.text
 
-    await delete_only_items(item_old_name)
-    await add_values_to_item(item_old_name, value, True)
-    ok, err = await update_item(item_old_name, item_new_name, item_description, price, category)
+    value = (message.text or "").strip()
+    if not value:
+        await message.answer(localize('admin.goods.add.single.empty'), reply_markup=back('goods_management'))
+        return
+
+    ok, err, _added = await replace_item_stock_and_meta(
+        old_name=item_old_name,
+        new_name=item_new_name,
+        description=data.get('item_description'),
+        price=data.get('item_price'),
+        category_name=data.get('item_category'),
+        values=[value],
+        is_infinity=True,
+    )
     if not ok:
         await _show_update_item_error(message.answer, err)
         await state.clear()
@@ -320,9 +333,9 @@ async def update_item_infinity(message: Message, state):
 
     await _notify_restock_safe(message.bot, item_new_name)
 
-    admin_info = await message.bot.get_chat(message.from_user.id)
+    admin_name = await display_name(message.bot, message.from_user.id)
     await log_audit("update_item", user_id=message.from_user.id, resource_type="Item", resource_id=item_new_name,
-                    details=f"admin={admin_info.first_name}, old_name={item_old_name}")
+                    details=f"admin={admin_name}, old_name={item_old_name}")
     await state.clear()
 
 
@@ -339,7 +352,7 @@ async def updating_item(message: Message, state):
     await state.update_data(item_values=values)
 
     await message.answer(
-        localize('admin.goods.add.values.added', value=message.text, count=len(values)),
+        localize('admin.goods.add.values.added', value=esc(message.text), count=len(values)),
         reply_markup=simple_buttons([
             (localize('btn.add_values_finish'), "finish_update_item"),
             (localize('btn.back'), "goods_management")
@@ -350,45 +363,37 @@ async def updating_item(message: Message, state):
 @router.callback_query(F.data == 'finish_update_item', UpdateItemFSM.waiting_multiple_values)
 async def update_item_no_infinity(call: CallbackQuery, state):
     """
-    Finalize switch to regular mode:
-    - purge current values,
-    - add all collected values with is_infinity=False,
-    - update item meta.
+    Finalize switch to regular mode: replace the stock with the collected values
+    and update the metadata — atomically, so a rejected rename cannot leave the
+    position with its stock already wiped.
     """
     data = await state.get_data()
     item_old_name = data.get('item_old_name')
     item_new_name = data.get('item_new_name')
-    item_description = data.get('item_description')
-    category = data.get('item_category')
-    price = data.get('item_price')
     raw_values: list[str] = data.get("item_values", []) or []
 
-    added = 0
-    skipped_db_dup = 0
-    skipped_batch_dup = 0
+    # The transaction dedupes and drops blanks itself; count here for the report.
+    seen: set[str] = set()
     skipped_invalid = 0
-    seen_in_batch: set[str] = set()
-
-    await delete_only_items(item_old_name)
-
+    skipped_batch_dup = 0
     for v in raw_values:
         v_norm = (v or "").strip()
         if not v_norm:
             skipped_invalid += 1
-            continue
-
-        if v_norm in seen_in_batch:
+        elif v_norm in seen:
             skipped_batch_dup += 1
-            continue
-        seen_in_batch.add(v_norm)
-
-        if await add_values_to_item(item_old_name, v_norm, False):
-            added += 1
         else:
-            skipped_db_dup += 1
+            seen.add(v_norm)
 
-    # Update meta after values are in place
-    ok, err = await update_item(item_old_name, item_new_name, item_description, price, category)
+    ok, err, added = await replace_item_stock_and_meta(
+        old_name=item_old_name,
+        new_name=item_new_name,
+        description=data.get('item_description'),
+        price=data.get('item_price'),
+        category_name=data.get('item_category'),
+        values=raw_values,
+        is_infinity=False,
+    )
     if not ok:
         await _show_update_item_error(call.message.edit_text, err)
         await state.clear()
@@ -398,8 +403,6 @@ async def update_item_no_infinity(call: CallbackQuery, state):
         localize('admin.goods.update.success'),
         localize('admin.goods.add.result.added', n=added),
     ]
-    if skipped_db_dup:
-        text_lines.append(localize('admin.goods.add.result.skipped_db_dup', n=skipped_db_dup))
     if skipped_batch_dup:
         text_lines.append(localize('admin.goods.add.result.skipped_batch_dup', n=skipped_batch_dup))
     if skipped_invalid:
@@ -417,7 +420,7 @@ async def update_item_no_infinity(call: CallbackQuery, state):
                 chat_id=chat_id,
                 text=(
                     f'🎁 {localize("shop.group.new_upload")}\n'
-                    f'🏷️ {localize("shop.group.item")}: <b>{item_new_name}</b>\n'
+                    f'🏷️ {localize("shop.group.item")}: <b>{esc(item_new_name)}</b>\n'
                     f'📦 {localize("shop.group.count")}: <b>{added}</b>'
                 ),
                 parse_mode='HTML'
@@ -430,7 +433,7 @@ async def update_item_no_infinity(call: CallbackQuery, state):
             await call.answer(localize("errors.channel.telegram_bad_request", e=e))
 
     await call.message.edit_text("\n".join(text_lines), parse_mode="HTML", reply_markup=back('goods_management'))
-    admin_info = await call.message.bot.get_chat(call.from_user.id)
+    admin_name = await display_name(call.message.bot, call.from_user.id)
     await log_audit("update_item", user_id=call.from_user.id, resource_type="Item", resource_id=item_new_name,
-                    details=f"admin={admin_info.first_name}, old_name={item_old_name}")
+                    details=f"admin={admin_name}, old_name={item_old_name}")
     await state.clear()

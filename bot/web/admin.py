@@ -84,10 +84,12 @@ from bot.database.models.main import (
 )
 from bot.misc.metrics import get_metrics
 from bot.misc.caching import get_cache_manager
-from bot.database.methods.read import invalidate_user_cache, invalidate_item_cache, get_item_name_by_id
+from bot.database.methods.read import (
+    invalidate_user_cache, invalidate_item_cache, invalidate_rating_cache, get_item_name_by_id,
+)
 from bot.database.methods.cache_utils import safe_create_task
 from bot.misc.services.restock_notifier import notify_restock
-from bot.middleware.security import invalidate_auth_caches, clear_role_auth_caches
+from bot.middleware.security import invalidate_auth_caches, flush_all_role_caches
 
 
 # Authentication
@@ -265,10 +267,7 @@ class RoleAdmin(AuditModelView, model=Role):
     async def _flush_role_caches() -> None:
         # A Role's permission bitmask affects every user holding that role, so
         # invalidation cannot be scoped to one id: flush all role caches.
-        clear_role_auth_caches()
-        cache = get_cache_manager()
-        if cache:
-            await cache.invalidate_pattern("role:*")
+        await flush_all_role_caches()
 
     async def after_model_change(self, data: dict, model: Any, is_created: bool, request: Request) -> None:
         await super().after_model_change(data, model, is_created, request)
@@ -596,6 +595,23 @@ class ReviewsAdmin(AuditModelView, model=Reviews):
     name = "Review"
     name_plural = "Reviews"
     icon = "fa-solid fa-star"
+
+    async def _invalidate(self, model: Any) -> None:
+        # avg_rating is cached for 600s and keyed by product name, so editing a rating here would otherwise not show up in the bot until it expires.
+        item_id = getattr(model, "item_id", None)
+        if item_id is None:
+            return
+        name = await get_item_name_by_id(int(item_id))
+        if name:
+            safe_create_task(invalidate_rating_cache(name))
+
+    async def after_model_change(self, data: dict, model: Any, is_created: bool, request: Request) -> None:
+        await super().after_model_change(data, model, is_created, request)
+        await self._invalidate(model)
+
+    async def after_model_delete(self, model: Any, request: Request) -> None:
+        await super().after_model_delete(model, request)
+        await self._invalidate(model)
 
 
 # Health & Metrics Endpoints

@@ -5,13 +5,11 @@ services:
     volumes:
       - redis_data:/data
     healthcheck:
-      test: [ "CMD", "redis-cli", "ping" ]
+      test: [ "CMD-SHELL", "redis-cli -a \"$${REDIS_PASSWORD:-changeme_redis_pass}\" ping | grep -q PONG" ]
       interval: 5s
       timeout: 3s
       retries: 5
     restart: unless-stopped
-    profiles:
-      - redis
 
   db:
     image: postgres:16
@@ -46,6 +44,8 @@ services:
       - ./logs:/app/logs
     depends_on:
       db:
+        condition: service_healthy
+      redis:
         condition: service_healthy
     restart: unless-stopped
     healthcheck:

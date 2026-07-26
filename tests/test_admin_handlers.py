@@ -359,3 +359,78 @@ class TestUpdateItemFlow:
 
         ok, err = await update_item("UpdMe", "UpdMe", "new desc", 20, data["item_category"])
         assert (ok, err) == (True, None)
+
+
+class TestAtomicStockReplacement:
+    async def test_failed_rename_leaves_stock_untouched(self, item_factory):
+        from bot.database.methods.transactions import replace_item_stock_and_meta
+        from bot.database.methods.read import select_item_values_amount, get_item_info
+
+        await item_factory(name="KeepStock", price=100, category="AtomCat",
+                           values=[("a", False), ("b", False), ("c", False)])
+        # The new name is already taken, so the meta update must fail.
+        await item_factory(name="Occupied", price=50, category="AtomCat")
+
+        ok, err, added = await replace_item_stock_and_meta(
+            old_name="KeepStock", new_name="Occupied", description="d",
+            price=100, category_name="AtomCat", values=["x"], is_infinity=True,
+        )
+
+        assert (ok, err, added) == (False, "position_exists", 0)
+        # Nothing changed: the stock is intact and the name is unchanged.
+        assert await select_item_values_amount("KeepStock") == 3
+        assert await get_item_info("KeepStock") is not None
+
+    async def test_unknown_category_is_rejected_before_any_write(self, item_factory):
+        from bot.database.methods.transactions import replace_item_stock_and_meta
+        from bot.database.methods.read import select_item_values_amount
+
+        await item_factory(name="CatGuard", price=10, category="AtomCat2",
+                           values=[("a", False), ("b", False)])
+
+        ok, err, _ = await replace_item_stock_and_meta(
+            old_name="CatGuard", new_name="CatGuard", description="d",
+            price=10, category_name="NoSuchCategory", values=["x"], is_infinity=False,
+        )
+
+        assert (ok, err) == (False, "position_invalid")
+        assert await select_item_values_amount("CatGuard") == 2
+
+    async def test_success_replaces_stock_and_renames(self, item_factory):
+        from bot.database.methods.transactions import replace_item_stock_and_meta
+        from bot.database.methods.read import (
+            select_item_values_amount, get_item_info, check_value,
+        )
+
+        await item_factory(name="ToInfinite", price=100, category="AtomCat3",
+                           values=[("a", False), ("b", False)])
+
+        ok, err, added = await replace_item_stock_and_meta(
+            old_name="ToInfinite", new_name="NowInfinite", description="new desc",
+            price=250, category_name="AtomCat3", values=["forever"], is_infinity=True,
+        )
+
+        assert (ok, err, added) == (True, None, 1)
+        assert await get_item_info("ToInfinite") is None
+        info = await get_item_info("NowInfinite")
+        assert info["description"] == "new desc"
+        assert int(info["price"]) == 250
+        # Exactly one row, and it is the infinite one.
+        assert await select_item_values_amount("NowInfinite") == 1
+        assert await check_value("NowInfinite") is True
+
+    async def test_duplicates_and_blanks_are_dropped(self, item_factory):
+        from bot.database.methods.transactions import replace_item_stock_and_meta
+        from bot.database.methods.read import select_item_values_amount
+
+        await item_factory(name="DedupStock", price=10, category="AtomCat4", values=[])
+
+        ok, err, added = await replace_item_stock_and_meta(
+            old_name="DedupStock", new_name="DedupStock", description="d",
+            price=10, category_name="AtomCat4",
+            values=["a", "a", "  ", "b", "", " b "], is_infinity=False,
+        )
+
+        assert (ok, err) == (True, None)
+        assert added == 2
+        assert await select_item_values_amount("DedupStock") == 2

@@ -66,6 +66,16 @@ def generate_short_hash(text: str, length: int = 8) -> str:
     return hashlib.md5(text.encode()).hexdigest()[:length]
 
 
+async def display_name(bot, user_id: int) -> str:
+    """A user's display name, falling back to their id."""
+    try:
+        chat = await bot.get_chat(user_id)
+    except (TelegramBadRequest, TelegramForbiddenError) as e:
+        logger.debug(f"get_chat({user_id}) failed: {e}")
+        return str(user_id)
+    return chat.first_name or str(user_id)
+
+
 def is_safe_item_name(name: str) -> bool:
     """Check that the product name is safe for display"""
     # Length check

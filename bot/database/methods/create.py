@@ -269,7 +269,14 @@ async def subscribe_to_stock(user_id: int, item_name: str) -> tuple[bool, str]:
 
 
 async def create_review(user_id: int, item_name: str, rating: int, text: str = None) -> int | None:
-    """Create a review. Returns ID, or None if the item is unknown or already reviewed."""
+    """Create a review. Returns ID, or None if the item is unknown, already
+    reviewed, or the rating is outside 1-5.
+    """
+    if not isinstance(rating, int) or isinstance(rating, bool) or not 1 <= rating <= 5:
+        return None
+    if not item_name:
+        return None
+
     async with Database().session() as s:
         item_id = (await s.execute(
             select(Goods.id).where(Goods.name == item_name)

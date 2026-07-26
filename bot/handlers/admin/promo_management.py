@@ -1,9 +1,10 @@
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from aiogram import Router, F
 from aiogram.types import CallbackQuery, Message, InlineKeyboardButton
 from aiogram.fsm.context import FSMContext
 from aiogram.utils.keyboard import InlineKeyboardBuilder
+from pydantic import ValidationError
 
 from bot.database.models import Permission
 from bot.database.methods.create import create_promo_code
@@ -14,8 +15,8 @@ from bot.database.methods.read import get_promo_code, check_category, get_item_i
 from bot.database.methods.audit import log_audit
 from bot.filters import HasPermissionFilter
 from bot.keyboards.inline import back, simple_buttons, lazy_paginated_keyboard
-from bot.misc import LazyPaginator
-from bot.i18n import localize
+from bot.misc import LazyPaginator, PromoCodeRequest
+from bot.i18n import localize, esc
 from bot.states import PromoFSM
 
 router = Router()
@@ -65,14 +66,16 @@ async def promo_management_handler(call: CallbackQuery, state: FSMContext):
     markup = kb.as_markup()
 
     await call.message.edit_text(localize("admin.promo.title"), reply_markup=markup)
-    await state.update_data(promo_paginator=paginator.get_state())
 
 
 @router.callback_query(F.data.startswith("promos-page_"), HasPermissionFilter(permission=Permission.PROMO_MANAGE))
 async def navigate_promos(call: CallbackQuery, state: FSMContext):
-    page = int(call.data.split("_", 1)[1])
-    data = await state.get_data()
-    paginator = LazyPaginator(query_promo_codes, per_page=10, state=data.get('promo_paginator'))
+    try:
+        page = int(call.data.split("_", 1)[1])
+    except (ValueError, IndexError):
+        await call.answer(localize("errors.pagination_invalid"))
+        return
+    paginator = LazyPaginator(query_promo_codes, per_page=10)
 
     markup = await lazy_paginated_keyboard(
         paginator=paginator,
@@ -90,7 +93,6 @@ async def navigate_promos(call: CallbackQuery, state: FSMContext):
     markup = kb.as_markup()
 
     await call.message.edit_text(localize("admin.promo.title"), reply_markup=markup)
-    await state.update_data(promo_paginator=paginator.get_state())
 
 
 # --- View / toggle / delete promo ---
@@ -111,7 +113,7 @@ async def _promo_binding_label(s, promo) -> str:
         name = (await s.execute(
             select(Categories.name).where(Categories.id == promo.category_id)
         )).scalar()
-        return localize("admin.promo.binding.on_category", name=name or "?")
+        return localize("admin.promo.binding.on_category", name=esc(name or "?"))
 
     if promo.scope == "item":
         if promo.item_id is None:
@@ -119,13 +121,13 @@ async def _promo_binding_label(s, promo) -> str:
         name = (await s.execute(
             select(Goods.name).where(Goods.id == promo.item_id)
         )).scalar()
-        return localize("admin.promo.binding.on_item", name=name or "?")
+        return localize("admin.promo.binding.on_item", name=esc(name or "?"))
 
     return localize("admin.promo.binding.none")
 
 
-async def _show_promo_view(message, promo_id: int):
-    """Shared logic: render promo detail view on a Message object."""
+async def _show_promo_view(message, promo_id: int) -> bool:
+    """Render the promo detail view on a Message. False if the promo is gone."""
     from bot.database.models.main import PromoCodes
     from bot.database import Database
     from sqlalchemy import select
@@ -133,14 +135,14 @@ async def _show_promo_view(message, promo_id: int):
     async with Database().session() as s:
         promo = (await s.execute(select(PromoCodes).where(PromoCodes.id == promo_id))).scalars().first()
         if not promo:
-            return
+            return False
 
         binding = await _promo_binding_label(s, promo)
 
         text = localize(
             "admin.promo.detail",
-            code=promo.code,
-            discount_type=promo.discount_type,
+            code=esc(promo.code),
+            discount_type=esc(promo.discount_type),
             discount_value=promo.discount_value,
             binding=binding,
             current_uses=promo.current_uses,
@@ -149,32 +151,40 @@ async def _show_promo_view(message, promo_id: int):
             is_active="✅" if promo.is_active else "⛔",
         )
 
-    toggle_text = "⛔ Деактивировать" if promo.is_active else "✅ Активировать"
+    toggle_text = localize("admin.promo.btn.deactivate") if promo.is_active else localize("admin.promo.btn.activate")
     buttons = [
         (toggle_text, f"promo_toggle_{promo_id}"),
-        ("🗑 Удалить", f"promo_d_{promo_id}"),
+        (localize("admin.promo.btn.delete"), f"promo_d_{promo_id}"),
         (localize("btn.back"), "promo_mgmt"),
     ]
     await message.edit_text(text, reply_markup=simple_buttons(buttons))
+    return True
+
+
+def _promo_id_arg(data: str) -> int | None:
+    """Parse the promo id out of promo_v_/promo_toggle_/promo_d_/promo_dc_ data."""
+    try:
+        return int(data.split("_")[2])
+    except (ValueError, IndexError):
+        return None
 
 
 @router.callback_query(F.data.startswith("promo_v_"), HasPermissionFilter(permission=Permission.PROMO_MANAGE))
 async def view_promo(call: CallbackQuery, state: FSMContext):
-    promo_id = int(call.data.split("_")[2])
-    result = await _show_promo_view(call.message, promo_id)
-    if result is None:
-        from bot.database.models.main import PromoCodes
-        from bot.database import Database
-        from sqlalchemy import select
-        async with Database().session() as s:
-            promo = (await s.execute(select(PromoCodes).where(PromoCodes.id == promo_id))).scalars().first()
-        if not promo:
-            await call.answer(localize("promo.not_found"), show_alert=True)
+    promo_id = _promo_id_arg(call.data)
+    if promo_id is None:
+        await call.answer(localize("errors.invalid_data"), show_alert=True)
+        return
+    if not await _show_promo_view(call.message, promo_id):
+        await call.answer(localize("promo.not_found"), show_alert=True)
 
 
 @router.callback_query(F.data.startswith("promo_toggle_"), HasPermissionFilter(permission=Permission.PROMO_MANAGE))
 async def toggle_promo(call: CallbackQuery, state: FSMContext):
-    promo_id = int(call.data.split("_")[2])
+    promo_id = _promo_id_arg(call.data)
+    if promo_id is None:
+        await call.answer(localize("errors.invalid_data"), show_alert=True)
+        return
     new_state = await toggle_promo_code(promo_id)
     if new_state is None:
         await call.answer(localize("promo.not_found"), show_alert=True)
@@ -188,7 +198,11 @@ async def toggle_promo(call: CallbackQuery, state: FSMContext):
 
 @router.callback_query(F.data.startswith("promo_d_"), HasPermissionFilter(permission=Permission.PROMO_MANAGE))
 async def confirm_delete_promo(call: CallbackQuery, state: FSMContext):
-    promo_id = int(call.data.split("_")[2])
+    promo_id = _promo_id_arg(call.data)
+    if promo_id is None:
+        await call.answer(localize("errors.invalid_data"), show_alert=True)
+        return
+
     from bot.database.models.main import PromoCodes
     from bot.database import Database
     from sqlalchemy import select
@@ -202,14 +216,17 @@ async def confirm_delete_promo(call: CallbackQuery, state: FSMContext):
         (localize("btn.no"), f"promo_v_{promo_id}"),
     ]
     await call.message.edit_text(
-        localize("admin.promo.confirm_delete", code=code),
+        localize("admin.promo.confirm_delete", code=esc(code)),
         reply_markup=simple_buttons(buttons),
     )
 
 
 @router.callback_query(F.data.startswith("promo_dc_"), HasPermissionFilter(permission=Permission.PROMO_MANAGE))
 async def delete_promo_confirmed(call: CallbackQuery, state: FSMContext):
-    promo_id = int(call.data.split("_")[2])
+    promo_id = _promo_id_arg(call.data)
+    if promo_id is None:
+        await call.answer(localize("errors.invalid_data"), show_alert=True)
+        return
     await delete_promo_code(promo_id)
     await log_audit("promo_delete", user_id=call.from_user.id, resource_type="PromoCode", resource_id=str(promo_id))
     await call.answer(localize("admin.promo.deleted"))
@@ -226,9 +243,10 @@ async def promo_create_start(call: CallbackQuery, state: FSMContext):
 
 @router.message(PromoFSM.waiting_code, F.text)
 async def promo_receive_code(message: Message, state: FSMContext):
-    code = (message.text or "").strip().upper()[:50]
-    if not code:
-        await message.answer(localize("admin.promo.invalid_value"), reply_markup=back("promo_mgmt"))
+    try:
+        code = PromoCodeRequest(code=message.text or "").code
+    except ValidationError:
+        await message.answer(localize("admin.promo.invalid_code"), reply_markup=back("promo_mgmt"))
         return
 
     existing = await get_promo_code(code)
@@ -304,10 +322,12 @@ async def promo_receive_expires(message: Message, state: FSMContext):
         expires_at = None
     else:
         try:
-            expires_at = datetime.strptime(text, "%Y-%m-%d").replace(tzinfo=timezone.utc)
+            day = datetime.strptime(text, "%Y-%m-%d").replace(tzinfo=timezone.utc)
         except ValueError:
             await message.answer(localize("admin.promo.invalid_date"), reply_markup=back("promo_mgmt"))
             return
+        # The admin names the last valid day, so expiry is the END of it — midnight would have killed the code a day early.
+        expires_at = day + timedelta(days=1)
 
     await state.update_data(promo_expires=expires_at.isoformat() if expires_at else None)
 
@@ -385,7 +405,7 @@ async def _finalize_promo_creation(target, state: FSMContext, user_id: int):
 
     if promo_id:
         await reply(
-            localize("admin.promo.created", code=data['promo_code']),
+            localize("admin.promo.created", code=esc(data['promo_code'])),
             reply_markup=back("promo_mgmt"),
         )
         await log_audit(

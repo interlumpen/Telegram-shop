@@ -62,6 +62,20 @@ def _minor_units_for(currency: str) -> int:
     return 1 if currency.upper() in ZERO_DEC_CURRENCIES else 100
 
 
+def payload_amount(payload: dict) -> int:
+    """Read the requested top-up amount (major units) out of an invoice payload.
+
+    Returns 0 when the payload carries no usable amount.
+    """
+    for key in ("amount", "amount_rub"):
+        if key in payload:
+            try:
+                return int(payload[key])
+            except (TypeError, ValueError):
+                return 0
+    return 0
+
+
 async def send_fiat_invoice(
         *,
         bot: Bot,

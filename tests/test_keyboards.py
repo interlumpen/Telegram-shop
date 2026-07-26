@@ -1,7 +1,7 @@
 from bot.keyboards.inline import (
     main_menu, profile_keyboard, simple_buttons, back, close, item_info, payment_menu,
     get_payment_choice, question_buttons, check_sub, referral_system_keyboard,
-    admin_console_keyboard, cart_keyboard,
+    admin_console_keyboard, cart_keyboard, rating_keyboard,
 )
 
 
@@ -118,27 +118,35 @@ class TestPaymentMenu:
 class TestItemInfoKeyboard:
 
     def test_has_buy_and_back(self):
-        markup = item_info("Widget", "gp_0")
+        markup = item_info("gp_0")
         cbs = _all_callback_data(markup)
         assert "buy_item" in cbs
         assert "gp_0" in cbs
 
     def test_in_stock_has_no_notify_button(self):
-        cbs = _all_callback_data(item_info("Widget", "gp_0"))
+        cbs = _all_callback_data(item_info("gp_0"))
         assert "sub_stock" not in cbs
         assert "unsub_stock" not in cbs
 
     def test_out_of_stock_offers_subscribe(self):
-        cbs = _all_callback_data(item_info("Widget", "gp_0", out_of_stock=True))
+        cbs = _all_callback_data(item_info("gp_0", out_of_stock=True))
         assert "sub_stock" in cbs
         assert "unsub_stock" not in cbs
 
     def test_out_of_stock_and_subscribed_offers_unsubscribe(self):
         cbs = _all_callback_data(
-            item_info("Widget", "gp_0", out_of_stock=True, subscribed=True)
+            item_info("gp_0", out_of_stock=True, subscribed=True)
         )
         assert "unsub_stock" in cbs
         assert "sub_stock" not in cbs
+
+    def test_review_buttons_carry_no_item_name(self):
+        """Telegram caps callback_data at 64 bytes; a 100-char Cyrillic product
+        name embedded in it made the whole card unopenable."""
+        cbs = _all_callback_data(item_info("gp_0", review_count=3, has_purchased=True))
+        assert "reviews:0" in cbs
+        assert "review" in cbs
+        assert all(len(cb.encode("utf-8")) <= 64 for cb in cbs)
 
 
 class TestCartKeyboard:
@@ -326,3 +334,30 @@ class TestAdminConsoleKeyboard:
         texts_off = _all_button_texts(markup_off)
         # The maintenance button text should differ between states
         assert texts_on != texts_off
+
+
+class TestCallbackDataFitsTelegramLimit:
+    LONG_CYRILLIC = "Подарочный сертификат Steam на 1000 рублей регион свободный"
+    LONG_ASCII = "S" * 100
+
+    def _assert_all_fit(self, markup):
+        for cb in _all_callback_data(markup):
+            assert len(cb.encode("utf-8")) <= 64, f"too long ({len(cb.encode())}B): {cb!r}"
+
+    def test_item_card_fits_with_every_button_shown(self):
+        markup = item_info(
+            "gp_0", avg_rating=4.5, review_count=7, has_purchased=True,
+            out_of_stock=True, subscribed=False,
+        )
+        self._assert_all_fit(markup)
+
+    def test_item_card_fits_with_promo_applied(self):
+        self._assert_all_fit(item_info("gp_0", applied_promo="SUMMER-2026", review_count=3))
+
+    def test_cart_keyboard_fits_for_long_names(self):
+        for name in (self.LONG_CYRILLIC, self.LONG_ASCII):
+            items = [{"id": 987654, "item_name": name, "quantity": 99}]
+            self._assert_all_fit(cart_keyboard(items))
+
+    def test_rating_keyboard_fits(self):
+        self._assert_all_fit(rating_keyboard())

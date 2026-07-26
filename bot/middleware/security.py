@@ -99,13 +99,16 @@ class SecurityMiddleware(BaseMiddleware):
                         )
                         return None
 
+        # A Message can arrive without from_user (channel post in a linked group, anonymous admin), so the id has to be optional here.
+        user_id = user.id if user else None
+
         # Check for suspicious patterns in the data
         if isinstance(event, CallbackQuery) and event.data:
             if check_suspicious_patterns(event.data):
                 log_audit_bg(
                     "suspicious_callback",
                     level="WARNING",
-                    user_id=user.id,
+                    user_id=user_id,
                     details=f"data={event.data[:100]}",
                 )
                 await event.answer(localize("middleware.security.invalid_data"), show_alert=True)
@@ -116,7 +119,7 @@ class SecurityMiddleware(BaseMiddleware):
                 log_audit_bg(
                     "suspicious_message",
                     level="WARNING",
-                    user_id=user.id,
+                    user_id=user_id,
                     details=f"text={event.text[:100]}",
                 )
                 # We don't block messages, we just log them
@@ -364,3 +367,12 @@ def clear_role_auth_caches() -> None:
     if cache is not None:
         from bot.database.methods.cache_utils import safe_create_task
         safe_create_task(cache.invalidate_pattern("auth:role:*"))
+
+
+async def flush_all_role_caches() -> None:
+    """Drop every cached permission bitmask after a Role's permissions changed."""
+    clear_role_auth_caches()
+    from bot.misc.caching import get_cache_manager
+    cache = get_cache_manager()
+    if cache is not None:
+        await cache.invalidate_pattern("role:*")

@@ -1,7 +1,6 @@
 import hashlib
 import json
 from decimal import Decimal, ROUND_HALF_UP
-from html import escape as html_escape
 
 from aiogram import Router, F
 from aiogram.types import CallbackQuery, Message, PreCheckoutQuery, SuccessfulPayment
@@ -18,9 +17,9 @@ from bot.misc import EnvKeys, ItemPurchaseRequest, validate_telegram_id, validat
 from bot.handlers.other import _any_payment_method_enabled, is_safe_item_name
 from bot.misc.metrics import get_metrics
 from bot.misc.services import CryptoPayAPI, CryptoPayAPIError, send_stars_invoice, send_fiat_invoice
-from bot.misc.services.payment import _minor_units_for
+from bot.misc.services.payment import _minor_units_for, payload_amount
 from bot.filters import ValidAmountFilter
-from bot.i18n import localize
+from bot.i18n import localize, esc
 from bot.states import BalanceStates
 
 router = Router()
@@ -38,7 +37,7 @@ async def _notify_referrer_bonus(bot, user_id: int, amount: Decimal | int, payer
             await bot.send_message(
                 referral_id,
                 localize('payments.referral.bonus',
-                         amount=bonus, name=html_escape(payer_name or ''),
+                         amount=bonus, name=esc(payer_name),
                          id=payer_id, currency=EnvKeys.PAY_CURRENCY),
                 reply_markup=close()
             )
@@ -79,7 +78,7 @@ async def replenish_balance_amount(message: Message, state: FSMContext):
         )
         await state.set_state(BalanceStates.waiting_payment)
 
-    except ValueError as e:
+    except ValueError:
         await message.answer(
             localize("payments.replenish_invalid",
                      min_amount=EnvKeys.MIN_AMOUNT,
@@ -321,7 +320,7 @@ async def pre_checkout_handler(query: PreCheckoutQuery):
         await query.answer(ok=False, error_message="Invalid payload")
         return
 
-    amount = int(payload.get("amount", 0) or payload.get("amount_rub", 0))
+    amount = payload_amount(payload)
     if amount <= 0:
         await query.answer(ok=False, error_message="Invalid amount")
         return
@@ -354,22 +353,20 @@ async def successful_payment_handler(message: Message):
     except Exception:
         payload = {}
 
-    amount = 0
+    amount = payload_amount(payload)
 
-    if sp.currency == "XTR":
-        # Stars
-        if "amount" in payload:
-            amount = int(payload["amount"])
-        else:
+    if amount <= 0:
+        if sp.currency == "XTR":
+            # Stars, no usable payload: reverse the conversion as a last resort.
             amount = int(
                 (Decimal(int(sp.total_amount)) / Decimal(str(EnvKeys.STARS_PER_VALUE)))
                 .to_integral_value(rounding=ROUND_HALF_UP)
             )
-    else:
-        # Fiat
-        currency = sp.currency.upper()
-        multiplier = _minor_units_for(currency)
-        amount = int(Decimal(sp.total_amount) / Decimal(multiplier))
+        else:
+            # Fiat: total_amount is exact in minor units, so this is lossless.
+            currency = sp.currency.upper()
+            multiplier = _minor_units_for(currency)
+            amount = int(Decimal(sp.total_amount) / Decimal(multiplier))
 
     if amount <= 0:
         await message.answer(localize("payments.unable_determine_amount"), reply_markup=close())
@@ -464,7 +461,7 @@ async def buy_item_callback_handler(call: CallbackQuery, state: FSMContext):
         # User_id validation
         try:
             user_id = validate_telegram_id(call.from_user.id)
-        except ValueError as e:
+        except ValueError:
             await call.answer(localize("errors.invalid_user"), show_alert=True)
             return
 
@@ -487,7 +484,13 @@ async def buy_item_callback_handler(call: CallbackQuery, state: FSMContext):
                 "user_not_found": "shop.purchase.fail.user_not_found",
                 "item_not_found": "shop.item.not_found",
                 "insufficient_funds": "shop.insufficient_funds",
-                "out_of_stock": "shop.out_of_stock"
+                "out_of_stock": "shop.out_of_stock",
+                "promo_invalid": "promo.not_found",
+                "promo_expired": "promo.expired",
+                "promo_max_uses": "promo.max_uses_reached",
+                "promo_already_used": "promo.already_used",
+                "promo_wrong_item": "promo.wrong_item",
+                "promo_wrong_category": "promo.wrong_category",
             }
 
             error_text = localize(
@@ -514,7 +517,10 @@ async def buy_item_callback_handler(call: CallbackQuery, state: FSMContext):
             metrics.track_conversion("purchase_funnel", "purchase", call.from_user.id)
 
         safe_value = sanitize_html(purchase_data['value'])
-        username = call.from_user.username or call.from_user.first_name
+        username = esc(call.from_user.username or call.from_user.first_name)
+
+        # The promo was consumed by this purchase
+        await state.update_data(applied_promo=None, applied_promo_data=None)
 
         from bot.keyboards.inline import simple_buttons
         buttons = [
@@ -525,7 +531,7 @@ async def buy_item_callback_handler(call: CallbackQuery, state: FSMContext):
         await call.message.edit_text(
             localize(
                 'shop.purchase.receipt',
-                item_name=purchase_data['item_name'],
+                item_name=esc(purchase_data['item_name']),
                 price=purchase_data['price'],
                 unique_id=purchase_data['unique_id'],
                 datetime=purchase_data['bought_datetime'],

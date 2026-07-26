@@ -2,7 +2,7 @@ import time
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
-from aiogram.types import CallbackQuery
+from aiogram.types import CallbackQuery, Message
 
 from bot.middleware.security import (
     check_suspicious_patterns, SecurityMiddleware, AuthenticationMiddleware,
@@ -391,6 +391,22 @@ class _FakeRedis:
         self.zsets.pop(key, None)
         self.kv.pop(key, None)
 
+    def register_script(self, _source):
+        async def _run(keys, args):
+            self._boom()
+            key = keys[0]
+            now, window, limit, member = float(args[0]), float(args[1]), int(args[2]), args[3]
+            bucket = self.zsets.setdefault(key, {})
+            for m, score in list(bucket.items()):
+                if score <= now - window:
+                    del bucket[m]
+            if len(bucket) >= limit:
+                return 0
+            bucket[member] = now
+            return 1
+
+        return _run
+
 
 class TestRedisRateLimiter:
 
@@ -483,3 +499,30 @@ class TestPermissionHasAnyAdminPerm:
     def test_zero_is_not_admin(self):
         from bot.database.models import Permission
         assert Permission.has_any_admin_perm(0) is False
+
+
+class TestSecurityMiddlewareWithoutFromUser:
+    async def test_suspicious_text_without_from_user_does_not_crash(self):
+        from bot.middleware.security import SecurityMiddleware
+
+        mw = SecurityMiddleware()
+
+        event = MagicMock(spec=Message)
+        event.from_user = None
+        event.text = "<script>alert(1)</script>"
+
+        handler = AsyncMock(return_value="passed")
+        # Suspicious messages are logged, not blocked — the handler still runs.
+        assert await mw(handler, event, {}) == "passed"
+
+    async def test_benign_text_without_from_user_passes(self):
+        from bot.middleware.security import SecurityMiddleware
+
+        mw = SecurityMiddleware()
+
+        event = MagicMock(spec=Message)
+        event.from_user = None
+        event.text = "hello"
+
+        handler = AsyncMock(return_value="passed")
+        assert await mw(handler, event, {}) == "passed"

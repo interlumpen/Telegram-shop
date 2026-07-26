@@ -41,7 +41,9 @@ def async_cached(ttl: int = 300, key_prefix: str = "", cache_empty: bool = True)
             if cached_value is not None:
                 return cached_value
 
-            lock = _cache_locks.setdefault(cache_key, asyncio.Lock())
+            lock = _cache_locks.get(cache_key)
+            if lock is None:
+                lock = _cache_locks[cache_key] = asyncio.Lock()
             try:
                 async with lock:
                     cached_value = await cache.get(cache_key)
@@ -291,13 +293,13 @@ async def select_item_values_amount(item_name: str) -> int:
 async def check_value(item_name: str) -> bool:
     """Return True if item has any infinite value (is_infinity=True)."""
     async with Database().session() as s:
-        return (await s.execute(
+        return bool((await s.execute(
             select(exists().where(
                 ItemValues.item_id == Goods.id,
                 Goods.name == item_name,
                 ItemValues.is_infinity.is_(True),
             ))
-        )).scalar()
+        )).scalar())
 
 
 async def select_user_items(buyer_id: int | str) -> int:
@@ -564,13 +566,14 @@ async def invalidate_user_cache(user_id: int):
 
 
 async def invalidate_item_cache(item_name: str, category_name: str = None):
-    """Invalidate product cache"""
+    """Invalidate every cache entry keyed by a product's name.
+    """
     cache = get_cache_manager()
     if cache:
-        await cache.delete(f"item:{item_name}")
         await cache.delete(f"item_info:{item_name}")
         await cache.delete(f"item_values:{item_name}")
         await cache.delete(f"item_infinite:{item_name}")
+        await cache.delete(f"avg_rating:{item_name}")
         if category_name:
             await cache.delete(f"category:{category_name}")
             await cache.delete(f"category_items:{category_name}:count")

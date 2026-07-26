@@ -48,18 +48,19 @@ class TestCacheInvalidationFunctions:
             set_auth_middleware(prev)
 
     async def test_invalidate_item_cache(self, fake_cache):
-        fake_cache.store["item:Test"] = {"name": "Test"}
         fake_cache.store["item_info:Test"] = {"name": "Test", "price": 100}
         fake_cache.store["item_values:Test"] = 5
         fake_cache.store["item_infinite:Test"] = True
+        fake_cache.store["avg_rating:Test"] = 4.5
         fake_cache.store["category:Cat1"] = {"name": "Cat1"}
 
         await invalidate_item_cache("Test")
 
-        assert "item:Test" not in fake_cache.store
         assert "item_info:Test" not in fake_cache.store
         assert "item_values:Test" not in fake_cache.store
         assert "item_infinite:Test" not in fake_cache.store
+        # Keyed by name, so a rename would otherwise strand the old average.
+        assert "avg_rating:Test" not in fake_cache.store
         assert "category:Cat1" in fake_cache.store
 
     async def test_check_value_cached_serves_from_cache(self, fake_cache, monkeypatch):
@@ -220,12 +221,12 @@ class TestCacheInvalidationAfterMutations:
     async def test_delete_item_invalidates_cache(self, item_factory, fake_cache):
         item_name = "TestItem"
         await item_factory(name=item_name, price=100, values=[("value1", False)])
-        fake_cache.store[f"item:{item_name}"] = {"name": item_name}
+        fake_cache.store[f"item_info:{item_name}"] = {"name": item_name}
 
         await delete_item(item_name)
         await asyncio.sleep(0)
 
-        assert f"item:{item_name}" not in fake_cache.store
+        assert f"item_info:{item_name}" not in fake_cache.store
 
     async def test_delete_category_invalidates_cache(self, category_factory, fake_cache):
         cat_name = "TestCategory"
@@ -472,3 +473,96 @@ class TestDeferredInvalidationOnRedisOutage:
         await cm.check_health()
         assert "category:A" not in r.store and "category:B" not in r.store
         assert not cm._pending_patterns
+
+
+class TestCacheManagerRedisDegradation:
+    def _manager(self, exc):
+        from unittest.mock import AsyncMock, MagicMock
+        from bot.misc.caching.cache import CacheManager
+
+        redis = MagicMock()
+        redis.get = AsyncMock(side_effect=exc)
+        redis.setex = AsyncMock(side_effect=exc)
+        redis.delete = AsyncMock(side_effect=exc)
+        redis.scan_iter = MagicMock(side_effect=exc)
+        return CacheManager(redis)
+
+    async def test_redis_connection_error_marks_unhealthy_on_get(self):
+        from redis.exceptions import ConnectionError as RedisConnectionError
+
+        mgr = self._manager(RedisConnectionError("connection lost"))
+        assert await mgr.get("user:1") is None
+        assert mgr._healthy is False
+
+    async def test_redis_timeout_marks_unhealthy_on_set(self):
+        from redis.exceptions import TimeoutError as RedisTimeoutError
+
+        mgr = self._manager(RedisTimeoutError("timed out"))
+        assert await mgr.set("user:1", {"a": 1}) is False
+        assert mgr._healthy is False
+
+    async def test_delete_defers_invalidation_for_replay(self):
+        from redis.exceptions import ConnectionError as RedisConnectionError
+
+        mgr = self._manager(RedisConnectionError("connection lost"))
+        assert await mgr.delete("item_info:Widget") is False
+        # Deferred, not lost: a committed write must not keep serving stale data
+        # once Redis comes back with the key's original TTL still running.
+        assert "item_info:Widget" in mgr._pending_deletes
+
+    async def test_pattern_invalidation_is_deferred_too(self):
+        from redis.exceptions import ConnectionError as RedisConnectionError
+
+        mgr = self._manager(RedisConnectionError("connection lost"))
+        assert await mgr.invalidate_pattern("auth:role:*") == 0
+        assert "auth:role:*" in mgr._pending_patterns
+
+    def test_known_prefixes_cover_every_written_namespace(self):
+        """The overflow path clears these wholesale; a namespace missing from the
+        list would survive an outage as stale data."""
+        from bot.misc.caching.cache import CacheManager
+
+        for prefix in ("item_info:", "item_values:", "item_infinite:", "avg_rating:",
+                       "category:", "category_items:", "user:", "role:", "auth:role:",
+                       "user_count:", "admin_count:", "stats:"):
+            assert prefix in CacheManager._KNOWN_PREFIXES
+
+
+class TestRatingCacheInvalidation:
+
+    async def test_item_rename_drops_the_old_average(self, item_factory, fake_cache):
+        """avg_rating is keyed by product name, so a rename must clear it."""
+        from bot.database.methods.update import update_item
+
+        await item_factory(name="OldName", price=100, category="RateCat")
+        fake_cache.store["avg_rating:OldName"] = 4.5
+        fake_cache.store["item_info:OldName"] = {"name": "OldName"}
+
+        ok, err = await update_item("OldName", "NewName", "desc", 100, "RateCat")
+        await asyncio.sleep(0)
+
+        assert (ok, err) == (True, None)
+        assert "avg_rating:OldName" not in fake_cache.store
+
+
+class TestCategoryMoveInvalidation:
+
+    async def test_moving_an_item_invalidates_both_categories(
+        self, item_factory, category_factory, fake_cache
+    ):
+        """Only the destination category used to be invalidated, leaving the
+        source category's cached item list and count stale for up to 1800s."""
+        from bot.database.methods.update import update_item
+
+        await item_factory(name="Movable", price=100, category="FromCat")
+        await category_factory("ToCat")
+
+        fake_cache.store["category_items:FromCat:count"] = 1
+        fake_cache.store["category_items:ToCat:count"] = 0
+
+        ok, err = await update_item("Movable", "Movable", "desc", 100, "ToCat")
+        await asyncio.sleep(0)
+
+        assert (ok, err) == (True, None)
+        assert "category_items:FromCat:count" not in fake_cache.store
+        assert "category_items:ToCat:count" not in fake_cache.store

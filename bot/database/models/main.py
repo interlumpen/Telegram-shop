@@ -193,7 +193,7 @@ class BoughtGoods(Database.BASE):
 
     __table_args__ = (
         Index('ix_bought_goods_datetime', 'bought_datetime'),
-        Index('ix_bought_goods_buyer_datetime', 'buyer_id', 'bought_datetime'),
+        Index('ix_bought_goods_buyer_datetime_id', 'buyer_id', 'bought_datetime', 'id'),
     )
 
     def __str__(self):
@@ -271,8 +271,9 @@ class ReferralEarnings(Database.BASE):
 
     __table_args__ = (
         CheckConstraint('referrer_id != referral_id', name='ck_referral_earnings_no_self_referral'),
-        Index('ix_referral_earnings_referrer_created', 'referrer_id', 'created_at'),
-        Index('ix_referral_earnings_referral_created', 'referral_id', 'created_at'),
+        Index('ix_referral_earnings_referrer_created_id', 'referrer_id', 'created_at', 'id'),
+        Index('ix_referral_earnings_referral_created_id', 'referral_id', 'created_at', 'id'),
+        Index('ix_referral_earnings_pair_created', 'referrer_id', 'referral_id', 'created_at', 'id'),
     )
 
     def __str__(self):
@@ -330,6 +331,7 @@ class PromoCodes(Database.BASE):
             'category_id IS NULL OR item_id IS NULL',
             name='ck_promo_single_binding',
         ),
+        Index('ix_promo_codes_created_id', 'created_at', 'id'),
     )
 
     def __str__(self):
@@ -394,6 +396,7 @@ class Reviews(Database.BASE):
     __table_args__ = (
         UniqueConstraint('user_id', 'item_id', name='uq_review_per_user_item'),
         CheckConstraint('rating >= 1 AND rating <= 5', name='ck_review_rating_range'),
+        Index('ix_reviews_item_created_id', 'item_id', 'created_at', 'id'),
     )
 
     def __str__(self):

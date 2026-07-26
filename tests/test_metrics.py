@@ -171,3 +171,58 @@ class TestAnalyticsMiddleware:
         await self.mw(handler, event, {})
 
         assert len(self.metrics.timings["handler_message"]) == 1
+
+
+class TestPrometheusLabelSafety:
+    """Event names partly derive from user-supplied callback_data, so they are
+    attacker-influenced both as label values and as dictionary keys."""
+
+    def setup_method(self):
+        self.m = MetricsCollector()
+
+    def test_quote_and_newline_cannot_forge_metric_lines(self):
+        self.m.track_event('x"} 1\nbot_fake{a="b')
+        out = self.m.export_to_prometheus()
+
+        assert "bot_fake" not in out
+        # Exactly one events line, and its label is the sanitized placeholder.
+        events = [ln for ln in out.splitlines() if ln.startswith("bot_events_total")]
+        assert events == ['bot_events_total{event="other"} 1']
+
+    def test_backslash_is_not_emitted_raw(self):
+        self.m.track_event(r"back\slash")
+        assert "\\" not in self.m.export_to_prometheus()
+
+    def test_series_count_is_bounded(self):
+        for i in range(MetricsCollector.MAX_SERIES + 50):
+            self.m.track_event(f"evt_{i}")
+
+        # MAX_SERIES distinct names, plus the one overflow bucket they spill into.
+        assert len(self.m.events) == MetricsCollector.MAX_SERIES + 1
+        assert self.m.events[MetricsCollector.OVERFLOW_KEY] == 50
+
+    def test_timings_are_bounded_too(self):
+        for i in range(MetricsCollector.MAX_SERIES + 10):
+            self.m.track_timing(f"op_{i}", 0.1)
+
+        assert len(self.m.timings) == MetricsCollector.MAX_SERIES + 1
+        assert len(self.m.timings[MetricsCollector.OVERFLOW_KEY]) == 10
+
+
+class TestAnalyticsEventNaming:
+
+    def setup_method(self):
+        self.metrics = MetricsCollector()
+        self.mw = AnalyticsMiddleware(self.metrics)
+
+    @pytest.mark.asyncio
+    async def test_hostile_callback_data_collapses_to_other(self):
+        event = MagicMock()
+        event.from_user = MagicMock()
+        event.from_user.id = 123
+        event.text = None
+        event.data = 'evil"}_payload'
+
+        await self.mw(AsyncMock(return_value=None), event, {})
+
+        assert "bot_other" in self.metrics.events

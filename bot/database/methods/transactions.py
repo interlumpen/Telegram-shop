@@ -2,15 +2,16 @@ from datetime import datetime, timezone
 from decimal import Decimal
 from uuid import uuid4
 
-from sqlalchemy import select, delete as sa_delete
+from sqlalchemy import select, delete as sa_delete, update as sa_update
 from sqlalchemy.exc import IntegrityError, OperationalError, DBAPIError
 
-from bot.database.models import User, ItemValues, Goods, BoughtGoods, Payments, Operations
+from bot.database.models import User, ItemValues, Goods, Categories, BoughtGoods, Payments, Operations
 from bot.database.models.main import PromoCodes, PromoCodeUsages, CartItems, ReferralEarnings
 from bot.database import Database
 from bot.misc import EnvKeys
 from bot.database.methods.read import (
-    invalidate_user_cache, invalidate_stats_cache, invalidate_item_cache, promo_rule_error,
+    invalidate_user_cache, invalidate_stats_cache, invalidate_item_cache,
+    invalidate_category_cache, promo_rule_error,
 )
 from bot.database.methods.cache_utils import safe_create_task
 from bot.database.methods.pricing import effective_price, apply_promo_discount
@@ -125,9 +126,11 @@ async def buy_item_transaction(telegram_id: int, item_name: str, promo_code: str
 
                 # 4. Receive and lock the goods for purchase (blocking wait for row lock).
                 # Prefer an infinite value (never consumed) over finite stock
+                # LIMIT 1: only one row is consumed, and without it Postgres locks every stock row of the position for the whole transaction.
                 item_value = (await s.execute(
                     select(ItemValues).where(ItemValues.item_id == goods.id)
                     .order_by(ItemValues.is_infinity.desc(), ItemValues.id)
+                    .limit(1)
                     .with_for_update()
                 )).scalars().first()
 
@@ -230,6 +233,7 @@ async def process_payment_with_referral(
                 if existing_payment.status == "succeeded":
                     raise _Abort("already_processed")
                 existing_payment.status = "succeeded"
+                amount = existing_payment.amount
             else:
                 payment = Payments(
                     provider=provider,
@@ -558,6 +562,99 @@ async def checkout_cart_transaction(
         return outcome
 
     return False, "transaction_error", None
+
+
+async def replace_item_stock_and_meta(
+        old_name: str,
+        new_name: str,
+        description: str,
+        price,
+        category_name: str,
+        values: list[str],
+        is_infinity: bool,
+) -> tuple[bool, str | None, int]:
+    """Swap a position's whole stock and its metadata in one transaction.
+
+    Returns ``(success, error_code, values_added)``
+    """
+    seen: set[str] = set()
+    normalized: list[str] = []
+    for v in values:
+        v_norm = (v or "").strip()
+        if v_norm and v_norm not in seen:
+            seen.add(v_norm)
+            normalized.append(v_norm)
+
+    try:
+        async with Database().session() as s:
+            goods = (await s.execute(
+                select(Goods).where(Goods.name == old_name).with_for_update()
+            )).scalars().one_or_none()
+            if not goods:
+                raise _Abort("position_invalid")
+
+            category_id = (await s.execute(
+                select(Categories.id).where(Categories.name == category_name)
+            )).scalar()
+            if not category_id:
+                raise _Abort("position_invalid")
+
+            if new_name != old_name:
+                clash = (await s.execute(
+                    select(Goods.id).where(Goods.name == new_name)
+                )).scalar()
+                if clash:
+                    raise _Abort("position_exists")
+
+            # Resolve the old category's name before mutating: if the position moves, that category's cached item list/count is now stale too.
+            old_category_name = (await s.execute(
+                select(Categories.name).where(Categories.id == goods.category_id)
+            )).scalar()
+
+            # 1. Purge the current stock.
+            await s.execute(sa_delete(ItemValues).where(ItemValues.item_id == goods.id))
+
+            # 2. Insert the replacement stock. An infinite position holds exactly one row that is never consumed, so only the first value counts.
+            to_insert = normalized[:1] if is_infinity else normalized
+            for v in to_insert:
+                s.add(ItemValues(item_id=goods.id, value=v, is_infinity=is_infinity))
+
+            # 3. Update the metadata.
+            goods.name = new_name
+            goods.description = description
+            goods.price = price
+            goods.category_id = category_id
+
+            if new_name != old_name:
+                # Purchase history denormalizes the name, so carry the rename over.
+                await s.execute(
+                    sa_update(BoughtGoods).where(BoughtGoods.item_name == old_name)
+                    .values(item_name=new_name)
+                )
+
+            added = len(to_insert)
+
+    except _Abort as e:
+        return False, e.code, 0
+
+    except Exception as e:
+        await log_audit(
+            "replace_item_stock_failed",
+            level="WARNING",
+            resource_type="Item",
+            resource_id=old_name,
+            details=str(e),
+        )
+        return False, "db_error", 0
+
+    # Only after the commit: both names, and both categories when the position moved.
+    for name in {old_name, new_name}:
+        safe_create_task(invalidate_item_cache(name))
+    for cat in {category_name, old_category_name} - {None}:
+        safe_create_task(invalidate_category_cache(cat))
+    safe_create_task(invalidate_stats_cache())
+
+    return True, None, added
 
 
 async def admin_balance_change(telegram_id: int, amount: Decimal) -> tuple[bool, str]:

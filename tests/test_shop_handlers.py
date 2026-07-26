@@ -455,9 +455,6 @@ class TestShopCategories:
 
         call = make_callback_query(data="categories-page_1", user_id=600002)
 
-        # Set up paginator state in FSM
-        await fsm_context.update_data(categories_paginator=None)
-
         with patch('bot.handlers.user.shop_and_goods.lazy_paginated_keyboard', new_callable=AsyncMock) as mock_kb:
             mock_kb.return_value = MagicMock()
             await navigate_categories(call, fsm_context)
@@ -620,3 +617,195 @@ class TestBoughtItems:
         await bought_item_info_callback_handler(call)
 
         call.answer.assert_called_once()
+
+
+class TestHtmlEscapingInRenderedText:
+    HOSTILE = '<b>Widget</b> & "co" <script>'
+
+    async def test_item_card_escapes_name_and_description(
+        self, make_callback_query, fsm_context, item_factory
+    ):
+        from bot.handlers.user.shop_and_goods import _render_item_page
+
+        await item_factory(
+            name=self.HOSTILE, price=100, description=self.HOSTILE,
+            values=[("v1", False)],
+        )
+
+        call = make_callback_query(data="itm:0:0", user_id=610901)
+        await _render_item_page(call, fsm_context, self.HOSTILE, "gp_0", user_id=610901)
+
+        text = call.message.edit_text.call_args[0][0]
+        assert "&lt;b&gt;Widget&lt;/b&gt;" in text
+        assert "&amp;" in text
+        # No raw angle bracket survives outside the template's own markup.
+        assert "<script>" not in text
+
+    async def test_cart_escapes_item_name(self, make_callback_query, user_factory, item_factory):
+        from bot.handlers.user.cart import _show_cart
+        from bot.database.methods.create import add_to_cart
+
+        await user_factory(telegram_id=610902, balance=1000)
+        await item_factory(name=self.HOSTILE, price=100, values=[("v1", False)])
+        ok, _ = await add_to_cart(610902, self.HOSTILE)
+        assert ok
+
+        call = make_callback_query(data="cart", user_id=610902)
+        await _show_cart(call)
+
+        text = call.message.edit_text.call_args[0][0]
+        assert "&lt;b&gt;Widget&lt;/b&gt;" in text
+        assert "<script>" not in text
+
+    async def test_esc_helper_handles_none(self):
+        from bot.i18n import esc
+
+        assert esc(None) == ""
+        assert esc(5) == "5"
+        assert esc("a < b & c") == "a &lt; b &amp; c"
+
+
+class TestBackFromItemCardAfterPurchase:
+    """The receipt's Back button leads to the item card, whose own Back is
+    gp_/sp_ — and those pagers are state-filtered. Anything on that path that
+    drops the browsing state leaves the card's Back button dead."""
+
+    async def test_back_to_item_after_buying_keeps_the_browsing_state(
+        self, make_callback_query, fsm_context, user_factory, item_factory
+    ):
+        from bot.handlers.user.balance_and_payment import buy_item_callback_handler
+        from bot.handlers.user.shop_and_goods import back_to_item_handler
+        from bot.states import ShopStates
+
+        await user_factory(telegram_id=660001, balance=1000)
+        await item_factory(name="BoughtThenBack", price=100, values=[("v1", False)])
+
+        # Browsing a category, with the item card open.
+        await fsm_context.update_data(csrf_item="BoughtThenBack", item_back_data="gp_0",
+                                      current_category="TestCategory")
+        await fsm_context.set_state(ShopStates.viewing_goods)
+
+        buy = make_callback_query(data="buy_item", user_id=660001)
+        await buy_item_callback_handler(buy, fsm_context)
+
+        # Receipt -> Back returns to the item card.
+        back = make_callback_query(data="back_to_item", user_id=660001)
+        await back_to_item_handler(back, fsm_context)
+
+        # The card's Back is gp_0; navigate_goods is filtered on this state, so
+        # losing it here is what made the button do nothing.
+        assert await fsm_context.get_state() == ShopStates.viewing_goods
+
+    async def test_back_to_item_from_search_keeps_the_search_state(
+        self, make_callback_query, fsm_context, user_factory, item_factory
+    ):
+        from bot.handlers.user.balance_and_payment import buy_item_callback_handler
+        from bot.handlers.user.shop_and_goods import back_to_item_handler
+        from bot.states import ShopStates
+
+        await user_factory(telegram_id=660002, balance=1000)
+        await item_factory(name="SearchThenBack", price=100, values=[("v1", False)])
+
+        await fsm_context.update_data(csrf_item="SearchThenBack", item_back_data="sp_0",
+                                      search_query="Search")
+        await fsm_context.set_state(ShopStates.viewing_search_results)
+
+        buy = make_callback_query(data="buy_item", user_id=660002)
+        await buy_item_callback_handler(buy, fsm_context)
+
+        back = make_callback_query(data="back_to_item", user_id=660002)
+        await back_to_item_handler(back, fsm_context)
+
+        assert await fsm_context.get_state() == ShopStates.viewing_search_results
+
+    async def test_a_stale_promo_state_does_not_hijack_the_back_target(
+        self, make_callback_query, fsm_context, user_factory, item_factory
+    ):
+        """Applying a promo while browsing a category, then later opening an item
+        from search, must not restore the category state over the search one."""
+        from bot.handlers.user.shop_and_goods import apply_promo_handler, back_to_item_handler
+        from bot.states import ShopStates
+
+        await user_factory(telegram_id=660003, balance=1000)
+        await item_factory(name="StalePromoState", price=100, values=[("v1", False)])
+
+        # Category browsing: open the promo prompt, then leave it.
+        await fsm_context.update_data(csrf_item="StalePromoState", item_back_data="gp_0")
+        await fsm_context.set_state(ShopStates.viewing_goods)
+        await apply_promo_handler(make_callback_query(data="apply_promo", user_id=660003), fsm_context)
+        await back_to_item_handler(make_callback_query(data="back_to_item", user_id=660003), fsm_context)
+        assert await fsm_context.get_state() == ShopStates.viewing_goods
+
+        # Now the same user arrives at an item from search instead.
+        await fsm_context.update_data(item_back_data="sp_0", search_query="Stale")
+        await fsm_context.set_state(ShopStates.viewing_search_results)
+        await back_to_item_handler(make_callback_query(data="back_to_item", user_id=660003), fsm_context)
+
+        assert await fsm_context.get_state() == ShopStates.viewing_search_results
+
+    @staticmethod
+    def _registered_filters(callback):
+        """The filters aiogram will run for a handler, as registered."""
+        from bot.handlers.user.shop_and_goods import router
+
+        for h in router.callback_query.handlers:
+            if h.callback is callback:
+                return h.filters or ()
+        raise AssertionError(f"{callback.__name__} is not registered on the router")
+
+    async def _passes_registered_filters(self, callback, call, fsm_context):
+        """Whether aiogram's own filters would let this callback through.
+
+        Calling the handler directly would bypass them, which is exactly the
+        thing that was broken — the payload matched, the state did not.
+        """
+        raw_state = await fsm_context.get_state()
+        # aiogram stores raw_state as a string; the fake context keeps the object.
+        raw_state = getattr(raw_state, "state", raw_state)
+
+        for f in self._registered_filters(callback):
+            verdict = f.magic.resolve(call) if f.magic is not None \
+                else f.callback(call, raw_state=raw_state)
+            if not verdict:
+                return False
+        return True
+
+    async def test_the_back_button_actually_pages_after_a_purchase(
+        self, make_callback_query, fsm_context, user_factory, item_factory
+    ):
+        """End-to-end on the reported flow: browse a category, buy, return from
+        the receipt, then press the card's Back — aiogram must route it, and it
+        must render the goods list rather than silently doing nothing."""
+        from bot.handlers.user.shop_and_goods import (
+            shop_callback_handler, items_list_callback_handler,
+            item_info_callback_handler, back_to_item_handler, navigate_goods,
+        )
+        from bot.handlers.user.balance_and_payment import buy_item_callback_handler
+
+        await user_factory(telegram_id=660004, balance=1000)
+        await item_factory(name="EndToEndBack", price=100, category="E2ECat",
+                           values=[("v1", False), ("v2", False)])
+
+        await shop_callback_handler(make_callback_query(data="shop", user_id=660004), fsm_context)
+        await items_list_callback_handler(make_callback_query(data="cat:0:0", user_id=660004), fsm_context)
+        await item_info_callback_handler(make_callback_query(data="itm:0:0", user_id=660004), fsm_context)
+
+        await buy_item_callback_handler(make_callback_query(data="buy_item", user_id=660004), fsm_context)
+        await back_to_item_handler(make_callback_query(data="back_to_item", user_id=660004), fsm_context)
+
+        # The card's Back is gp_0.
+        page = make_callback_query(data="gp_0", user_id=660004)
+        assert await self._passes_registered_filters(navigate_goods, page, fsm_context), \
+            "gp_0 would not reach navigate_goods — the Back button is dead"
+
+        await navigate_goods(page, fsm_context)
+        page.message.edit_text.assert_called_once()
+        assert page.message.edit_text.call_args[1].get("reply_markup") is not None
+
+    async def test_the_filter_probe_can_fail(self, make_callback_query, fsm_context):
+        """Guard: with the browsing state cleared, gp_0 must NOT route."""
+        from bot.handlers.user.shop_and_goods import navigate_goods
+
+        await fsm_context.set_state(None)
+        page = make_callback_query(data="gp_0", user_id=660005)
+        assert await self._passes_registered_filters(navigate_goods, page, fsm_context) is False

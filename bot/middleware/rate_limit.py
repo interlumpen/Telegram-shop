@@ -25,11 +25,12 @@ class RateLimitConfig:
 
     # Limits for specific actions — (requests, window_seconds).
     action_limits: dict = field(default_factory=lambda: {
-        'payment': (10, 60),    # 10 times a minute
+        'payment': (10, 60),  # 10 times a minute
         'shop_view': (60, 60),  # 60 times per minute — browsing and paging
-        'buy_item': (5, 60),    # 5 purchases a minute
-        'search': (10, 60),     # 10 new searches a minute — each is a LIKE scan
-        'top_up': (5, 300),     # 5 top-ups in 5 minutes
+        'buy_item': (5, 60),  # 5 purchases a minute
+        'search': (10, 60),  # 10 new searches a minute — each is a LIKE scan
+        'top_up': (5, 300),  # 5 top-ups in 5 minutes
+        'command': (20, 60),  # 20 slash commands a minute (admins bypass)
     })
 
     # Temporary ban after exceeding
@@ -151,10 +152,30 @@ class RedisRateLimiter:
     bot never fails closed when Redis is unavailable.
     """
 
+    # Trim the window, check the count and record the request in a single round-trip.
+    # Split across separate commands, two concurrent updates from one user could both pass the check before either recorded itself,
+    # letting the limit be exceeded — and it cost four round-trips per update.
+    _ALLOW_LUA = """
+    local key    = KEYS[1]
+    local now    = tonumber(ARGV[1])
+    local window = tonumber(ARGV[2])
+    local limit  = tonumber(ARGV[3])
+    local member = ARGV[4]
+    redis.call('ZREMRANGEBYSCORE', key, 0, now - window)
+    if redis.call('ZCARD', key) >= limit then
+        return 0
+    end
+    redis.call('ZADD', key, now, member)
+    redis.call('PEXPIRE', key, math.floor(window * 1000))
+    return 1
+    """
+
     def __init__(self, config: RateLimitConfig, redis, fallback: "RateLimiter"):
         self.config = config
         self.redis = redis
         self.fallback = fallback
+        # register_script caches by SHA and falls back to EVAL on NOSCRIPT.
+        self._allow_script = redis.register_script(self._ALLOW_LUA)
 
     @staticmethod
     def _member() -> str:
@@ -163,13 +184,10 @@ class RedisRateLimiter:
 
     async def _allow(self, key: str, window: int, limit: int) -> bool:
         now = time.time()
-        await self.redis.zremrangebyscore(key, 0, now - window)
-        count = await self.redis.zcard(key)
-        if count >= limit:
-            return False
-        await self.redis.zadd(key, {self._member(): now})
-        await self.redis.pexpire(key, int(window * 1000))
-        return True
+        allowed = await self._allow_script(
+            keys=[key], args=[now, window, limit, self._member()],
+        )
+        return bool(allowed)
 
     async def is_banned(self, user_id: int) -> bool:
         try:
@@ -265,7 +283,7 @@ class RateLimitMiddleware(BaseMiddleware):
             if text.startswith('/start'):
                 return 'shop_view'
             elif text.startswith('/'):
-                return 'admin_action'
+                return 'command'
 
         return 'default'
 
@@ -315,7 +333,8 @@ class RateLimitMiddleware(BaseMiddleware):
 
     async def _check_action_limit(self, user_id: int, action: str) -> bool:
         backend = self._backend()
-        return await backend.check_action_limit(user_id, action) if backend else self.limiter.check_action_limit(user_id, action)
+        return await backend.check_action_limit(user_id, action) if backend else self.limiter.check_action_limit(
+            user_id, action)
 
     async def _get_wait_time(self, user_id: int, action: str = None) -> int:
         backend = self._backend()

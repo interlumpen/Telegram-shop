@@ -4,8 +4,8 @@ from aiogram import Router, F
 from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, Message
 
-from bot.handlers.other import generate_short_hash
-from bot.i18n import localize
+from bot.handlers.other import generate_short_hash, display_name
+from bot.i18n import localize, esc
 from bot.database.models import Permission
 from bot.database.methods import get_item_info_cached, delete_item, get_goods_info, delete_item_from_position, \
     query_items_in_position
@@ -66,8 +66,9 @@ async def delete_str_item(message: Message, state):
             localize('admin.goods.delete.position.success'),
             reply_markup=back('goods_management')
         )
-        admin_info = await message.bot.get_chat(message.from_user.id)
-        await log_audit("delete_item", user_id=message.from_user.id, resource_type="Item", resource_id=item_name, details=f"admin={admin_info.first_name}")
+        admin_name = await display_name(message.bot, message.from_user.id)
+        await log_audit("delete_item", user_id=message.from_user.id, resource_type="Item", resource_id=item_name,
+                        details=f"admin={admin_name}")
     await state.clear()
 
 
@@ -129,11 +130,6 @@ async def show_str_item(message: Message, state: FSMContext):
 
     await message.answer(localize('admin.goods.list_in_position.title'), reply_markup=markup)
 
-    # Save state
-    await state.update_data(
-        items_in_position_paginator=paginator.get_state()
-    )
-
 
 @router.callback_query(F.data.startswith('gip_'), HasPermissionFilter(permission=Permission.CATALOG_MANAGE))
 async def navigate_items_in_goods(call: CallbackQuery, state: FSMContext):
@@ -148,9 +144,7 @@ async def navigate_items_in_goods(call: CallbackQuery, state: FSMContext):
     except ValueError:
         item_hash, current_index = payload, 0
 
-    # Get saved state
     data = await state.get_data()
-    paginator_state = data.get('items_in_position_paginator')
     item_hash_mapping = data.get('item_hash_mapping', {})
 
     # Get the actual item name from hash
@@ -164,7 +158,7 @@ async def navigate_items_in_goods(call: CallbackQuery, state: FSMContext):
 
     # Create paginator with cached state
     query_func = partial(query_items_in_position, item_name)
-    paginator = LazyPaginator(query_func, per_page=10, state=paginator_state)
+    paginator = LazyPaginator(query_func, per_page=10)
 
     # Check if there are any items
     total = await paginator.get_total_count()
@@ -186,9 +180,7 @@ async def navigate_items_in_goods(call: CallbackQuery, state: FSMContext):
 
     await call.message.edit_text(localize('admin.goods.list_in_position.title'), reply_markup=markup)
 
-    # Update state
     await state.update_data(
-        items_in_position_paginator=paginator.get_state(),
         current_position_name=item_name,
         item_hash_mapping={item_hash: item_name}
     )
@@ -240,10 +232,10 @@ async def item_info_callback_handler(call: CallbackQuery, state: FSMContext):
     markup = simple_buttons(actions, per_row=1)
 
     text = (
-        f'{localize("admin.goods.item.info.position", name=item_info["item_name"])}\n'
+        f'{localize("admin.goods.item.info.position", name=esc(item_info["item_name"]))}\n'
         f'{localize("admin.goods.item.info.price", price=position_info["price"], currency=EnvKeys.PAY_CURRENCY)}\n'
         f'{localize("admin.goods.item.info.id", id=item_info["id"])}\n'
-        f'{localize("admin.goods.item.info.value", value=item_info["value"])}'
+        f'{localize("admin.goods.item.info.value", value=esc(item_info["value"]))}'
     )
 
     await call.message.edit_text(text, parse_mode='HTML', reply_markup=markup)
@@ -296,16 +288,13 @@ async def process_delete_item_from_position(call: CallbackQuery, state: FSMConte
             )
             return
 
-        # Get saved state
-        paginator_state = data.get('items_in_position_paginator')
-
         # Create paginator with cached state (but clear cache to refresh after deletion)
         from bot.database.methods.lazy_queries import query_items_in_position
         from functools import partial
         from bot.misc.lazy_paginator import LazyPaginator
 
         query_func = partial(query_items_in_position, item_name)
-        paginator = LazyPaginator(query_func, per_page=10, state=paginator_state)
+        paginator = LazyPaginator(query_func, per_page=10)
 
         # Clear cache to force reload after deletion
         paginator.clear_cache()
@@ -336,9 +325,7 @@ async def process_delete_item_from_position(call: CallbackQuery, state: FSMConte
                 reply_markup=markup
             )
 
-            # Update state with new paginator
             await state.update_data(
-                items_in_position_paginator=paginator.get_state(),
                 item_hash_mapping={item_hash: item_name}
             )
     else:
@@ -347,5 +334,6 @@ async def process_delete_item_from_position(call: CallbackQuery, state: FSMConte
             reply_markup=back("goods_management")
         )
 
-    admin_info = await call.message.bot.get_chat(call.from_user.id)
-    await log_audit("delete_item_value", user_id=call.from_user.id, resource_type="ItemValue", resource_id=str(item_id), details=f"admin={admin_info.first_name}, position={position_name or '<?>'}")
+    admin_name = await display_name(call.message.bot, call.from_user.id)
+    await log_audit("delete_item_value", user_id=call.from_user.id, resource_type="ItemValue", resource_id=str(item_id),
+                    details=f"admin={admin_name}, position={position_name or '<?>'}")

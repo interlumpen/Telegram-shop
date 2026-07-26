@@ -21,6 +21,12 @@ async def invalidate_stats_periodically():
             logger.info("Stats cache invalidated by scheduler")
 
 
+_CATALOG_PREFIXES = (
+    "item_info:", "item_values:", "item_infinite:", "avg_rating:",
+    "category:", "category_items:",
+)
+
+
 async def daily_cleanup():
     """Daily cleaning of outdated data"""
     while True:
@@ -35,9 +41,9 @@ async def daily_cleanup():
 
         cache = get_cache_manager()
         if cache:
-            # Full invalidation of non-critical data
-            await cache.invalidate_pattern("item:*")
-            await cache.invalidate_pattern("category:*")
+            # Backstop for the targeted invalidation on the write path.
+            for prefix in _CATALOG_PREFIXES:
+                await cache.invalidate_pattern(f"{prefix}*")
             logger.info("Daily cache cleanup completed")
 
 

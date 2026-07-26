@@ -8,10 +8,10 @@ from bot.database.methods import (
     check_user_referrals, get_referral_earnings_stats, get_one_referral_earning, query_user_referrals,
     query_referral_earnings_from_user, query_all_referral_earnings,
 )
-from bot.handlers.other import get_bot_info
+from bot.handlers.other import get_bot_info, display_name
 from bot.keyboards import back, referral_system_keyboard, lazy_paginated_keyboard
 from bot.misc import EnvKeys, LazyPaginator
-from bot.i18n import localize
+from bot.i18n import localize, esc
 
 router = Router()
 
@@ -89,9 +89,6 @@ async def view_referrals_handler(call: CallbackQuery, state: FSMContext):
         reply_markup=markup
     )
 
-    # Save state
-    await state.update_data(referrals_paginator=paginator.get_state())
-
 
 @router.callback_query(F.data.startswith("referrals_page_"))
 async def referrals_pagination_handler(call: CallbackQuery, state: FSMContext):
@@ -106,13 +103,9 @@ async def referrals_pagination_handler(call: CallbackQuery, state: FSMContext):
 
     user_id = call.from_user.id
 
-    # Get saved state
-    data = await state.get_data()
-    paginator_state = data.get('referrals_paginator')
-
-    # Create paginator with cached state
+    # Create paginator
     query_func = partial(query_user_referrals, user_id)
-    paginator = LazyPaginator(query_func, per_page=10, state=paginator_state)
+    paginator = LazyPaginator(query_func, per_page=10)
 
     markup = await lazy_paginated_keyboard(
         paginator=paginator,
@@ -131,33 +124,19 @@ async def referrals_pagination_handler(call: CallbackQuery, state: FSMContext):
         reply_markup=markup
     )
 
-    # Update state
-    await state.update_data(referrals_paginator=paginator.get_state())
 
-
-@router.callback_query(F.data.startswith("referral_earnings_"))
-async def referral_earnings_handler(call: CallbackQuery, state: FSMContext):
-    """
-    Show all earnings from a specific referral with lazy loading.
-    """
-    try:
-        referral_id = int(call.data.split("_")[-1])
-    except (ValueError, IndexError):
-        await call.answer(localize("errors.invalid_data"))
-        return
-
+async def _show_ref_earnings_page(call: CallbackQuery, referral_id: int, page: int):
+    """Render one page of the caller's earnings from a specific referral."""
     user_id = call.from_user.id
+    paginator = LazyPaginator(
+        partial(query_referral_earnings_from_user, user_id, referral_id), per_page=10,
+    )
 
-    # Create paginator
-    query_func = partial(query_referral_earnings_from_user, user_id, referral_id)
-    paginator = LazyPaginator(query_func, per_page=10)
+    name = esc(await display_name(call.message.bot, referral_id))
 
-    # Check if there are any earnings
-    total = await paginator.get_total_count()
-    if total == 0:
-        referral_info = await call.message.bot.get_chat(referral_id)
+    if page == 0 and await paginator.get_total_count() == 0:
         await call.message.edit_text(
-            localize("referral.earnings.empty", id=referral_id, name=referral_info.first_name),
+            localize("referral.earnings.empty", id=referral_id, name=name),
             reply_markup=back("view_referrals")
         )
         return
@@ -170,17 +149,38 @@ async def referral_earnings_handler(call: CallbackQuery, state: FSMContext):
                                            date=earning.created_at.strftime("%d.%m.%Y %H:%M"),
                                            original_amount=int(earning.original_amount)),
         item_callback=lambda earning: f"earning_detail:{earning.id}:referral_earnings_{referral_id}",
-        page=0,
+        page=page,
         back_cb="view_referrals",
-        nav_cb_prefix=f"ref_earnings_{referral_id}_page_"
+        nav_cb_prefix=f"ref-earn_{referral_id}_"
     )
 
-    referral_info = await call.message.bot.get_chat(referral_id)
-    title_text = localize("referral.earnings.title", telegram_id=referral_id, name=referral_info.first_name)
+    title_text = localize("referral.earnings.title", telegram_id=referral_id, name=name)
     await call.message.edit_text(title_text, reply_markup=markup)
 
-    # Save state
-    await state.update_data(ref_earnings_paginator=paginator.get_state())
+
+@router.callback_query(F.data.startswith("referral_earnings_"))
+async def referral_earnings_handler(call: CallbackQuery, state: FSMContext):
+    """Show all earnings from a specific referral with lazy loading."""
+    try:
+        referral_id = int(call.data.split("_")[-1])
+    except (ValueError, IndexError):
+        await call.answer(localize("errors.invalid_data"))
+        return
+
+    await _show_ref_earnings_page(call, referral_id, 0)
+
+
+@router.callback_query(F.data.startswith("ref-earn_"))
+async def referral_earnings_pagination_handler(call: CallbackQuery, state: FSMContext):
+    """Pagination for a single referral's earnings. Format: ref-earn_{referral_id}_{page}"""
+    try:
+        _prefix, referral_id, page = call.data.split("_")
+        referral_id, page = int(referral_id), int(page)
+    except (ValueError, IndexError):
+        await call.answer(localize("errors.pagination_invalid"))
+        return
+
+    await _show_ref_earnings_page(call, referral_id, page)
 
 
 @router.callback_query(F.data == "view_all_earnings")
@@ -221,9 +221,6 @@ async def view_all_earnings_handler(call: CallbackQuery, state: FSMContext):
         reply_markup=markup
     )
 
-    # Save state
-    await state.update_data(all_earnings_paginator=paginator.get_state())
-
 
 @router.callback_query(F.data.startswith("all_earnings_page_"))
 async def all_earnings_pagination_handler(call: CallbackQuery, state: FSMContext):
@@ -238,13 +235,9 @@ async def all_earnings_pagination_handler(call: CallbackQuery, state: FSMContext
 
     user_id = call.from_user.id
 
-    # Get saved state
-    data = await state.get_data()
-    paginator_state = data.get('all_earnings_paginator')
-
-    # Create paginator with cached state
+    # Create paginator
     query_func = partial(query_all_referral_earnings, user_id)
-    paginator = LazyPaginator(query_func, per_page=10, state=paginator_state)
+    paginator = LazyPaginator(query_func, per_page=10)
 
     markup = await lazy_paginated_keyboard(
         paginator=paginator,
@@ -263,9 +256,6 @@ async def all_earnings_pagination_handler(call: CallbackQuery, state: FSMContext
         localize("all.earnings.title"),
         reply_markup=markup
     )
-
-    # Update state
-    await state.update_data(all_earnings_paginator=paginator.get_state())
 
 
 @router.callback_query(F.data.startswith("earning_detail:"))
@@ -287,12 +277,12 @@ async def earning_detail_handler(call: CallbackQuery, state: FSMContext):
     if not earning_info:
         await call.answer(localize("errors.invalid_data"), show_alert=True)
         return
-    user_info = await call.message.bot.get_chat(earning_info['referral_id'])
 
     await call.message.edit_text(localize('referral.item.info',
                                           id=earning_id,
                                           telegram_id=earning_info['referral_id'],
-                                          name=user_info.first_name,
+                                          name=esc(await display_name(
+                                              call.message.bot, earning_info['referral_id'])),
                                           amount=earning_info['amount'],
                                           currency=EnvKeys.PAY_CURRENCY,
                                           date=earning_info['created_at'].strftime("%d.%m.%Y %H:%M"),

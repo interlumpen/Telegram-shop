@@ -62,8 +62,10 @@ and optional Redis caching.
   database: per‑update blocked checks are served from memory, audit writes happen in the
   background, cart promo validation is batched (no per‑line queries), paginator counts and
   hot lookups are cached, and cache misses are single‑flighted so an expiring hot key doesn't
-  stampede the DB. **Optional** Redis caching and persistent FSM storage; the bot runs fine
-  without Redis (in‑memory FSM, no caching).
+  stampede the DB. Every paginated list orders by a unique tiebreaker, so paging never repeats
+  or skips a row. **Optional** Redis caching and persistent FSM storage; the bot runs fine
+  without Redis (in‑memory FSM, no caching), and falls back to that automatically if Redis is
+  configured but unreachable at startup rather than failing on every update.
 - **Localization** — Russian and English.
 
 ## 🔒 Security
@@ -75,16 +77,16 @@ Implemented, and described honestly so you know what to rely on:
   retried/duplicate callback credits once); balance changes run under row locks (ACID); a
   circuit breaker pauses CryptoPay calls after repeated failures; self‑referral is blocked by
   DB `CHECK` constraints and a transaction guard. **Double‑spend on a purchase is prevented at
-  the database layer** (row locks + stock removal + idempotent records), not by trusting the
-  client.
+  the database layer** (row locks + stock removal + idempotent records), not by trusting the client.
 - **Access control** — Telegram‑ID authentication; a 10‑bit permission bitmask with bitwise
   *subset* validation (you cannot create or assign a role exceeding your own); the role/permission
   cache is shared through Redis (when enabled) so a web‑panel edit invalidates it across every
   worker, falling back to a per‑process cache when Redis is off.
 - **Rate limiting** — global and per‑action limits with temporary bans. When Redis is enabled the
-  limiter state is shared across workers (sliding‑window sorted sets + TTL bans); without Redis it
-  degrades to a per‑process in‑memory limiter. The web‑panel login limiter (5 attempts / 15 min per
-  IP) and 30‑minute sessions remain per‑process.
+  limiter state is shared across workers (sliding‑window sorted sets + TTL bans, evaluated in a
+  single atomic script so concurrent updates can't slip past the limit); without Redis it degrades
+  to a per‑process in‑memory limiter. The web‑panel login limiter (5 attempts / 15 min per IP) and
+  30‑minute sessions remain per‑process.
 - **Web panel** — constant‑time credential/secret comparison; proxy‑aware client IP (trusts
   `X‑Forwarded‑For` only when the socket peer is loopback, so an external client can't spoof it);
   remote login with the default `admin`/`admin` is blocked; every create/edit/delete is
@@ -168,7 +170,9 @@ Worth knowing:
   `POST /webhook` route onto the *already running* Starlette app rather than
   starting a second one; the secret header is compared with `hmac.compare_digest`.
 - **Redis is optional.** Without it: in-memory FSM, no caching, and a per-process
-  rate limiter and role cache. With it, those are shared across workers.
+  rate limiter and role cache. With it, those are shared across workers. The
+  connection is verified with a PING at startup, so a configured-but-unreachable
+  Redis degrades to in-memory storage instead of breaking every update.
 - **The web panel is not read-only bookkeeping.** It runs in the same process as
   the bot, so an edit there clears the same caches and can message users — that
   is how a restock added in the panel reaches the people waiting for it.
@@ -318,11 +322,12 @@ git clone https://github.com/interlumpen/Telegram-shop.git
 cd Telegram-shop
 cp .env.example .env      # then edit .env
 
-# with Redis (caching enabled):
-docker compose --profile redis up -d --build
-# without Redis: set REDIS_ENABLED=0 in .env, then:
 docker compose up -d --build
 ```
+
+Postgres, Redis and the bot all start together, and the bot waits for the first two to report
+healthy. To run without caching, set `REDIS_ENABLED=0` in `.env` — the bot then ignores Redis
+entirely (in‑memory FSM, no caching).
 
 The container applies migrations (`alembic upgrade head`), seeds roles, starts the bot, and
 launches the admin panel at http://localhost:9090/admin. Logs: `docker compose logs -f bot`.
@@ -542,8 +547,8 @@ admins keep working.
 ### SQLAdmin
 
 You can do all the same things in SQLAdmin! Edits made there are not second‑class: they clear
-the caches they affect (user, role, product, stock) and adding stock notifies the users waiting
-for it, just like the in‑chat flow.
+the caches they affect (user, role, product, stock, review rating) and adding stock notifies the
+users waiting for it, just like the in‑chat flow.
 
 ![SQLAdmin](assets/sqladmin_info.png)
 
@@ -553,14 +558,16 @@ for it, just like the in‑chat flow.
 
 ## 🧪 Testing
 
-**664 tests** (`pytest`). The data layer runs against a real in‑memory async SQLite database
+**714 tests** (`pytest`). The data layer runs against a real in‑memory async SQLite database
 (real SQL, transactions, and constraints) — only external services are mocked (Telegram Bot
 API, CryptoPay, Redis). What's covered:
 
 - **Transactions & money** — purchase and cart‑checkout atomicity (balance deducted, stock
   removed, rollback on error), quantity checkout (one row per unit, partial stock aborts
   without charging, per‑unit prices summing back to the charge), promo semantics at quantity,
-  payment **idempotency**, atomic admin balance changes, referral bonus calculation.
+  payment **idempotency**, top‑ups crediting exactly the invoiced amount for every payment
+  method, atomic stock replacement (a rejected rename leaves the old stock intact), atomic admin
+  balance changes, referral bonus calculation.
 - **Promo codes & sales** — every validation path (buy, cart checkout, balance redeem,
   read‑only validate), scope enforcement (a promo whose bound category/product was deleted
   applies to nothing), what the cart displays matching what checkout charges, sale pricing,
@@ -573,8 +580,13 @@ API, CryptoPay, Redis). What's covered:
   web‑panel login limiter, and role‑cache behavior.
 - **Handlers** — user flows (`/start`, profile, shop, search, cart, referrals) and admin flows
   (user/role/balance management, catalog, paginated lists, profile views).
-- **Infrastructure** — broadcast, restock notifications, payment recovery, metrics, caching &
-  invalidation (including web‑panel edits), pagination, i18n, validators, and audit logging.
+- **Infrastructure** — broadcast, restock notifications, payment recovery, metrics (including
+  that user‑supplied callback data can't forge a metric line), caching & invalidation (including
+  web‑panel edits and that a Redis outage defers invalidations instead of dropping them),
+  pagination, i18n, validators, and audit logging.
+- **Keyboards & routing** — every callback payload a keyboard generates fits Telegram's 64‑byte
+  limit (a long or Cyrillic product name used to overflow it), and every pagination prefix a view
+  produces has a handler registered for it, so an arrow button can't be a dead end.
 
 ```bash
 pytest                     # full suite (coverage runs automatically)

@@ -4,6 +4,21 @@ from bot.i18n import localize
 from bot.logger_mesh import logger
 from bot.misc import EnvKeys
 
+# Numeric(12, 2) leaves 10 integer digits; anything larger is a DB error. Shared by the add and the update flows so they cannot drift.
+MAX_ITEM_PRICE = 99_999_999
+
+
+def parse_price(text: str) -> int | None:
+    """Parse an item price from admin input. None if it is not a usable price.
+    """
+    price_text = (text or "").strip()
+    if not (price_text.isascii() and price_text.isdigit()):
+        return None
+    price = int(price_text)
+    if price < 1 or price > MAX_ITEM_PRICE:
+        return None
+    return price
+
 
 async def _notify_restock_safe(bot, item_name: str) -> None:
     """Fire restock notifications, never letting a failure break the stock add."""

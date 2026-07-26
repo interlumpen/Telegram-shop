@@ -1,9 +1,12 @@
-from typing import Callable, List, Optional, Dict
+from typing import Callable, List
 
 
 class LazyPaginator:
     """
-    Paginator with lazy loading of data from database
+    Paginator with lazy loading of data from database.
+
+    Scoped to a single render: the page cache lives only as long as the
+    instance.
     """
 
     def __init__(
@@ -11,26 +14,20 @@ class LazyPaginator:
             query_func: Callable,
             per_page: int = 10,
             cache_pages: int = 3,
-            state: Optional[Dict] = None
     ):
         """
         Args:
             query_func: Function to query data (offset, limit) -> List
             per_page: Items per page
             cache_pages: Number of pages in cache
-            state: Previous paginator state (dict) for cache restoration
         """
         self.query_func = query_func
         self.per_page = per_page
         self.cache_pages = cache_pages
 
-        # Restore from dictionary or create new.
         self._cache = {}
         self._total_count = None
-        if state and isinstance(state, dict):
-            self.current_page = state.get('current_page', 0)
-        else:
-            self.current_page = 0
+        self.current_page = 0
 
     async def get_total_count(self) -> int:
         """Get the total number of items"""
@@ -83,16 +80,6 @@ class LazyPaginator:
         """Get total number of pages"""
         total = await self.get_total_count()
         return max(1, (total + self.per_page - 1) // self.per_page)
-
-    def get_state(self) -> Dict:
-        """Get current state for FSM storage.
-
-        Excludes the page cache (non-serializable ORM objects) and total_count
-        (intentionally recomputed on restore so page counts never go stale).
-        """
-        return {
-            'current_page': self.current_page,
-        }
 
     def clear_cache(self):
         """Clear cache"""

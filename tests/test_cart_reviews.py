@@ -269,3 +269,44 @@ class TestRenameKeepsLinks:
         items = await get_cart_items(970001)
         assert len(items) == 1
         assert items[0]["item_name"] == "RenNew"
+
+
+class TestReviewRatingValidation:
+    async def test_create_review_refuses_out_of_range_rating(self, user_factory, item_factory):
+        from bot.database.methods.create import create_review
+
+        await user_factory(telegram_id=700501)
+        await item_factory(name="RatedItem", price=10)
+
+        assert await create_review(700501, "RatedItem", 0) is None
+        assert await create_review(700501, "RatedItem", 6) is None
+        assert await create_review(700501, "RatedItem", 99) is None
+        # The valid case still works, so nothing was over-restricted.
+        assert await create_review(700501, "RatedItem", 5) is not None
+
+    async def test_create_review_refuses_missing_item_name(self, user_factory):
+        from bot.database.methods.create import create_review
+
+        await user_factory(telegram_id=700502)
+        assert await create_review(700502, "", 5) is None
+        assert await create_review(700502, None, 5) is None
+
+    async def test_forged_rating_callback_is_rejected(self, make_callback_query, fsm_context):
+        from bot.handlers.user.shop_and_goods import receive_rating_handler
+
+        for payload in ("rating:99", "rating:0", "rating:abc", "rating:"):
+            call = make_callback_query(data=payload, user_id=700503)
+            await receive_rating_handler(call, fsm_context)
+            call.answer.assert_called()
+            # Nothing was stashed for a later create_review call.
+            assert (await fsm_context.get_data()).get("review_rating") is None
+
+    async def test_submit_with_empty_state_reports_failure(self, make_callback_query, fsm_context):
+        """An expired session leaves item/rating unset; that must not crash."""
+        from bot.handlers.user.shop_and_goods import skip_review_text_handler
+
+        call = make_callback_query(data="skip_review_text", user_id=700504)
+        await skip_review_text_handler(call, fsm_context)
+
+        call.message.edit_text.assert_called_once()
+        assert "errors.something_wrong" in call.message.edit_text.call_args[0][0]

@@ -11,7 +11,8 @@ from bot.database.methods.pricing import effective_price, coerce_sale_until
 from bot.database.methods.audit import log_audit
 from bot.keyboards.inline import back
 from bot.filters import HasPermissionFilter
-from bot.i18n import localize
+from bot.i18n import localize, esc
+from bot.handlers.other import display_name
 from bot.states import SaleFSM
 
 router = Router()
@@ -72,10 +73,11 @@ async def sale_percent(message: Message, state):
 
     if percent == 0:
         await set_item_sale(item_name, None, None)
-        await message.answer(localize('admin.sale.disabled', name=item_name), reply_markup=back('goods_management'))
-        admin_info = await message.bot.get_chat(message.from_user.id)
+        await message.answer(localize('admin.sale.disabled', name=esc(item_name)),
+                             reply_markup=back('goods_management'))
+        admin_name = await display_name(message.bot, message.from_user.id)
         await log_audit("set_item_sale", user_id=message.from_user.id, resource_type="Item",
-                        resource_id=item_name, details=f"admin={admin_info.first_name}, disabled")
+                        resource_id=item_name, details=f"admin={admin_name}, disabled")
         await state.clear()
         return
 
@@ -106,11 +108,11 @@ async def sale_days(message: Message, state):
 
     until_str = sale_until.strftime('%Y-%m-%d %H:%M')
     await message.answer(
-        localize('admin.sale.success', percent=percent, name=item_name, until=until_str),
+        localize('admin.sale.success', percent=percent, name=esc(item_name), until=until_str),
         parse_mode='HTML',
         reply_markup=back('goods_management'),
     )
-    admin_info = await message.bot.get_chat(message.from_user.id)
+    admin_name = await display_name(message.bot, message.from_user.id)
     await log_audit("set_item_sale", user_id=message.from_user.id, resource_type="Item", resource_id=item_name,
-                    details=f"admin={admin_info.first_name}, percent={percent}, until={sale_until.isoformat()}")
+                    details=f"admin={admin_name}, percent={percent}, until={sale_until.isoformat()}")
     await state.clear()

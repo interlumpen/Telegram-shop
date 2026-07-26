@@ -137,3 +137,59 @@ class TestRulesHandler:
             await rules_callback_handler(call, fsm_context)
 
         call.answer.assert_called_once()
+
+
+class TestMainMenuReceivesPermissionBitmask:
+    async def test_custom_role_without_admin_perms_gets_no_admin_button(
+        self, make_callback_query, fsm_context, user_factory, role_factory
+    ):
+        from bot.handlers.user.main import back_to_menu_callback_handler
+        from bot.database.models import Permission
+
+        # A plain-user role whose *id* is >= 4, so role_id and bitmask diverge.
+        role_id = await role_factory(name="PLAINCUSTOM", permissions=Permission.USE)
+        assert role_id >= 4, "fixture assumption: custom roles get ids past the built-ins"
+
+        await user_factory(telegram_id=630001, role_id=role_id)
+
+        call = make_callback_query(data="back_to_menu", user_id=630001)
+        await back_to_menu_callback_handler(call, fsm_context)
+
+        markup = call.message.edit_text.call_args[1]["reply_markup"]
+        cbs = [b.callback_data for row in markup.inline_keyboard for b in row]
+        assert "console" not in cbs
+
+    async def test_role_with_admin_perms_still_gets_the_button(
+        self, make_callback_query, fsm_context, user_factory, role_factory
+    ):
+        from bot.handlers.user.main import back_to_menu_callback_handler
+        from bot.database.models import Permission
+
+        role_id = await role_factory(
+            name="REALADMIN", permissions=Permission.USE | Permission.CATALOG_MANAGE
+        )
+        await user_factory(telegram_id=630002, role_id=role_id)
+
+        call = make_callback_query(data="back_to_menu", user_id=630002)
+        await back_to_menu_callback_handler(call, fsm_context)
+
+        markup = call.message.edit_text.call_args[1]["reply_markup"]
+        cbs = [b.callback_data for row in markup.inline_keyboard for b in row]
+        assert "console" in cbs
+
+
+class TestProfileWithoutUserRow:
+    """A stale keyboard (or a wiped database) can deliver a callback from
+    someone with no row; reading user fields off None used to raise."""
+
+    async def test_profile_registers_the_missing_user(self, make_callback_query, fsm_context):
+        from bot.handlers.user.main import profile_callback_handler
+        from bot.database.methods.read import check_user
+
+        assert await check_user(630010) is None
+
+        call = make_callback_query(data="profile", user_id=630010)
+        await profile_callback_handler(call, fsm_context)
+
+        assert await check_user(630010) is not None
+        call.message.edit_text.assert_called_once()
