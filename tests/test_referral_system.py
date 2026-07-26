@@ -4,39 +4,26 @@ from unittest.mock import patch, AsyncMock, MagicMock
 
 from sqlalchemy import select
 
+import bot.handlers.user.referral_system as ref_mod
+from bot.database.main import Database
 from bot.database.methods.create import create_user, create_referral_earning
 from bot.database.methods.read import (
     get_one_referral_earning, check_user_referrals, get_referral_earnings_stats,
+)
+from bot.database.models.main import ReferralEarnings
+from bot.handlers.user.referral_system import (
+    view_referrals_handler, view_all_earnings_handler,
 )
 
 
 class TestReferralPage:
 
-    async def test_referral_page_shows_link(self, make_callback_query, fsm_context, user_factory):
-        """Test referral page via the router-registered handler (first referral_callback_handler)."""
+    async def test_referral_page_shows_link(self, user_factory):
+        """A fresh user has no referrals and no earnings yet."""
         await user_factory(telegram_id=700001)
 
-        call = make_callback_query(data="referral_system", user_id=700001)
-
-        # Import the module and get the handler from the router
-        import bot.handlers.user.referral_system as ref_mod
-        # The first handler in the router for F.data == "referral_system"
-        # We'll call it directly by finding it from router callbacks
-        handler = None
-        for route in ref_mod.router.callback_query.handlers:
-            # Check if this handler matches "referral_system" callback
-            if hasattr(route, 'callback'):
-                cb = route.callback
-                if cb.__name__ == 'referral_callback_handler' and 'earning_detail' not in str(getattr(route, 'filters', '')):
-                    handler = cb
-                    break
-
-        # Simpler approach: just test the data we can test
-        referrals_count = await check_user_referrals(700001)
-        assert referrals_count == 0
-
-        earnings_stats = await get_referral_earnings_stats(700001)
-        assert earnings_stats['total_earnings_count'] == 0
+        assert await check_user_referrals(700001) == 0
+        assert (await get_referral_earnings_stats(700001))['total_earnings_count'] == 0
 
     async def test_referral_page_with_referrals(self, make_callback_query, fsm_context, user_factory):
         """Test that referral stats work with actual referrals."""
@@ -58,7 +45,6 @@ class TestReferralPage:
 class TestViewReferrals:
 
     async def test_view_referrals_empty(self, make_callback_query, fsm_context, user_factory):
-        from bot.handlers.user.referral_system import view_referrals_handler
 
         await user_factory(telegram_id=700010)
 
@@ -67,11 +53,9 @@ class TestViewReferrals:
         await view_referrals_handler(call, fsm_context)
 
         call.message.edit_text.assert_called_once()
-        text = call.message.edit_text.call_args[0][0]
-        assert isinstance(text, str)
+        assert "referrals.list.empty" in call.message.edit_text.call_args[0][0]
 
     async def test_view_referrals_with_data(self, make_callback_query, fsm_context, user_factory):
-        from bot.handlers.user.referral_system import view_referrals_handler
 
         await user_factory(telegram_id=700011)
         await create_user(
@@ -88,16 +72,13 @@ class TestViewReferrals:
             await view_referrals_handler(call, fsm_context)
 
         call.message.edit_text.assert_called_once()
-        text = call.message.edit_text.call_args[0][0]
-        assert isinstance(text, str)
-        # Check that reply_markup is passed
+        assert "referrals.list.title" in call.message.edit_text.call_args[0][0]
         assert call.message.edit_text.call_args[1].get('reply_markup') is not None
 
 
 class TestViewAllEarnings:
 
     async def test_view_all_earnings_empty(self, make_callback_query, fsm_context, user_factory):
-        from bot.handlers.user.referral_system import view_all_earnings_handler
 
         await user_factory(telegram_id=700020)
 
@@ -106,9 +87,9 @@ class TestViewAllEarnings:
         await view_all_earnings_handler(call, fsm_context)
 
         call.message.edit_text.assert_called_once()
+        assert "all.earnings.empty" in call.message.edit_text.call_args[0][0]
 
     async def test_view_all_earnings_with_data(self, make_callback_query, fsm_context, user_factory):
-        from bot.handlers.user.referral_system import view_all_earnings_handler
 
         await user_factory(telegram_id=700021)
         await create_user(
@@ -131,6 +112,8 @@ class TestViewAllEarnings:
             await view_all_earnings_handler(call, fsm_context)
 
         call.message.edit_text.assert_called_once()
+        assert "all.earnings.title" in call.message.edit_text.call_args[0][0]
+        assert call.message.edit_text.call_args[1].get('reply_markup') is not None
 
 
 class TestEarningDetail:
@@ -152,8 +135,6 @@ class TestEarningDetail:
         )
 
         # Get the earning
-        from bot.database.main import Database
-        from bot.database.models.main import ReferralEarnings
         async with Database().session() as s:
             result = await s.execute(
                 select(ReferralEarnings).where(ReferralEarnings.referrer_id == 700030)

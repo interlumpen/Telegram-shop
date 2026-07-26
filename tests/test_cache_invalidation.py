@@ -1,14 +1,28 @@
 import asyncio
 from decimal import Decimal
+from unittest.mock import patch, AsyncMock, MagicMock
 
-from bot.database.methods.read import invalidate_user_cache, invalidate_item_cache, invalidate_category_cache, \
-    invalidate_stats_cache, check_value_cached
+from sqlalchemy import select
+from redis.exceptions import ConnectionError as RedisConnectionError
+from redis.exceptions import TimeoutError as RedisTimeoutError
 
-from bot.database.methods.update import update_balance, set_role, \
-    set_user_blocked
+from bot.database.main import Database
+from bot.database.methods.read import (
+    invalidate_user_cache, invalidate_item_cache, invalidate_category_cache,
+    invalidate_stats_cache, check_value_cached, async_cached, is_subscribed_to_stock,
+)
+from bot.database.methods.create import create_item, subscribe_to_stock
+from bot.database.methods.lazy_queries import query_categories, query_items_in_category
+from bot.database.methods.update import update_balance, set_role, set_user_blocked, update_item
 from bot.database.methods.delete import delete_item, delete_category
 from bot.database.methods.transactions import buy_item_transaction, \
     process_payment_with_referral
+from bot.database.models.main import Goods, ItemValues
+from bot.middleware.security import (
+    AuthenticationMiddleware, set_auth_middleware, get_auth_middleware,
+)
+from bot.misc.caching.cache import CacheManager
+from bot.web.admin import ItemValuesAdmin, set_notifier_bot
 
 
 class TestCacheInvalidationFunctions:
@@ -31,9 +45,6 @@ class TestCacheInvalidationFunctions:
 
     async def test_invalidate_user_cache_drops_middleware_role_entry(self, fake_cache):
         import time as _time
-        from bot.middleware.security import (
-            AuthenticationMiddleware, set_auth_middleware, get_auth_middleware,
-        )
         prev = get_auth_middleware()
         mw = AuthenticationMiddleware()
         mw.admin_cache[123] = (4, _time.time())
@@ -103,8 +114,6 @@ class TestCacheInvalidationFunctions:
         assert "categories:count" not in fake_cache.store
 
     async def test_paginator_counts_are_cached_and_invalidated(self, fake_cache, category_factory):
-        from bot.database.methods.lazy_queries import query_categories, query_items_in_category
-        from bot.database.methods.create import create_item
 
         await category_factory("CountCat")
 
@@ -151,7 +160,6 @@ class TestCacheInvalidationFunctions:
         assert "stats:daily:2000-01-01" in fake_cache.store
 
     async def test_async_cached_single_flight(self, fake_cache):
-        from bot.database.methods.read import async_cached
 
         started = 0
         release = asyncio.Event()
@@ -301,13 +309,11 @@ class TestCacheInvalidationAfterMutations:
 
 class TestWebPanelStockEdits:
     def _request(self):
-        from unittest.mock import MagicMock
         request = MagicMock()
         request.client.host = "127.0.0.1"
         return request
 
     async def _fire(self, method, *args):
-        from unittest.mock import patch
 
         scheduled = []
         with patch('bot.web.admin.safe_create_task', side_effect=scheduled.append):
@@ -316,9 +322,6 @@ class TestWebPanelStockEdits:
             await coro
 
     async def _stock_row(self, item_name: str):
-        from sqlalchemy import select
-        from bot.database.main import Database
-        from bot.database.models.main import Goods, ItemValues
 
         async with Database().session() as s:
             item_id = (await s.execute(select(Goods.id).where(Goods.name == item_name))).scalar()
@@ -327,7 +330,6 @@ class TestWebPanelStockEdits:
             )).scalars().first()
 
     async def test_create_invalidates_item_cache(self, fake_cache, item_factory):
-        from bot.web.admin import ItemValuesAdmin
 
         await item_factory(name="PanelItem", price=10, values=[("v1", False)])
         row = await self._stock_row("PanelItem")
@@ -338,7 +340,6 @@ class TestWebPanelStockEdits:
         assert "item_values:PanelItem" not in fake_cache.store
 
     async def test_delete_invalidates_item_cache(self, fake_cache, item_factory):
-        from bot.web.admin import ItemValuesAdmin
 
         await item_factory(name="PanelDel", price=10, values=[("v1", False)])
         row = await self._stock_row("PanelDel")
@@ -349,9 +350,6 @@ class TestWebPanelStockEdits:
         assert "item_values:PanelDel" not in fake_cache.store
 
     async def test_create_notifies_stock_subscribers(self, mock_bot, item_factory, user_factory):
-        from bot.web.admin import ItemValuesAdmin, set_notifier_bot
-        from bot.database.methods.create import subscribe_to_stock
-        from bot.database.methods.read import is_subscribed_to_stock
 
         await user_factory(telegram_id=990001)
         await item_factory(name="PanelRestock", price=10, values=[("v1", False)])
@@ -370,8 +368,6 @@ class TestWebPanelStockEdits:
 
     async def test_edit_does_not_notify(self, mock_bot, item_factory, user_factory):
         """Only new stock is an arrival; editing a value in place is not."""
-        from bot.web.admin import ItemValuesAdmin, set_notifier_bot
-        from bot.database.methods.create import subscribe_to_stock
 
         await user_factory(telegram_id=990002)
         await item_factory(name="PanelEdit", price=10, values=[("v1", False)])
@@ -387,8 +383,6 @@ class TestWebPanelStockEdits:
         mock_bot.send_message.assert_not_awaited()
 
     async def test_no_bot_configured_is_a_noop(self, item_factory, user_factory):
-        from bot.web.admin import ItemValuesAdmin, set_notifier_bot
-        from bot.database.methods.create import subscribe_to_stock
 
         await user_factory(telegram_id=990003)
         await item_factory(name="PanelNoBot", price=10, values=[("v1", False)])
@@ -441,7 +435,6 @@ class _FakeRedis:
 
 class TestDeferredInvalidationOnRedisOutage:
     async def test_deferred_delete_replays_on_recovery(self):
-        from bot.misc.caching.cache import CacheManager
         r = _FakeRedis()
         r.store["user:1"] = b"stale"
         cm = CacheManager(r)
@@ -459,7 +452,6 @@ class TestDeferredInvalidationOnRedisOutage:
         assert not cm._pending_deletes
 
     async def test_deferred_pattern_replays_on_recovery(self):
-        from bot.misc.caching.cache import CacheManager
         r = _FakeRedis()
         r.store["category:A"] = b"x"
         r.store["category:B"] = b"y"
@@ -477,8 +469,6 @@ class TestDeferredInvalidationOnRedisOutage:
 
 class TestCacheManagerRedisDegradation:
     def _manager(self, exc):
-        from unittest.mock import AsyncMock, MagicMock
-        from bot.misc.caching.cache import CacheManager
 
         redis = MagicMock()
         redis.get = AsyncMock(side_effect=exc)
@@ -488,21 +478,18 @@ class TestCacheManagerRedisDegradation:
         return CacheManager(redis)
 
     async def test_redis_connection_error_marks_unhealthy_on_get(self):
-        from redis.exceptions import ConnectionError as RedisConnectionError
 
         mgr = self._manager(RedisConnectionError("connection lost"))
         assert await mgr.get("user:1") is None
         assert mgr._healthy is False
 
     async def test_redis_timeout_marks_unhealthy_on_set(self):
-        from redis.exceptions import TimeoutError as RedisTimeoutError
 
         mgr = self._manager(RedisTimeoutError("timed out"))
         assert await mgr.set("user:1", {"a": 1}) is False
         assert mgr._healthy is False
 
     async def test_delete_defers_invalidation_for_replay(self):
-        from redis.exceptions import ConnectionError as RedisConnectionError
 
         mgr = self._manager(RedisConnectionError("connection lost"))
         assert await mgr.delete("item_info:Widget") is False
@@ -511,7 +498,6 @@ class TestCacheManagerRedisDegradation:
         assert "item_info:Widget" in mgr._pending_deletes
 
     async def test_pattern_invalidation_is_deferred_too(self):
-        from redis.exceptions import ConnectionError as RedisConnectionError
 
         mgr = self._manager(RedisConnectionError("connection lost"))
         assert await mgr.invalidate_pattern("auth:role:*") == 0
@@ -520,7 +506,6 @@ class TestCacheManagerRedisDegradation:
     def test_known_prefixes_cover_every_written_namespace(self):
         """The overflow path clears these wholesale; a namespace missing from the
         list would survive an outage as stale data."""
-        from bot.misc.caching.cache import CacheManager
 
         for prefix in ("item_info:", "item_values:", "item_infinite:", "avg_rating:",
                        "category:", "category_items:", "user:", "role:", "auth:role:",
@@ -532,7 +517,6 @@ class TestRatingCacheInvalidation:
 
     async def test_item_rename_drops_the_old_average(self, item_factory, fake_cache):
         """avg_rating is keyed by product name, so a rename must clear it."""
-        from bot.database.methods.update import update_item
 
         await item_factory(name="OldName", price=100, category="RateCat")
         fake_cache.store["avg_rating:OldName"] = 4.5
@@ -552,7 +536,6 @@ class TestCategoryMoveInvalidation:
     ):
         """Only the destination category used to be invalidated, leaving the
         source category's cached item list and count stale for up to 1800s."""
-        from bot.database.methods.update import update_item
 
         await item_factory(name="Movable", price=100, category="FromCat")
         await category_factory("ToCat")

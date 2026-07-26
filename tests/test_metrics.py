@@ -103,7 +103,6 @@ class TestAnalyticsMiddleware:
         self.metrics = MetricsCollector()
         self.mw = AnalyticsMiddleware(self.metrics)
 
-    @pytest.mark.asyncio
     async def test_tracks_message_event(self):
         event = MagicMock()
         event.from_user = MagicMock()
@@ -118,7 +117,6 @@ class TestAnalyticsMiddleware:
         assert self.metrics.events.get("bot_message", 0) == 1
         handler.assert_called_once()
 
-    @pytest.mark.asyncio
     async def test_tracks_command_event(self):
         event = MagicMock()
         event.from_user = MagicMock()
@@ -131,7 +129,6 @@ class TestAnalyticsMiddleware:
 
         assert self.metrics.events.get("bot_command_start", 0) == 1
 
-    @pytest.mark.asyncio
     async def test_tracks_callback_event(self):
         event = MagicMock()
         event.from_user = MagicMock()
@@ -144,7 +141,6 @@ class TestAnalyticsMiddleware:
 
         assert self.metrics.events.get("bot_shop", 0) == 1
 
-    @pytest.mark.asyncio
     async def test_tracks_error(self):
         event = MagicMock()
         event.from_user = MagicMock()
@@ -159,7 +155,6 @@ class TestAnalyticsMiddleware:
 
         assert self.metrics.errors["ValueError"] == 1
 
-    @pytest.mark.asyncio
     async def test_tracks_timing(self):
         event = MagicMock()
         event.from_user = MagicMock()
@@ -215,7 +210,6 @@ class TestAnalyticsEventNaming:
         self.metrics = MetricsCollector()
         self.mw = AnalyticsMiddleware(self.metrics)
 
-    @pytest.mark.asyncio
     async def test_hostile_callback_data_collapses_to_other(self):
         event = MagicMock()
         event.from_user = MagicMock()

@@ -1,4 +1,3 @@
-import pytest
 from bot.misc.lazy_paginator import LazyPaginator
 
 
@@ -18,35 +17,29 @@ async def _empty_query(offset=0, limit=10, count_only=False):
 
 class TestLazyPaginator:
 
-    @pytest.mark.asyncio
     async def test_get_page_basic(self):
         p = LazyPaginator(_mock_query, per_page=10)
         items = await p.get_page(0)
         assert items == list(range(10))
 
-    @pytest.mark.asyncio
     async def test_get_page_second(self):
         p = LazyPaginator(_mock_query, per_page=10)
         items = await p.get_page(1)
         assert items == list(range(10, 20))
 
-    @pytest.mark.asyncio
     async def test_get_page_last(self):
         p = LazyPaginator(_mock_query, per_page=10)
         items = await p.get_page(2)
         assert items == list(range(20, 25))
 
-    @pytest.mark.asyncio
     async def test_get_total_count(self):
         p = LazyPaginator(_mock_query, per_page=10)
         assert await p.get_total_count() == 25
 
-    @pytest.mark.asyncio
     async def test_get_total_pages(self):
         p = LazyPaginator(_mock_query, per_page=10)
         assert await p.get_total_pages() == 3
 
-    @pytest.mark.asyncio
     async def test_page_caching(self):
         call_count = 0
 
@@ -63,7 +56,6 @@ class TestLazyPaginator:
         # 1 call for first get_page, 0 for second (cached)
         assert call_count == 1
 
-    @pytest.mark.asyncio
     async def test_cache_eviction(self):
         p = LazyPaginator(_mock_query, per_page=5, cache_pages=2)
         await p.get_page(0)
@@ -74,7 +66,6 @@ class TestLazyPaginator:
         # With cache_pages=2, old pages should be evicted
         assert len(p._cache) <= 3  # cache_pages + nearby
 
-    @pytest.mark.asyncio
     async def test_tracks_current_page(self):
         """The paginator is per-render; the page number travels in callback_data
         rather than through FSM state, so a fresh instance starts at page 0."""
@@ -87,7 +78,6 @@ class TestLazyPaginator:
         assert p2._total_count is None
         assert await p2.get_total_count() == 25
 
-    @pytest.mark.asyncio
     async def test_empty_results(self):
         p = LazyPaginator(_empty_query, per_page=10)
         items = await p.get_page(0)
@@ -95,7 +85,6 @@ class TestLazyPaginator:
         assert await p.get_total_count() == 0
         assert await p.get_total_pages() == 1  # min 1
 
-    @pytest.mark.asyncio
     async def test_clear_cache(self):
         p = LazyPaginator(_mock_query, per_page=10)
         await p.get_page(0)

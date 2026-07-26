@@ -2,131 +2,73 @@ import pytest
 from unittest.mock import patch, MagicMock
 from aiogram.enums import ChatMemberStatus
 
+from bot.handlers.other import (
+    check_sub_channel, _any_payment_method_enabled, generate_short_hash, is_safe_item_name,
+)
+
 
 class TestCheckSubChannel:
 
-    @pytest.mark.asyncio
-    async def test_member_returns_true(self):
-        from bot.handlers.other import check_sub_channel
+    @pytest.mark.parametrize("status,expected", [
+        (ChatMemberStatus.MEMBER, True),
+        (ChatMemberStatus.ADMINISTRATOR, True),
+        (ChatMemberStatus.CREATOR, True),
+        (ChatMemberStatus.LEFT, False),
+        (ChatMemberStatus.KICKED, False),
+    ])
+    async def test_subscription_status(self, status, expected):
         member = MagicMock()
-        member.status = ChatMemberStatus.MEMBER
-        assert await check_sub_channel(member) is True
-
-    @pytest.mark.asyncio
-    async def test_administrator_returns_true(self):
-        from bot.handlers.other import check_sub_channel
-        member = MagicMock()
-        member.status = ChatMemberStatus.ADMINISTRATOR
-        assert await check_sub_channel(member) is True
-
-    @pytest.mark.asyncio
-    async def test_creator_returns_true(self):
-        from bot.handlers.other import check_sub_channel
-        member = MagicMock()
-        member.status = ChatMemberStatus.CREATOR
-        assert await check_sub_channel(member) is True
-
-    @pytest.mark.asyncio
-    async def test_left_returns_false(self):
-        from bot.handlers.other import check_sub_channel
-        member = MagicMock()
-        member.status = ChatMemberStatus.LEFT
-        assert await check_sub_channel(member) is False
-
-    @pytest.mark.asyncio
-    async def test_kicked_returns_false(self):
-        from bot.handlers.other import check_sub_channel
-        member = MagicMock()
-        member.status = ChatMemberStatus.KICKED
-        assert await check_sub_channel(member) is False
+        member.status = status
+        assert await check_sub_channel(member) is expected
 
 
 class TestAnyPaymentMethodEnabled:
 
-    def test_all_enabled(self):
-        from bot.handlers.other import _any_payment_method_enabled
+    @pytest.mark.parametrize("crypto,stars,provider,expected", [
+        ("token", 0.91, "provider", True),  # all three configured
+        ("", 0, "", False),                 # none configured
+        ("token", 0, "", True),             # crypto only
+        ("", 0.91, "", True),               # stars only
+    ])
+    def test_enabled(self, crypto, stars, provider, expected):
         with patch('bot.handlers.other.EnvKeys') as env:
-            env.CRYPTO_PAY_TOKEN = "token"
-            env.STARS_PER_VALUE = 0.91
-            env.TELEGRAM_PROVIDER_TOKEN = "provider"
-            assert _any_payment_method_enabled() is True
-
-    def test_none_enabled(self):
-        from bot.handlers.other import _any_payment_method_enabled
-        with patch('bot.handlers.other.EnvKeys') as env:
-            env.CRYPTO_PAY_TOKEN = ""
-            env.STARS_PER_VALUE = 0
-            env.TELEGRAM_PROVIDER_TOKEN = ""
-            assert _any_payment_method_enabled() is False
-
-    def test_only_crypto_enabled(self):
-        from bot.handlers.other import _any_payment_method_enabled
-        with patch('bot.handlers.other.EnvKeys') as env:
-            env.CRYPTO_PAY_TOKEN = "token"
-            env.STARS_PER_VALUE = 0
-            env.TELEGRAM_PROVIDER_TOKEN = ""
-            assert _any_payment_method_enabled() is True
-
-    def test_only_stars_enabled(self):
-        from bot.handlers.other import _any_payment_method_enabled
-        with patch('bot.handlers.other.EnvKeys') as env:
-            env.CRYPTO_PAY_TOKEN = ""
-            env.STARS_PER_VALUE = 0.91
-            env.TELEGRAM_PROVIDER_TOKEN = ""
-            assert _any_payment_method_enabled() is True
+            env.CRYPTO_PAY_TOKEN = crypto
+            env.STARS_PER_VALUE = stars
+            env.TELEGRAM_PROVIDER_TOKEN = provider
+            assert _any_payment_method_enabled() is expected
 
 
 class TestGenerateShortHash:
 
     def test_deterministic(self):
-        from bot.handlers.other import generate_short_hash
-        h1 = generate_short_hash("test")
-        h2 = generate_short_hash("test")
-        assert h1 == h2
+        assert generate_short_hash("test") == generate_short_hash("test")
 
-    def test_correct_length(self):
-        from bot.handlers.other import generate_short_hash
-        assert len(generate_short_hash("test")) == 8
-        assert len(generate_short_hash("test", length=12)) == 12
+    @pytest.mark.parametrize("kwargs,expected_length", [
+        ({}, 8),
+        ({"length": 12}, 12),
+    ])
+    def test_length(self, kwargs, expected_length):
+        assert len(generate_short_hash("test", **kwargs)) == expected_length
 
     def test_different_inputs_different_hashes(self):
-        from bot.handlers.other import generate_short_hash
-        h1 = generate_short_hash("hello")
-        h2 = generate_short_hash("world")
-        assert h1 != h2
+        assert generate_short_hash("hello") != generate_short_hash("world")
 
 
 class TestIsSafeItemName:
 
-    def test_valid_name(self):
-        from bot.handlers.other import is_safe_item_name
-        assert is_safe_item_name("Normal Product") is True
-
-    def test_valid_unicode(self):
-        from bot.handlers.other import is_safe_item_name
-        assert is_safe_item_name("Товар 🎮") is True
-
-    def test_empty_string(self):
-        from bot.handlers.other import is_safe_item_name
-        assert is_safe_item_name("") is False
-
-    def test_too_long(self):
-        from bot.handlers.other import is_safe_item_name
-        assert is_safe_item_name("A" * 101) is False
-
-    def test_exactly_100_chars(self):
-        from bot.handlers.other import is_safe_item_name
-        assert is_safe_item_name("A" * 100) is True
-
-    def test_control_characters(self):
-        from bot.handlers.other import is_safe_item_name
-        assert is_safe_item_name("item\x00name") is False
-        assert is_safe_item_name("item\x1fname") is False
-        assert is_safe_item_name("item\x7fname") is False
-
-    def test_single_char(self):
-        from bot.handlers.other import is_safe_item_name
-        assert is_safe_item_name("A") is True
+    @pytest.mark.parametrize("name,expected", [
+        ("Normal Product", True),
+        ("Товар 🎮", True),      # unicode and emoji are fine
+        ("A", True),
+        ("A" * 100, True),       # exactly at the cap
+        ("A" * 101, False),      # one over the cap
+        ("", False),
+        ("item\x00name", False),  # control characters
+        ("item\x1fname", False),
+        ("item\x7fname", False),
+    ])
+    def test_name_acceptance(self, name, expected):
+        assert is_safe_item_name(name) is expected
 
 
 class TestLoggingConfig:

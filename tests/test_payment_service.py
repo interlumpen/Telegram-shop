@@ -5,6 +5,8 @@ from unittest.mock import patch, AsyncMock, MagicMock
 from bot.misc.services.payment import (
     currency_to_stars,
     _minor_units_for,
+    send_stars_invoice,
+    send_fiat_invoice,
     CryptoPayAPI,
     CryptoPayAPIError,
 )
@@ -12,67 +14,37 @@ from bot.misc.services.payment import (
 
 class TestCurrencyToStars:
 
-    def test_basic_conversion(self):
+    @pytest.mark.parametrize("rate,amount,expected", [
+        (0.91, 100, 91),
+        (0.33, 10, 4),        # 3.3 rounds up
+        (0.91, 0, 0),
+        (0.91, 100000, math.ceil(100000 * 0.91)),
+        (1.0, 50, 50),        # already integral
+    ])
+    def test_conversion(self, rate, amount, expected):
         with patch('bot.misc.services.payment.EnvKeys') as env:
-            env.STARS_PER_VALUE = 0.91
-            result = currency_to_stars(100)
-        assert result == math.ceil(100 * 0.91)
-        assert result == 91
-
-    def test_rounds_up(self):
-        with patch('bot.misc.services.payment.EnvKeys') as env:
-            env.STARS_PER_VALUE = 0.33
-            result = currency_to_stars(10)
-        # 10 * 0.33 = 3.3 -> ceil = 4
-        assert result == 4
-
-    def test_zero_amount(self):
-        with patch('bot.misc.services.payment.EnvKeys') as env:
-            env.STARS_PER_VALUE = 0.91
-            result = currency_to_stars(0)
-        assert result == 0
-
-    def test_large_amount(self):
-        with patch('bot.misc.services.payment.EnvKeys') as env:
-            env.STARS_PER_VALUE = 0.91
-            result = currency_to_stars(100000)
-        assert result == math.ceil(100000 * 0.91)
-
-    def test_exact_integer_result(self):
-        with patch('bot.misc.services.payment.EnvKeys') as env:
-            env.STARS_PER_VALUE = 1.0
-            result = currency_to_stars(50)
-        assert result == 50
+            env.STARS_PER_VALUE = rate
+            assert currency_to_stars(amount) == expected
 
 
 class TestMinorUnitsFor:
 
-    def test_regular_currency_usd(self):
-        assert _minor_units_for("USD") == 100
-
-    def test_regular_currency_rub(self):
-        assert _minor_units_for("RUB") == 100
-
-    def test_regular_currency_eur(self):
-        assert _minor_units_for("EUR") == 100
-
-    def test_zero_decimal_jpy(self):
-        assert _minor_units_for("JPY") == 1
-
-    def test_zero_decimal_krw(self):
-        assert _minor_units_for("KRW") == 1
-
-    def test_case_insensitive(self):
-        assert _minor_units_for("jpy") == 1
-        assert _minor_units_for("usd") == 100
+    @pytest.mark.parametrize("currency,expected", [
+        ("USD", 100),
+        ("RUB", 100),
+        ("EUR", 100),
+        ("JPY", 1),   # zero-decimal currency
+        ("KRW", 1),
+        ("jpy", 1),   # lookup is case-insensitive
+        ("usd", 100),
+    ])
+    def test_minor_units(self, currency, expected):
+        assert _minor_units_for(currency) == expected
 
 
 class TestSendStarsInvoice:
 
-    @pytest.mark.asyncio
     async def test_sends_correct_invoice(self):
-        from bot.misc.services.payment import send_stars_invoice
-
         bot = AsyncMock()
 
         with patch('bot.misc.services.payment.EnvKeys') as env:
@@ -86,10 +58,7 @@ class TestSendStarsInvoice:
         assert call_kwargs['provider_token'] == ""
         assert call_kwargs['chat_id'] == 123
 
-    @pytest.mark.asyncio
     async def test_stars_price_amount(self):
-        from bot.misc.services.payment import send_stars_invoice
-
         bot = AsyncMock()
 
         with patch('bot.misc.services.payment.EnvKeys') as env:
@@ -103,10 +72,7 @@ class TestSendStarsInvoice:
 
 class TestSendFiatInvoice:
 
-    @pytest.mark.asyncio
     async def test_sends_correct_invoice(self):
-        from bot.misc.services.payment import send_fiat_invoice
-
         bot = AsyncMock()
 
         with patch('bot.misc.services.payment.EnvKeys') as env:
@@ -121,10 +87,7 @@ class TestSendFiatInvoice:
         # RUB has minor units: 200 * 100 = 20000
         assert call_kwargs['prices'][0].amount == 20000
 
-    @pytest.mark.asyncio
     async def test_zero_decimal_currency(self):
-        from bot.misc.services.payment import send_fiat_invoice
-
         bot = AsyncMock()
 
         with patch('bot.misc.services.payment.EnvKeys') as env:
@@ -136,10 +99,7 @@ class TestSendFiatInvoice:
         # JPY has no minor units: 200 * 1 = 200
         assert prices[0].amount == 200
 
-    @pytest.mark.asyncio
     async def test_missing_provider_token_raises(self):
-        from bot.misc.services.payment import send_fiat_invoice
-
         bot = AsyncMock()
 
         with patch('bot.misc.services.payment.EnvKeys') as env:
@@ -150,7 +110,6 @@ class TestSendFiatInvoice:
 
 class TestCryptoPayAPI:
 
-    @pytest.mark.asyncio
     async def test_api_error_raises(self):
         api = CryptoPayAPI()
 

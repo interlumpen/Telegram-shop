@@ -1,5 +1,3 @@
-import time
-
 from bot.web.admin import LoginRateLimiter
 
 
@@ -45,11 +43,12 @@ class TestLoginRateLimiter:
         assert limiter.is_blocked("1.2.3.4") is False
 
     def test_lockout_expires(self):
-        limiter = LoginRateLimiter(max_attempts=2, lockout_seconds=1)
+        limiter = LoginRateLimiter(max_attempts=2, lockout_seconds=60)
 
         limiter.record_failure("1.2.3.4")
         limiter.record_failure("1.2.3.4")
         assert limiter.is_blocked("1.2.3.4") is True
 
-        time.sleep(1.1)
+        # Age the recorded attempts past the window instead of sleeping through it.
+        limiter._attempts["1.2.3.4"] = [t - 61 for t in limiter._attempts["1.2.3.4"]]
         assert limiter.is_blocked("1.2.3.4") is False

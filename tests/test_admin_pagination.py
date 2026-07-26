@@ -1,5 +1,7 @@
 import datetime
 
+import pytest
+
 from bot.database.methods.create import create_user, create_referral_earning
 
 from bot.handlers.admin.user_management import (
@@ -24,69 +26,75 @@ def _last_edit(call):
     return args[0], kwargs
 
 
+def _button_labels(kwargs):
+    """Button captions of the markup passed to edit_text."""
+    markup = kwargs.get("reply_markup")
+    if markup is None:
+        return []
+    return [b.text for row in markup.inline_keyboard for b in row]
+
+
 async def _referrer_with_referral(referrer_id, referral_id):
     await create_user(referrer_id, NOW, referral_id=None, role=1)
     await create_user(referral_id, NOW, referral_id=referrer_id, role=1)
     await create_referral_earning(referrer_id, referral_id, amount=50, original_amount=500)
 
 
-# --- admin referral list pair ---
+REFERRAL_VIEWS = [
+    pytest.param(
+        admin_view_referrals_handler, admin_referrals_pagination_handler,
+        "admin-view-referrals_{uid}", "admin-refs-page_{uid}_0",
+        "referrals.list.title", "referrals.list.empty",
+        id="referrals",
+    ),
+    pytest.param(
+        admin_view_all_earnings_handler, admin_all_earnings_pagination_handler,
+        "admin-view-earnings_{uid}", "admin-all-earn_{uid}_page_0",
+        "all.earnings.title", "all.earnings.empty",
+        id="all-earnings",
+    ),
+]
 
-class TestAdminReferralsPagination:
-    async def test_view_empty(self, make_callback_query, fsm_context, user_factory):
+
+@pytest.mark.parametrize(
+    "view_handler,page_handler,view_cb,page_cb,title_key,empty_key", REFERRAL_VIEWS
+)
+class TestAdminReferralListViews:
+
+    async def test_view_empty(self, make_callback_query, fsm_context, user_factory,
+                              view_handler, page_handler, view_cb, page_cb,
+                              title_key, empty_key):
         await user_factory(telegram_id=900001)
-        call = make_callback_query(data="admin-view-referrals_900001")
-        await admin_view_referrals_handler(call, fsm_context)
+        call = make_callback_query(data=view_cb.format(uid=900001))
+        await view_handler(call, fsm_context)
         text, _ = _last_edit(call)
-        assert isinstance(text, str)  # empty-state message
+        assert empty_key in text
 
-    async def test_view_with_data(self, make_callback_query, fsm_context):
+    async def test_view_with_data(self, make_callback_query, fsm_context,
+                                  view_handler, page_handler, view_cb, page_cb,
+                                  title_key, empty_key):
         await _referrer_with_referral(900002, 900012)
-        call = make_callback_query(data="admin-view-referrals_900002")
-        await admin_view_referrals_handler(call, fsm_context)
+        call = make_callback_query(data=view_cb.format(uid=900002))
+        await view_handler(call, fsm_context)
         text, kwargs = _last_edit(call)
-        assert isinstance(text, str)
+        assert title_key in text
+        assert "900002" in text          # the referrer the list belongs to
         assert kwargs.get("reply_markup") is not None
 
-    async def test_pagination(self, make_callback_query, fsm_context):
+    async def test_pagination(self, make_callback_query, fsm_context,
+                              view_handler, page_handler, view_cb, page_cb,
+                              title_key, empty_key):
         await _referrer_with_referral(900003, 900013)
         # seed state via the view handler, then page
-        view = make_callback_query(data="admin-view-referrals_900003")
-        await admin_view_referrals_handler(view, fsm_context)
-        page = make_callback_query(data="admin-refs-page_900003_0")
-        await admin_referrals_pagination_handler(page, fsm_context)
-        text, kwargs = _last_edit(page)
-        assert isinstance(text, str)
-        assert kwargs.get("reply_markup") is not None
-
-
-# --- admin all-earnings pair ---
-
-class TestAdminAllEarningsPagination:
-    async def test_view_empty(self, make_callback_query, fsm_context, user_factory):
-        await user_factory(telegram_id=900101)
-        call = make_callback_query(data="admin-view-earnings_900101")
-        await admin_view_all_earnings_handler(call, fsm_context)
-        text, _ = _last_edit(call)
-        assert isinstance(text, str)
-
-    async def test_view_with_data(self, make_callback_query, fsm_context):
-        await _referrer_with_referral(900102, 900112)
-        call = make_callback_query(data="admin-view-earnings_900102")
-        await admin_view_all_earnings_handler(call, fsm_context)
-        text, kwargs = _last_edit(call)
-        assert isinstance(text, str)
-        assert kwargs.get("reply_markup") is not None
-
-    async def test_pagination(self, make_callback_query, fsm_context):
-        await _referrer_with_referral(900103, 900113)
-        view = make_callback_query(data="admin-view-earnings_900103")
-        await admin_view_all_earnings_handler(view, fsm_context)
-        page = make_callback_query(data="admin-all-earn_900103_page_0")
-        await admin_all_earnings_pagination_handler(page, fsm_context)
-        text, kwargs = _last_edit(page)
-        assert isinstance(text, str)
-        assert kwargs.get("reply_markup") is not None
+        view = make_callback_query(data=view_cb.format(uid=900003))
+        await view_handler(view, fsm_context)
+        page = make_callback_query(data=page_cb.format(uid=900003))
+        await page_handler(page, fsm_context)
+        page_text, page_kwargs = _last_edit(page)
+        view_text, _ = _last_edit(view)
+        # Paging back to page 0 must reproduce the first page, not an empty list.
+        assert page_text == view_text
+        assert page_kwargs.get("reply_markup") is not None
 
 
 # --- admin users list pair ---
@@ -96,9 +104,9 @@ class TestUsersListPagination:
         await user_factory(telegram_id=900201)
         call = make_callback_query(data="users_list")
         await users_callback_handler(call, fsm_context)
-        text, kwargs = _last_edit(call)
-        assert isinstance(text, str)
-        assert kwargs.get("reply_markup") is not None
+        _, kwargs = _last_edit(call)
+        # The seeded user must actually be listed, not just "some markup exists".
+        assert any("900201" in label for label in _button_labels(kwargs))
 
     async def test_navigate(self, make_callback_query, fsm_context, user_factory):
         await user_factory(telegram_id=900202)
@@ -106,9 +114,8 @@ class TestUsersListPagination:
         await users_callback_handler(view, fsm_context)
         page = make_callback_query(data="users-page_0")
         await navigate_users(page, fsm_context)
-        text, kwargs = _last_edit(page)
-        assert isinstance(text, str)
-        assert kwargs.get("reply_markup") is not None
+        _, kwargs = _last_edit(page)
+        assert any("900202" in label for label in _button_labels(kwargs))
 
 
 # --- shop categories pair ---
@@ -118,9 +125,8 @@ class TestShopCategoriesPagination:
         await category_factory("CatA")
         call = make_callback_query(data="shop")
         await shop_callback_handler(call, fsm_context)
-        text, kwargs = _last_edit(call)
-        assert isinstance(text, str)
-        assert kwargs.get("reply_markup") is not None
+        _, kwargs = _last_edit(call)
+        assert "CatA" in _button_labels(kwargs)
 
     async def test_navigate(self, make_callback_query, fsm_context, category_factory):
         await category_factory("CatB")
@@ -128,9 +134,8 @@ class TestShopCategoriesPagination:
         await shop_callback_handler(view, fsm_context)
         page = make_callback_query(data="categories-page_0")
         await navigate_categories(page, fsm_context)
-        text, kwargs = _last_edit(page)
-        assert isinstance(text, str)
-        assert kwargs.get("reply_markup") is not None
+        _, kwargs = _last_edit(page)
+        assert "CatB" in _button_labels(kwargs)
 
 
 # --- shop goods pair ---
@@ -143,14 +148,12 @@ class TestShopGoodsPagination:
         await shop_callback_handler(c1, fsm_context)
         c2 = make_callback_query(data="cat:0:0")
         await items_list_callback_handler(c2, fsm_context)
-        text2, kwargs2 = _last_edit(c2)
-        assert isinstance(text2, str)
-        assert kwargs2.get("reply_markup") is not None
+        _, kwargs2 = _last_edit(c2)
+        assert any("G1" in label for label in _button_labels(kwargs2))
         c3 = make_callback_query(data="gp_0")
         await navigate_goods(c3, fsm_context)
-        text3, kwargs3 = _last_edit(c3)
-        assert isinstance(text3, str)
-        assert kwargs3.get("reply_markup") is not None
+        _, kwargs3 = _last_edit(c3)
+        assert any("G1" in label for label in _button_labels(kwargs3))
 
 
 # --- profile views (two independent implementations) ---
@@ -161,7 +164,6 @@ class TestProfileViews:
         call = make_callback_query(data="check-user_900301", user_id=900301)
         await user_profile_view(call)
         text, kwargs = _last_edit(call)
-        assert isinstance(text, str)
         assert kwargs.get("reply_markup") is not None
         assert "900301" in text
 
@@ -170,7 +172,6 @@ class TestProfileViews:
         call = make_callback_query(data="show-user_user-900302", user_id=900302)
         await show_user_info(call)
         text, kwargs = _last_edit(call)
-        assert isinstance(text, str)
         assert kwargs.get("reply_markup") is not None
         assert "900302" in text
 

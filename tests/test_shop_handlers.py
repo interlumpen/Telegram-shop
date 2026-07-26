@@ -1,13 +1,35 @@
 import pytest
+from datetime import datetime, timedelta, timezone
+from decimal import Decimal
 from unittest.mock import patch, AsyncMock, MagicMock
+
+from bot.database.main import Database
+from bot.database.methods.create import add_to_cart, subscribe_to_stock
+from bot.database.methods.lazy_queries import query_goods_search
+from bot.database.methods.read import (
+    get_cart_items, get_cart_count, is_subscribed_to_stock,
+)
+from bot.database.models.main import PromoCodes
+from bot.handlers.user.balance_and_payment import buy_item_callback_handler
+from bot.handlers.user.cart import (
+    cart_qty_handler, view_cart_handler, cart_checkout_confirm_handler,
+    _show_cart, RECEIPT_MAX_BUTTONS,
+)
+from bot.handlers.user.shop_and_goods import (
+    router, shop_callback_handler, navigate_categories, navigate_goods,
+    items_list_callback_handler, item_info_callback_handler,
+    search_item_info_handler, shop_search_handler, receive_search_query_handler,
+    subscribe_stock_handler, unsubscribe_stock_handler,
+    apply_promo_handler, promo_code_text_handler, back_to_item_handler,
+    bought_items_callback_handler, bought_item_info_callback_handler,
+    _render_item_page,
+)
+from bot.states import ShopStates
 
 
 class TestCartHandlers:
     async def test_stepper_increments_and_rerenders(self, make_callback_query, fsm_context,
                                                     user_factory, item_factory):
-        from bot.handlers.user.cart import cart_qty_handler
-        from bot.database.methods.create import add_to_cart
-        from bot.database.methods.read import get_cart_items, get_cart_count
 
         await user_factory(telegram_id=620001, balance=1000)
         await item_factory(name="StepItem", price=100, values=[("v", False)])
@@ -24,9 +46,6 @@ class TestCartHandlers:
 
     async def test_stepper_down_to_zero_removes_line(self, make_callback_query, fsm_context,
                                                      user_factory, item_factory):
-        from bot.handlers.user.cart import cart_qty_handler
-        from bot.database.methods.create import add_to_cart
-        from bot.database.methods.read import get_cart_items
 
         await user_factory(telegram_id=620002, balance=1000)
         await item_factory(name="DropItem", price=100, values=[("v", False)])
@@ -44,8 +63,6 @@ class TestCartHandlers:
 
     async def test_cart_total_multiplies_by_quantity(self, make_callback_query, fsm_context,
                                                      user_factory, item_factory):
-        from bot.handlers.user.cart import view_cart_handler
-        from bot.database.methods.create import add_to_cart
 
         await user_factory(telegram_id=620003, balance=1000)
         await item_factory(name="TotalItem", price=25, values=[("v", False)])
@@ -61,12 +78,6 @@ class TestCartHandlers:
     async def test_cart_warns_when_a_line_promo_stopped_applying(self, make_callback_query,
                                                                  fsm_context, user_factory,
                                                                  item_factory):
-        from datetime import datetime, timedelta, timezone
-        from decimal import Decimal
-        from bot.handlers.user.cart import view_cart_handler
-        from bot.database.methods.create import add_to_cart
-        from bot.database.main import Database
-        from bot.database.models.main import PromoCodes
 
         await user_factory(telegram_id=620010, balance=1000)
         await item_factory(name="WarnItem", price=100, values=[("v", False)])
@@ -88,9 +99,6 @@ class TestCartHandlers:
 
     async def test_stepper_rejects_other_users_line(self, make_callback_query, fsm_context,
                                                     user_factory, item_factory):
-        from bot.handlers.user.cart import cart_qty_handler
-        from bot.database.methods.create import add_to_cart
-        from bot.database.methods.read import get_cart_items, get_cart_count
 
         await user_factory(telegram_id=620004, balance=1000)
         await user_factory(telegram_id=620005, balance=1000)
@@ -113,8 +121,6 @@ class TestBackButtonSurvivesSubFlows:
 
     async def test_notify_keeps_the_browsing_state(self, make_callback_query, fsm_context,
                                                    user_factory, item_factory):
-        from bot.handlers.user.shop_and_goods import subscribe_stock_handler
-        from bot.states import ShopStates
 
         await user_factory(telegram_id=650001)
         await item_factory(name="BellItem", price=10, values=[])
@@ -129,8 +135,6 @@ class TestBackButtonSurvivesSubFlows:
     async def test_promo_then_back_to_item_restores_category_state(self, make_callback_query,
                                                                    fsm_context, user_factory,
                                                                    item_factory):
-        from bot.handlers.user.shop_and_goods import apply_promo_handler, back_to_item_handler
-        from bot.states import ShopStates
 
         await user_factory(telegram_id=650002)
         await item_factory(name="PromoBack", price=10, values=[("v", False)])
@@ -146,8 +150,6 @@ class TestBackButtonSurvivesSubFlows:
     async def test_promo_then_back_to_item_restores_search_state(self, make_callback_query,
                                                                  fsm_context, user_factory,
                                                                  item_factory):
-        from bot.handlers.user.shop_and_goods import apply_promo_handler, back_to_item_handler
-        from bot.states import ShopStates
 
         await user_factory(telegram_id=650003)
         await item_factory(name="PromoBackS", price=10, values=[("v", False)])
@@ -163,8 +165,6 @@ class TestBackButtonSurvivesSubFlows:
                                                                      make_callback_query,
                                                                      fsm_context, user_factory,
                                                                      item_factory):
-        from bot.handlers.user.shop_and_goods import apply_promo_handler, promo_code_text_handler
-        from bot.states import ShopStates
 
         await user_factory(telegram_id=650004)
         await item_factory(name="PromoTyped", price=10, values=[("v", False)])
@@ -184,8 +184,6 @@ class TestCheckoutReceipt:
 
     async def test_receipt_buttons_are_capped(self, make_callback_query, fsm_context,
                                               user_factory, item_factory):
-        from bot.handlers.user.cart import cart_checkout_confirm_handler, RECEIPT_MAX_BUTTONS
-        from bot.database.methods.create import add_to_cart
 
         qty = RECEIPT_MAX_BUTTONS + 15
         await user_factory(telegram_id=640001, balance=100000)
@@ -207,8 +205,6 @@ class TestCheckoutReceipt:
 
     async def test_repeated_units_are_numbered(self, make_callback_query, fsm_context,
                                                user_factory, item_factory):
-        from bot.handlers.user.cart import cart_checkout_confirm_handler
-        from bot.database.methods.create import add_to_cart
 
         await user_factory(telegram_id=640002, balance=1000)
         await item_factory(name="TwinItem", price=10,
@@ -227,8 +223,6 @@ class TestCheckoutReceipt:
     async def test_receipt_state_does_not_store_delivered_secrets(self, make_callback_query,
                                                                   fsm_context, user_factory,
                                                                   item_factory):
-        from bot.handlers.user.cart import cart_checkout_confirm_handler
-        from bot.database.methods.create import add_to_cart
 
         await user_factory(telegram_id=640003, balance=1000)
         await item_factory(name="SecretItem", price=10, values=[("SUPERSECRET", False)])
@@ -245,8 +239,6 @@ class TestRestockButtonFlow:
 
     async def test_subscribe_from_item_card(self, make_callback_query, fsm_context,
                                             user_factory, item_factory):
-        from bot.handlers.user.shop_and_goods import subscribe_stock_handler
-        from bot.database.methods.read import is_subscribed_to_stock
 
         await user_factory(telegram_id=630001)
         await item_factory(name="EmptyItem", price=10, values=[])   # out of stock
@@ -259,9 +251,6 @@ class TestRestockButtonFlow:
 
     async def test_unsubscribe_from_item_card(self, make_callback_query, fsm_context,
                                               user_factory, item_factory):
-        from bot.handlers.user.shop_and_goods import unsubscribe_stock_handler
-        from bot.database.methods.create import subscribe_to_stock
-        from bot.database.methods.read import is_subscribed_to_stock
 
         await user_factory(telegram_id=630002)
         await item_factory(name="EmptyItem2", price=10, values=[])
@@ -275,7 +264,6 @@ class TestRestockButtonFlow:
 
     async def test_subscribe_without_item_in_state(self, make_callback_query, fsm_context,
                                                    user_factory):
-        from bot.handlers.user.shop_and_goods import subscribe_stock_handler
 
         await user_factory(telegram_id=630003)
         call = make_callback_query(data="sub_stock", user_id=630003)
@@ -288,8 +276,6 @@ class TestRestockButtonFlow:
 class TestCatalogSearch:
 
     async def test_prompt_sets_state(self, make_callback_query, fsm_context):
-        from bot.handlers.user.shop_and_goods import shop_search_handler
-        from bot.states import ShopStates
 
         call = make_callback_query(data="shop_search", user_id=610001)
         await shop_search_handler(call, fsm_context)
@@ -298,8 +284,6 @@ class TestCatalogSearch:
         assert await fsm_context.get_state() == ShopStates.waiting_search_query
 
     async def test_query_renders_results(self, make_message, fsm_context, item_factory):
-        from bot.handlers.user.shop_and_goods import receive_search_query_handler
-        from bot.states import ShopStates
 
         await item_factory(name="Netflix Account", price=100, values=[("v", False)])
         await item_factory(name="Spotify Account", price=50, values=[("v", False)])
@@ -316,7 +300,6 @@ class TestCatalogSearch:
 
     async def test_description_only_match_is_found(self, make_message, fsm_context, item_factory):
         """Proves the OR arm against description, not just name."""
-        from bot.handlers.user.shop_and_goods import receive_search_query_handler
 
         await item_factory(name="Opaque Name", price=10,
                            description="a premium gamepass inside", values=[("v", False)])
@@ -328,7 +311,6 @@ class TestCatalogSearch:
         assert data["search_page_items"] == ["Opaque Name"]
 
     async def test_search_is_case_insensitive(self, make_message, fsm_context, item_factory):
-        from bot.handlers.user.shop_and_goods import receive_search_query_handler
 
         await item_factory(name="UPPERCASE Item", price=10, values=[("v", False)])
 
@@ -339,7 +321,6 @@ class TestCatalogSearch:
         assert data["search_page_items"] == ["UPPERCASE Item"]
 
     async def test_empty_result(self, make_message, fsm_context, item_factory):
-        from bot.handlers.user.shop_and_goods import receive_search_query_handler
 
         await item_factory(name="Something", price=10, values=[("v", False)])
 
@@ -351,8 +332,6 @@ class TestCatalogSearch:
         assert (await fsm_context.get_data()).get("search_page_items") is None
 
     async def test_too_short_query_stays_in_state(self, make_message, fsm_context):
-        from bot.handlers.user.shop_and_goods import receive_search_query_handler
-        from bot.states import ShopStates
 
         await fsm_context.set_state(ShopStates.waiting_search_query)
         message = make_message(text="a", user_id=610006)
@@ -366,7 +345,6 @@ class TestCatalogSearch:
     async def test_open_item_from_search_sets_back_to_results(self, make_callback_query,
                                                               fsm_context, item_factory):
         """Back from a search-opened card must return to the results, not categories."""
-        from bot.handlers.user.shop_and_goods import search_item_info_handler
 
         await item_factory(name="FoundItem", price=100, values=[("v", False)])
         await fsm_context.update_data(search_query="found")
@@ -379,7 +357,6 @@ class TestCatalogSearch:
         assert data["item_back_data"] == "sp_0"
 
     async def test_open_item_bad_index(self, make_callback_query, fsm_context):
-        from bot.handlers.user.shop_and_goods import search_item_info_handler
 
         await fsm_context.update_data(search_query="nothingmatches")
         call = make_callback_query(data="sitm:5:0", user_id=610008)
@@ -393,7 +370,6 @@ class TestSearchQueryEscaping:
     """LIKE wildcards typed by a user must be literals, not patterns."""
 
     async def test_underscore_is_literal(self, item_factory):
-        from bot.database.methods.lazy_queries import query_goods_search
 
         await item_factory(name="a_b", price=10, values=[("v1", False)])
         await item_factory(name="axb", price=10, values=[("v2", False)])
@@ -401,7 +377,6 @@ class TestSearchQueryEscaping:
         assert await query_goods_search("a_b") == ["a_b"]
 
     async def test_percent_is_literal(self, item_factory):
-        from bot.database.methods.lazy_queries import query_goods_search
 
         await item_factory(name="100% cashback", price=10, values=[("v1", False)])
         await item_factory(name="plain item", price=10, values=[("v2", False)])
@@ -409,7 +384,6 @@ class TestSearchQueryEscaping:
         assert await query_goods_search("100%") == ["100% cashback"]
 
     async def test_blank_query_returns_nothing(self, item_factory):
-        from bot.database.methods.lazy_queries import query_goods_search
 
         await item_factory(name="Anything", price=10, values=[("v", False)])
 
@@ -417,7 +391,6 @@ class TestSearchQueryEscaping:
         assert await query_goods_search("   ", count_only=True) == 0
 
     async def test_count_only_matches_results(self, item_factory):
-        from bot.database.methods.lazy_queries import query_goods_search
 
         for i in range(3):
             await item_factory(name=f"Bundle {i}", price=10, values=[(f"v{i}", False)])
@@ -429,7 +402,6 @@ class TestSearchQueryEscaping:
 class TestShopCategories:
 
     async def test_shop_shows_categories(self, make_callback_query, fsm_context, category_factory):
-        from bot.handlers.user.shop_and_goods import shop_callback_handler
 
         await category_factory("Electronics")
         await category_factory("Clothing")
@@ -444,11 +416,9 @@ class TestShopCategories:
         text = call.message.edit_text.call_args[0][0]
         assert "shop" in text.lower() or "categories" in text.lower() or "shop.categories" in text
         state = await fsm_context.get_state()
-        from bot.states import ShopStates
         assert state == ShopStates.viewing_categories
 
     async def test_navigate_categories_page(self, make_callback_query, fsm_context, category_factory):
-        from bot.handlers.user.shop_and_goods import navigate_categories
 
         for i in range(15):
             await category_factory(f"Cat_{i}")
@@ -465,7 +435,6 @@ class TestShopCategories:
 class TestItemsList:
 
     async def test_items_list_valid_category(self, make_callback_query, fsm_context, item_factory):
-        from bot.handlers.user.shop_and_goods import items_list_callback_handler
 
         await item_factory(name="Widget", price=100, category="Widgets", values=[("w1", False)])
 
@@ -482,7 +451,6 @@ class TestItemsList:
         assert data['current_category'] == 'Widgets'
 
     async def test_items_list_invalid_index(self, make_callback_query, fsm_context):
-        from bot.handlers.user.shop_and_goods import items_list_callback_handler
 
         call = make_callback_query(data="cat:5:0", user_id=600011)
         await fsm_context.update_data(category_page_items=["OnlyCat"])
@@ -495,7 +463,6 @@ class TestItemsList:
 class TestItemInfo:
 
     async def test_item_info_display(self, make_callback_query, fsm_context, item_factory):
-        from bot.handlers.user.shop_and_goods import item_info_callback_handler
 
         await item_factory(name="InfoItem", price=250, category="TestCat", values=[("val1", False)])
 
@@ -510,7 +477,6 @@ class TestItemInfo:
         call.message.edit_text.assert_called_once()
 
     async def test_item_info_invalid_index(self, make_callback_query, fsm_context):
-        from bot.handlers.user.shop_and_goods import item_info_callback_handler
 
         call = make_callback_query(data="itm:10:0", user_id=600021)
         await fsm_context.update_data(goods_page_items=["SomeItem"])
@@ -521,7 +487,6 @@ class TestItemInfo:
 
     async def test_item_info_resolves_from_state_without_requery(self, make_callback_query,
                                                                   fsm_context, item_factory):
-        from bot.handlers.user.shop_and_goods import item_info_callback_handler
 
         await item_factory(name="StateItem", price=100, category="StateCat", values=[("v", False)])
 
@@ -543,7 +508,6 @@ class TestItemInfo:
 
     async def test_item_info_state_page_mismatch_falls_back(self, make_callback_query,
                                                             fsm_context, item_factory):
-        from bot.handlers.user.shop_and_goods import item_info_callback_handler
 
         await item_factory(name="FallbackItem", price=100, category="FallbackCat", values=[("v", False)])
 
@@ -562,7 +526,6 @@ class TestItemInfo:
         assert data['csrf_item'] == 'FallbackItem'
 
     async def test_item_info_not_found_in_db(self, make_callback_query, fsm_context):
-        from bot.handlers.user.shop_and_goods import item_info_callback_handler
 
         call = make_callback_query(data="itm:0:0", user_id=600022)
         await fsm_context.update_data(
@@ -575,7 +538,6 @@ class TestItemInfo:
         call.answer.assert_called_once()
 
     async def test_item_info_unlimited_quantity(self, make_callback_query, fsm_context, item_factory):
-        from bot.handlers.user.shop_and_goods import item_info_callback_handler
 
         await item_factory(name="InfItem", price=50, category="InfCat", values=[("unlimited_val", True)])
 
@@ -595,7 +557,6 @@ class TestItemInfo:
 class TestBoughtItems:
 
     async def test_bought_items_empty(self, make_callback_query, fsm_context, user_factory):
-        from bot.handlers.user.shop_and_goods import bought_items_callback_handler
 
         await user_factory(telegram_id=600030)
 
@@ -606,11 +567,9 @@ class TestBoughtItems:
             await bought_items_callback_handler(call, fsm_context)
 
         call.message.edit_text.assert_called_once()
-        text = call.message.edit_text.call_args[0][0]
-        assert isinstance(text, str)
+        assert "purchases.title" in call.message.edit_text.call_args[0][0]
 
     async def test_bought_item_info_not_found(self, make_callback_query):
-        from bot.handlers.user.shop_and_goods import bought_item_info_callback_handler
 
         call = make_callback_query(data="bought-item:99999:profile", user_id=600031)
 
@@ -625,7 +584,6 @@ class TestHtmlEscapingInRenderedText:
     async def test_item_card_escapes_name_and_description(
         self, make_callback_query, fsm_context, item_factory
     ):
-        from bot.handlers.user.shop_and_goods import _render_item_page
 
         await item_factory(
             name=self.HOSTILE, price=100, description=self.HOSTILE,
@@ -642,8 +600,6 @@ class TestHtmlEscapingInRenderedText:
         assert "<script>" not in text
 
     async def test_cart_escapes_item_name(self, make_callback_query, user_factory, item_factory):
-        from bot.handlers.user.cart import _show_cart
-        from bot.database.methods.create import add_to_cart
 
         await user_factory(telegram_id=610902, balance=1000)
         await item_factory(name=self.HOSTILE, price=100, values=[("v1", False)])
@@ -673,9 +629,6 @@ class TestBackFromItemCardAfterPurchase:
     async def test_back_to_item_after_buying_keeps_the_browsing_state(
         self, make_callback_query, fsm_context, user_factory, item_factory
     ):
-        from bot.handlers.user.balance_and_payment import buy_item_callback_handler
-        from bot.handlers.user.shop_and_goods import back_to_item_handler
-        from bot.states import ShopStates
 
         await user_factory(telegram_id=660001, balance=1000)
         await item_factory(name="BoughtThenBack", price=100, values=[("v1", False)])
@@ -699,9 +652,6 @@ class TestBackFromItemCardAfterPurchase:
     async def test_back_to_item_from_search_keeps_the_search_state(
         self, make_callback_query, fsm_context, user_factory, item_factory
     ):
-        from bot.handlers.user.balance_and_payment import buy_item_callback_handler
-        from bot.handlers.user.shop_and_goods import back_to_item_handler
-        from bot.states import ShopStates
 
         await user_factory(telegram_id=660002, balance=1000)
         await item_factory(name="SearchThenBack", price=100, values=[("v1", False)])
@@ -723,8 +673,6 @@ class TestBackFromItemCardAfterPurchase:
     ):
         """Applying a promo while browsing a category, then later opening an item
         from search, must not restore the category state over the search one."""
-        from bot.handlers.user.shop_and_goods import apply_promo_handler, back_to_item_handler
-        from bot.states import ShopStates
 
         await user_factory(telegram_id=660003, balance=1000)
         await item_factory(name="StalePromoState", price=100, values=[("v1", False)])
@@ -746,7 +694,6 @@ class TestBackFromItemCardAfterPurchase:
     @staticmethod
     def _registered_filters(callback):
         """The filters aiogram will run for a handler, as registered."""
-        from bot.handlers.user.shop_and_goods import router
 
         for h in router.callback_query.handlers:
             if h.callback is callback:
@@ -776,11 +723,6 @@ class TestBackFromItemCardAfterPurchase:
         """End-to-end on the reported flow: browse a category, buy, return from
         the receipt, then press the card's Back — aiogram must route it, and it
         must render the goods list rather than silently doing nothing."""
-        from bot.handlers.user.shop_and_goods import (
-            shop_callback_handler, items_list_callback_handler,
-            item_info_callback_handler, back_to_item_handler, navigate_goods,
-        )
-        from bot.handlers.user.balance_and_payment import buy_item_callback_handler
 
         await user_factory(telegram_id=660004, balance=1000)
         await item_factory(name="EndToEndBack", price=100, category="E2ECat",
@@ -804,7 +746,6 @@ class TestBackFromItemCardAfterPurchase:
 
     async def test_the_filter_probe_can_fail(self, make_callback_query, fsm_context):
         """Guard: with the browsing state cleared, gp_0 must NOT route."""
-        from bot.handlers.user.shop_and_goods import navigate_goods
 
         await fsm_context.set_state(None)
         page = make_callback_query(data="gp_0", user_id=660005)

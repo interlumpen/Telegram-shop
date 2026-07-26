@@ -8,100 +8,66 @@ from bot.misc.validators import validate_telegram_id, validate_money_amount, san
 
 class TestValidateTelegramId:
 
-    def test_valid_id(self):
-        assert validate_telegram_id(12345) == 12345
+    @pytest.mark.parametrize("raw,expected", [
+        (12345, 12345),
+        (9999999999, 9999999999),
+        ("12345", 12345),  # numeric strings are coerced
+    ])
+    def test_accepted(self, raw, expected):
+        assert validate_telegram_id(raw) == expected
 
-    def test_valid_id_large(self):
-        assert validate_telegram_id(9999999999) == 9999999999
-
-    def test_string_id(self):
-        assert validate_telegram_id("12345") == 12345
-
-    def test_zero_raises(self):
+    @pytest.mark.parametrize("raw", [
+        0,
+        -1,
+        10000000000,  # above Telegram's id range
+        "abc",
+        None,
+    ])
+    def test_rejected(self, raw):
         with pytest.raises(ValueError):
-            validate_telegram_id(0)
-
-    def test_negative_raises(self):
-        with pytest.raises(ValueError):
-            validate_telegram_id(-1)
-
-    def test_too_large_raises(self):
-        with pytest.raises(ValueError):
-            validate_telegram_id(10000000000)
-
-    def test_non_numeric_raises(self):
-        with pytest.raises(ValueError):
-            validate_telegram_id("abc")
-
-    def test_none_raises(self):
-        with pytest.raises(ValueError):
-            validate_telegram_id(None)
+            validate_telegram_id(raw)
 
 
 class TestValidateMoneyAmount:
 
-    def test_valid_amount(self):
-        result = validate_money_amount("50")
-        assert result == Decimal("50.00")
+    @pytest.mark.parametrize("raw,kwargs,expected", [
+        ("50", {}, Decimal("50.00")),
+        ("99.99", {}, Decimal("99.99")),
+        ("0.01", {"min_amount": Decimal("0.01")}, Decimal("0.01")),          # exact min
+        ("1000000", {"max_amount": Decimal("1000000")}, Decimal("1000000.00")),  # exact max
+    ])
+    def test_accepted(self, raw, kwargs, expected):
+        assert validate_money_amount(raw, **kwargs) == expected
 
-    def test_valid_decimal(self):
-        result = validate_money_amount("99.99")
-        assert result == Decimal("99.99")
-
-    def test_below_min_raises(self):
+    @pytest.mark.parametrize("raw,kwargs", [
+        ("0.001", {"min_amount": Decimal("0.01")}),
+        ("2000000", {"max_amount": Decimal("1000000")}),
+        ("abc", {}),
+        ("-10", {}),
+    ])
+    def test_rejected(self, raw, kwargs):
         with pytest.raises(ValueError):
-            validate_money_amount("0.001", min_amount=Decimal("0.01"))
-
-    def test_above_max_raises(self):
-        with pytest.raises(ValueError):
-            validate_money_amount("2000000", max_amount=Decimal("1000000"))
-
-    def test_non_numeric_raises(self):
-        with pytest.raises(ValueError):
-            validate_money_amount("abc")
-
-    def test_negative_raises(self):
-        with pytest.raises(ValueError):
-            validate_money_amount("-10")
-
-    def test_exact_min(self):
-        result = validate_money_amount("0.01", min_amount=Decimal("0.01"))
-        assert result == Decimal("0.01")
-
-    def test_exact_max(self):
-        result = validate_money_amount("1000000", max_amount=Decimal("1000000"))
-        assert result == Decimal("1000000.00")
+            validate_money_amount(raw, **kwargs)
 
 
 class TestSanitizeHtml:
 
-    def test_escapes_angle_brackets(self):
-        result = sanitize_html("<script>alert('xss')</script>")
-        assert "<script>" not in result
-        assert "&lt;" in result
+    @pytest.mark.parametrize("raw,must_contain,must_not_contain", [
+        ("<script>alert('xss')</script>", "&lt;", "<script>"),
+        ("a & b", "&amp;", None),
+        ('he said "hello"', "&quot;", None),
+    ])
+    def test_escapes_unsafe_markup(self, raw, must_contain, must_not_contain):
+        result = sanitize_html(raw)
+        assert must_contain in result
+        if must_not_contain is not None:
+            assert must_not_contain not in result
 
-    def test_escapes_ampersand(self):
-        result = sanitize_html("a & b")
-        assert "&amp;" in result
-
-    def test_escapes_quotes(self):
-        result = sanitize_html('he said "hello"')
-        assert "&quot;" in result
-
-    def test_preserves_safe_bold(self):
-        result = sanitize_html("<b>bold</b>")
-        assert "<b>" in result
-        assert "</b>" in result
-
-    def test_preserves_safe_italic(self):
-        result = sanitize_html("<i>italic</i>")
-        assert "<i>" in result
-        assert "</i>" in result
-
-    def test_preserves_safe_code(self):
-        result = sanitize_html("<code>code</code>")
-        assert "<code>" in result
-        assert "</code>" in result
+    @pytest.mark.parametrize("tag", ["b", "i", "code"])
+    def test_preserves_telegram_safe_tags(self, tag):
+        result = sanitize_html(f"<{tag}>text</{tag}>")
+        assert f"<{tag}>" in result
+        assert f"</{tag}>" in result
 
     def test_plain_text_unchanged(self):
         assert sanitize_html("hello world") == "hello world"
@@ -113,65 +79,49 @@ class TestPaymentRequest:
         req = PaymentRequest(amount=Decimal("100"), currency="RUB", provider="cryptopay")
         assert req.amount == Decimal("100")
 
-    def test_invalid_provider(self):
+    @pytest.mark.parametrize("amount,currency,provider", [
+        (Decimal("100"), "RUB", "paypal"),   # unsupported provider
+        (Decimal("0"), "RUB", "stars"),
+        (Decimal("-10"), "RUB", "telegram"),
+        (Decimal("10.123"), "RUB", "fiat"),  # more than 2 decimals
+        (Decimal("100"), "LONG", "stars"),   # currency must be 3 chars
+    ])
+    def test_rejected(self, amount, currency, provider):
         with pytest.raises(ValidationError):
-            PaymentRequest(amount=Decimal("100"), currency="RUB", provider="paypal")
-
-    def test_zero_amount(self):
-        with pytest.raises(ValidationError):
-            PaymentRequest(amount=Decimal("0"), currency="RUB", provider="stars")
-
-    def test_negative_amount(self):
-        with pytest.raises(ValidationError):
-            PaymentRequest(amount=Decimal("-10"), currency="RUB", provider="telegram")
-
-    def test_too_many_decimals(self):
-        with pytest.raises(ValidationError):
-            PaymentRequest(amount=Decimal("10.123"), currency="RUB", provider="fiat")
-
-    def test_invalid_currency_length(self):
-        with pytest.raises(ValidationError):
-            PaymentRequest(amount=Decimal("100"), currency="LONG", provider="stars")
+            PaymentRequest(amount=amount, currency=currency, provider=provider)
 
 
 class TestItemPurchaseRequest:
 
-    def test_valid_request(self):
-        req = ItemPurchaseRequest(item_name="Widget", user_id=12345)
-        assert req.item_name == "Widget"
+    @pytest.mark.parametrize("item_name", [
+        "Widget",
+        "Select Edition",  # SQL keywords in a product name are legitimate
+    ])
+    def test_accepted(self, item_name):
+        assert ItemPurchaseRequest(item_name=item_name, user_id=12345).item_name == item_name
 
-    def test_sql_patterns_allowed(self):
-        req = ItemPurchaseRequest(item_name="Select Edition", user_id=1)
-        assert req.item_name == "Select Edition"
-
-    def test_control_characters_rejected(self):
+    @pytest.mark.parametrize("item_name,user_id", [
+        ("item\x00name", 1),  # control characters
+        ("item\x1fname", 1),
+        ("", 1),
+        ("Widget", 0),        # invalid telegram id
+    ])
+    def test_rejected(self, item_name, user_id):
         with pytest.raises(ValidationError):
-            ItemPurchaseRequest(item_name="item\x00name", user_id=1)
-        with pytest.raises(ValidationError):
-            ItemPurchaseRequest(item_name="item\x1fname", user_id=1)
-
-    def test_empty_name_rejected(self):
-        with pytest.raises(ValidationError):
-            ItemPurchaseRequest(item_name="", user_id=1)
-
-    def test_invalid_user_id(self):
-        with pytest.raises(ValidationError):
-            ItemPurchaseRequest(item_name="Widget", user_id=0)
+            ItemPurchaseRequest(item_name=item_name, user_id=user_id)
 
 
 class TestCategoryRequest:
 
     def test_valid_category(self):
-        req = CategoryRequest(name="Electronics")
-        assert req.name == "Electronics"
+        assert CategoryRequest(name="Electronics").name == "Electronics"
 
-    def test_sanitize_removes_html(self):
-        req = CategoryRequest(name="<b>Bold</b> Category")
-        assert req.sanitize_name() == "Bold Category"
-
-    def test_sanitize_collapses_spaces(self):
-        req = CategoryRequest(name="too   many   spaces")
-        assert req.sanitize_name() == "too many spaces"
+    @pytest.mark.parametrize("raw,sanitized", [
+        ("<b>Bold</b> Category", "Bold Category"),
+        ("too   many   spaces", "too many spaces"),
+    ])
+    def test_sanitize_name(self, raw, sanitized):
+        assert CategoryRequest(name=raw).sanitize_name() == sanitized
 
     def test_empty_name_rejected(self):
         with pytest.raises(ValidationError):
@@ -180,26 +130,19 @@ class TestCategoryRequest:
 
 class TestBroadcastMessage:
 
-    def test_valid_html_message(self):
-        msg = BroadcastMessage(text="<b>Hello</b> world")
-        assert msg.text == "<b>Hello</b> world"
+    @pytest.mark.parametrize("text,kwargs", [
+        ("<b>Hello</b> world", {}),
+        ("Hello world", {"parse_mode": "HTML"}),
+    ])
+    def test_accepted(self, text, kwargs):
+        assert BroadcastMessage(text=text, **kwargs).text == text
 
-    def test_unbalanced_bold_tag(self):
+    @pytest.mark.parametrize("text", [
+        "<b>Hello world",              # unbalanced bold
+        "<i>Hello</i><i>unclosed",     # unbalanced italic
+        "x" * 4097,                    # over the length cap
+        "",
+    ])
+    def test_rejected(self, text):
         with pytest.raises(ValidationError):
-            BroadcastMessage(text="<b>Hello world")
-
-    def test_unbalanced_italic_tag(self):
-        with pytest.raises(ValidationError):
-            BroadcastMessage(text="<i>Hello</i><i>unclosed")
-
-    def test_plain_text_valid(self):
-        msg = BroadcastMessage(text="Hello world", parse_mode="HTML")
-        assert msg.text == "Hello world"
-
-    def test_too_long_rejected(self):
-        with pytest.raises(ValidationError):
-            BroadcastMessage(text="x" * 4097)
-
-    def test_empty_rejected(self):
-        with pytest.raises(ValidationError):
-            BroadcastMessage(text="")
+            BroadcastMessage(text=text)

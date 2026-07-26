@@ -558,9 +558,9 @@ users waiting for it, just like the in‑chat flow.
 
 ## 🧪 Testing
 
-**714 tests** (`pytest`). The data layer runs against a real in‑memory async SQLite database
-(real SQL, transactions, and constraints) — only external services are mocked (Telegram Bot
-API, CryptoPay, Redis). What's covered:
+**905 tests, 75 % line coverage** (`pytest`), running in ~21 s. The data layer runs against a
+real in‑memory async SQLite database (real SQL, transactions, and constraints) — only external
+services are mocked (Telegram Bot API, CryptoPay, Redis). What's covered:
 
 - **Transactions & money** — purchase and cart‑checkout atomicity (balance deducted, stock
   removed, rollback on error), quantity checkout (one row per unit, partial stock aborts
@@ -580,6 +580,14 @@ API, CryptoPay, Redis). What's covered:
   web‑panel login limiter, and role‑cache behavior.
 - **Handlers** — user flows (`/start`, profile, shop, search, cart, referrals) and admin flows
   (user/role/balance management, catalog, paginated lists, profile views).
+- **Admin FSM flows** — promo‑code creation end to end (type, value, usage cap, expiry, and
+  category/product binding) plus view/toggle/delete; adding a position and restocking one;
+  editing a position and switching it between limited and unlimited stock, where a rejected
+  rename must leave the old stock untouched; broadcast validation, its one‑at‑a‑time guard,
+  and cancellation.
+- **Data export** — CSV streaming with keyset pagination, date filtering, an auth check on
+  every endpoint, and formula‑injection neutralization so a product name can't execute in a
+  spreadsheet.
 - **Infrastructure** — broadcast, restock notifications, payment recovery, metrics (including
   that user‑supplied callback data can't forge a metric line), caching & invalidation (including
   web‑panel edits and that a Redis outage defers invalidations instead of dropping them),
@@ -589,5 +597,6 @@ API, CryptoPay, Redis). What's covered:
   produces has a handler registered for it, so an arrow button can't be a dead end.
 
 ```bash
-pytest                     # full suite (coverage runs automatically)
+pytest                                          # full suite
+pytest --cov=bot --cov-report=term-missing      # with the coverage report
 ```

@@ -1,3 +1,5 @@
+import pytest
+
 from bot.keyboards.inline import (
     main_menu, profile_keyboard, simple_buttons, back, close, item_info, payment_menu,
     get_payment_choice, question_buttons, check_sub, referral_system_keyboard,
@@ -35,67 +37,38 @@ def _has_url_button(markup):
 
 class TestMainMenu:
 
-    def test_basic_buttons_present(self):
-        markup = main_menu(role=1)
-        cbs = _all_callback_data(markup)
-        assert "shop" in cbs
-        assert "rules" in cbs
-        assert "profile" in cbs
+    @pytest.mark.parametrize("callback", ["shop", "rules", "profile"])
+    def test_basic_buttons_present(self, callback):
+        assert callback in _all_callback_data(main_menu(role=1))
 
-    def test_no_admin_for_regular_user(self):
-        markup = main_menu(role=1)
-        cbs = _all_callback_data(markup)
-        assert "console" not in cbs
+    @pytest.mark.parametrize("role,has_console", [
+        (1, False),  # regular user
+        (2, True),   # admin
+    ])
+    def test_console_button_follows_role(self, role, has_console):
+        assert ("console" in _all_callback_data(main_menu(role=role))) is has_console
 
-    def test_admin_button_for_admin(self):
-        markup = main_menu(role=2)
-        cbs = _all_callback_data(markup)
-        assert "console" in cbs
-
-    def test_channel_button(self):
-        markup = main_menu(role=1, channel="test_channel")
-        assert _has_url_button(markup)
-
-    def test_helper_button(self):
-        markup = main_menu(role=1, helper="12345")
-        assert _has_url_button(markup)
-
-    def test_no_channel_no_helper(self):
-        markup = main_menu(role=1)
-        assert not _has_url_button(markup)
+    @pytest.mark.parametrize("kwargs,expected", [
+        ({"channel": "test_channel"}, True),
+        ({"helper": "12345"}, True),
+        ({}, False),
+    ])
+    def test_url_buttons(self, kwargs, expected):
+        assert _has_url_button(main_menu(role=1, **kwargs)) is expected
 
 
 class TestProfileKeyboard:
 
-    def test_replenish_always_present(self):
-        markup = profile_keyboard(referral_percent=0, user_items=0)
-        cbs = _all_callback_data(markup)
-        assert "replenish_balance" in cbs
-
-    def test_referral_button_when_percent_nonzero(self):
-        markup = profile_keyboard(referral_percent=10)
-        cbs = _all_callback_data(markup)
-        assert "referral_system" in cbs
-
-    def test_no_referral_button_when_zero(self):
-        markup = profile_keyboard(referral_percent=0)
-        cbs = _all_callback_data(markup)
-        assert "referral_system" not in cbs
-
-    def test_bought_items_when_user_has_items(self):
-        markup = profile_keyboard(referral_percent=0, user_items=5)
-        cbs = _all_callback_data(markup)
-        assert "bought_items" in cbs
-
-    def test_no_bought_items_when_zero(self):
-        markup = profile_keyboard(referral_percent=0, user_items=0)
-        cbs = _all_callback_data(markup)
-        assert "bought_items" not in cbs
-
-    def test_back_button_present(self):
-        markup = profile_keyboard(referral_percent=0)
-        cbs = _all_callback_data(markup)
-        assert "back_to_menu" in cbs
+    @pytest.mark.parametrize("kwargs,callback,expected", [
+        ({"referral_percent": 0, "user_items": 0}, "replenish_balance", True),
+        ({"referral_percent": 0}, "back_to_menu", True),
+        ({"referral_percent": 10}, "referral_system", True),
+        ({"referral_percent": 0}, "referral_system", False),
+        ({"referral_percent": 0, "user_items": 5}, "bought_items", True),
+        ({"referral_percent": 0, "user_items": 0}, "bought_items", False),
+    ])
+    def test_conditional_buttons(self, kwargs, callback, expected):
+        assert (callback in _all_callback_data(profile_keyboard(**kwargs))) is expected
 
 
 class TestPaymentMenu:
@@ -117,28 +90,19 @@ class TestPaymentMenu:
 
 class TestItemInfoKeyboard:
 
-    def test_has_buy_and_back(self):
-        markup = item_info("gp_0")
-        cbs = _all_callback_data(markup)
-        assert "buy_item" in cbs
-        assert "gp_0" in cbs
+    @pytest.mark.parametrize("callback", ["buy_item", "gp_0"])
+    def test_has_buy_and_back(self, callback):
+        assert callback in _all_callback_data(item_info("gp_0"))
 
-    def test_in_stock_has_no_notify_button(self):
-        cbs = _all_callback_data(item_info("gp_0"))
-        assert "sub_stock" not in cbs
-        assert "unsub_stock" not in cbs
-
-    def test_out_of_stock_offers_subscribe(self):
-        cbs = _all_callback_data(item_info("gp_0", out_of_stock=True))
-        assert "sub_stock" in cbs
-        assert "unsub_stock" not in cbs
-
-    def test_out_of_stock_and_subscribed_offers_unsubscribe(self):
-        cbs = _all_callback_data(
-            item_info("gp_0", out_of_stock=True, subscribed=True)
-        )
-        assert "unsub_stock" in cbs
-        assert "sub_stock" not in cbs
+    @pytest.mark.parametrize("kwargs,expected_sub,expected_unsub", [
+        ({}, False, False),                                   # in stock: no notify button
+        ({"out_of_stock": True}, True, False),                # offer to subscribe
+        ({"out_of_stock": True, "subscribed": True}, False, True),  # offer to unsubscribe
+    ])
+    def test_restock_notify_button(self, kwargs, expected_sub, expected_unsub):
+        cbs = _all_callback_data(item_info("gp_0", **kwargs))
+        assert ("sub_stock" in cbs) is expected_sub
+        assert ("unsub_stock" in cbs) is expected_unsub
 
     def test_review_buttons_carry_no_item_name(self):
         """Telegram caps callback_data at 64 bytes; a 100-char Cyrillic product
@@ -230,46 +194,32 @@ class TestSimpleButtons:
 
 class TestBackAndClose:
 
-    def test_back_default(self):
-        markup = back()
-        cbs = _all_callback_data(markup)
-        assert "menu" in cbs
-
-    def test_back_custom_cb(self):
-        markup = back("profile")
-        cbs = _all_callback_data(markup)
-        assert "profile" in cbs
+    @pytest.mark.parametrize("args,expected", [
+        ((), "menu"),           # default target
+        (("profile",), "profile"),
+    ])
+    def test_back(self, args, expected):
+        assert expected in _all_callback_data(back(*args))
 
     def test_close_button(self):
-        markup = close()
-        cbs = _all_callback_data(markup)
-        assert "close" in cbs
+        assert "close" in _all_callback_data(close())
 
 
 class TestReferralSystemKeyboard:
 
-    def test_no_referrals_no_earnings(self):
-        markup = referral_system_keyboard(has_referrals=False, has_earnings=False)
-        cbs = _all_callback_data(markup)
-        assert "view_referrals" not in cbs
-        assert "view_all_earnings" not in cbs
-        assert "profile" in cbs  # back button
-
-    def test_with_referrals(self):
-        markup = referral_system_keyboard(has_referrals=True, has_earnings=False)
-        cbs = _all_callback_data(markup)
-        assert "view_referrals" in cbs
-
-    def test_with_earnings(self):
-        markup = referral_system_keyboard(has_referrals=False, has_earnings=True)
-        cbs = _all_callback_data(markup)
-        assert "view_all_earnings" in cbs
-
-    def test_with_both(self):
-        markup = referral_system_keyboard(has_referrals=True, has_earnings=True)
-        cbs = _all_callback_data(markup)
-        assert "view_referrals" in cbs
-        assert "view_all_earnings" in cbs
+    @pytest.mark.parametrize("has_referrals,has_earnings", [
+        (False, False),
+        (True, False),
+        (False, True),
+        (True, True),
+    ])
+    def test_buttons_follow_available_data(self, has_referrals, has_earnings):
+        cbs = _all_callback_data(
+            referral_system_keyboard(has_referrals=has_referrals, has_earnings=has_earnings)
+        )
+        assert ("view_referrals" in cbs) is has_referrals
+        assert ("view_all_earnings" in cbs) is has_earnings
+        assert "profile" in cbs  # back button is always there
 
 
 class TestGetPaymentChoice:

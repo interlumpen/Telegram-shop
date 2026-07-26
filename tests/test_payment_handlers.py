@@ -7,12 +7,17 @@ from sqlalchemy import select
 from bot.database.methods.read import check_user
 from bot.database.main import Database
 from bot.database.models.main import Payments
+from bot.handlers.user.balance_and_payment import (
+    replenish_balance_callback_handler, buy_item_callback_handler,
+    checking_payment, successful_payment_handler,
+)
+from bot.misc.services.payment import currency_to_stars, payload_amount
+from bot.states import BalanceStates
 
 
 class TestReplenishBalance:
 
     async def test_no_payment_methods_enabled(self, make_callback_query, fsm_context):
-        from bot.handlers.user.balance_and_payment import replenish_balance_callback_handler
 
         call = make_callback_query(data="replenish_balance", user_id=400001)
 
@@ -20,10 +25,10 @@ class TestReplenishBalance:
             await replenish_balance_callback_handler(call, fsm_context)
 
         call.answer.assert_called_once()
+        # No provider configured -> the top-up menu is never offered.
+        call.message.edit_text.assert_not_called()
 
     async def test_sets_waiting_amount_state(self, make_callback_query, fsm_context):
-        from bot.handlers.user.balance_and_payment import replenish_balance_callback_handler
-        from bot.states import BalanceStates
 
         call = make_callback_query(data="replenish_balance", user_id=400002)
 
@@ -39,7 +44,6 @@ class TestReplenishBalance:
 class TestCheckingPayment:
 
     async def test_no_active_invoice(self, make_callback_query, fsm_context):
-        from bot.handlers.user.balance_and_payment import checking_payment
 
         call = make_callback_query(data="check", user_id=400010)
         # Empty state - no payment_type
@@ -48,9 +52,10 @@ class TestCheckingPayment:
         await checking_payment(call, fsm_context)
 
         call.answer.assert_called_once()
+        # Nothing to check means nothing is rendered either.
+        call.message.edit_text.assert_not_called()
 
     async def test_cryptopay_paid_credits_balance(self, make_callback_query, fsm_context, user_factory):
-        from bot.handlers.user.balance_and_payment import checking_payment
 
         await user_factory(telegram_id=400011, balance=0)
 
@@ -87,7 +92,6 @@ class TestCheckingPayment:
             assert payment.status == "succeeded"
 
     async def test_cryptopay_not_paid_yet(self, make_callback_query, fsm_context, user_factory):
-        from bot.handlers.user.balance_and_payment import checking_payment
 
         await user_factory(telegram_id=400012)
 
@@ -106,7 +110,6 @@ class TestCheckingPayment:
         assert user['balance'] == Decimal("0")
 
     async def test_cryptopay_expired(self, make_callback_query, fsm_context, user_factory):
-        from bot.handlers.user.balance_and_payment import checking_payment
 
         await user_factory(telegram_id=400013)
 
@@ -120,9 +123,10 @@ class TestCheckingPayment:
             await checking_payment(call, fsm_context)
 
         call.answer.assert_called()
+        # An expired invoice must never credit the balance.
+        assert (await check_user(400013))['balance'] == Decimal("0")
 
     async def test_cryptopay_already_processed(self, make_callback_query, fsm_context, user_factory):
-        from bot.handlers.user.balance_and_payment import checking_payment
 
         await user_factory(telegram_id=400014, balance=0)
 
@@ -161,7 +165,6 @@ class TestCryptoPayFractionalAmounts:
 
     async def test_fractional_amount_is_credited_in_full(self, make_callback_query,
                                                          fsm_context, user_factory):
-        from bot.handlers.user.balance_and_payment import checking_payment
 
         await user_factory(telegram_id=400030, balance=0)
         call = make_callback_query(data="check", user_id=400030)
@@ -187,7 +190,6 @@ class TestCryptoPayFractionalAmounts:
             assert payment.amount == Decimal("20.50")   # ledger agrees with the credit
 
     async def test_zero_amount_is_rejected(self, make_callback_query, fsm_context, user_factory):
-        from bot.handlers.user.balance_and_payment import checking_payment
 
         await user_factory(telegram_id=400031, balance=0)
         call = make_callback_query(data="check", user_id=400031)
@@ -223,7 +225,6 @@ class TestSuccessfulPaymentIdempotency:
         The old uuid4() fallback made every replay look like a new payment,
         defeating uq_payment_provider_ext entirely.
         """
-        from bot.handlers.user.balance_and_payment import successful_payment_handler
 
         await user_factory(telegram_id=400040, balance=0)
 
@@ -250,7 +251,6 @@ class TestSuccessfulPaymentIdempotency:
             assert len(payments) == 1
 
     async def test_fallback_key_is_deterministic(self, make_message, user_factory):
-        from bot.handlers.user.balance_and_payment import successful_payment_handler
 
         await user_factory(telegram_id=400041, balance=0)
 
@@ -270,7 +270,6 @@ class TestSuccessfulPaymentIdempotency:
             assert payment.external_id.startswith("stars:fallback:")
 
     async def test_charge_id_is_used_when_present(self, make_message, user_factory):
-        from bot.handlers.user.balance_and_payment import successful_payment_handler
 
         await user_factory(telegram_id=400042, balance=0)
 
@@ -293,7 +292,6 @@ class TestSuccessfulPaymentIdempotency:
 class TestBuyItemHandler:
 
     async def test_buy_item_success(self, make_callback_query, fsm_context, user_factory, item_factory):
-        from bot.handlers.user.balance_and_payment import buy_item_callback_handler
 
         await user_factory(telegram_id=400020, balance=500)
         await item_factory(name="TestWidget", price=100, values=[("widget_value_1", False)])
@@ -309,7 +307,6 @@ class TestBuyItemHandler:
         assert user['balance'] == Decimal("400")
 
     async def test_buy_item_insufficient_funds(self, make_callback_query, fsm_context, user_factory, item_factory):
-        from bot.handlers.user.balance_and_payment import buy_item_callback_handler
 
         await user_factory(telegram_id=400021, balance=10)
         await item_factory(name="ExpensiveItem", price=1000, values=[("val", False)])
@@ -326,21 +323,21 @@ class TestBuyItemHandler:
         assert user['balance'] == Decimal("10")
 
     async def test_buy_item_no_csrf_item(self, make_callback_query, fsm_context, user_factory):
-        from bot.handlers.user.balance_and_payment import buy_item_callback_handler
 
-        await user_factory(telegram_id=400022)
+        await user_factory(telegram_id=400022, balance=500)
 
         call = make_callback_query(data="buy_item", user_id=400022)
         # No csrf_item in state
 
         await buy_item_callback_handler(call, fsm_context)
 
-        call.answer.assert_called()
+        call.answer.assert_called_once_with('middleware.security.invalid_csrf', show_alert=True)
+        # A purchase without the CSRF-guarded item name must not charge anything.
+        assert (await check_user(400022))['balance'] == Decimal("500")
 
 
 class TestStarsAmountFromPayload:
     def test_payload_amount_prefers_explicit_keys(self):
-        from bot.misc.services.payment import payload_amount
 
         assert payload_amount({"amount": 25}) == 25
         assert payload_amount({"amount_rub": 20, "stars": 19}) == 20
@@ -353,8 +350,6 @@ class TestStarsAmountFromPayload:
     ):
         import json
         import math
-        from bot.handlers.user.balance_and_payment import successful_payment_handler
-        from bot.misc.services.payment import currency_to_stars
 
         await user_factory(telegram_id=400100 + requested, balance=0)
 
@@ -380,7 +375,6 @@ class TestStarsAmountFromPayload:
         self, make_message, user_factory
     ):
         """No usable payload: the lossy reverse conversion is the last resort."""
-        from bot.handlers.user.balance_and_payment import successful_payment_handler
 
         await user_factory(telegram_id=400199, balance=0)
 

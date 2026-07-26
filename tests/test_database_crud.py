@@ -1,6 +1,8 @@
 import datetime
 from decimal import Decimal
 
+import pytest
+
 from sqlalchemy import select
 
 from bot.database.methods.create import (
@@ -9,7 +11,7 @@ from bot.database.methods.create import (
 )
 from bot.database.methods.read import (
     check_user, check_role, get_role_id_by_name,
-    check_role_name_by_id, select_max_role_id,
+    check_role_name_by_id,
     select_today_users, get_user_count,
     get_all_users, check_category,
     get_item_info, check_value,
@@ -23,7 +25,7 @@ from bot.database.methods.read import (
     select_today_orders, select_all_orders,
     select_today_operations, select_all_operations,
     select_users_balance,
-    get_all_roles, get_role_by_id, get_roles_with_max_perms,
+    get_roles_with_max_perms,
     count_users_with_role,
 )
 from bot.database.methods.update import (
@@ -34,7 +36,6 @@ from bot.database.methods.delete import (
     delete_item, delete_only_items,
     delete_item_from_position, delete_category,
 )
-
 
 NOW = datetime.datetime.now(datetime.timezone.utc)
 TODAY_STR = NOW.strftime("%Y-%m-%d")
@@ -101,7 +102,7 @@ class TestUserCRUD:
     async def test_select_today_users(self, user_factory):
         await user_factory(telegram_id=5001)
         count = await select_today_users(TODAY_STR)
-        assert count >= 1
+        assert count == 1
 
     async def test_select_today_users_wrong_date(self, user_factory):
         await user_factory(telegram_id=5002)
@@ -116,27 +117,21 @@ class TestUserCRUD:
 
 
 class TestRoleCRUD:
-    async def test_get_role_id_by_name_user(self):
-        role_id = await get_role_id_by_name("USER")
-        assert role_id is not None
+    # Role listing/lookup by id lives in test_role_management.py — this class only covers name->id resolution and the per-user permission read.
 
-    async def test_get_role_id_by_name_admin(self):
-        role_id = await get_role_id_by_name("ADMIN")
-        assert role_id is not None
-
-    async def test_get_role_id_by_name_nonexistent(self):
-        role_id = await get_role_id_by_name("NONEXISTENT")
-        assert role_id is None
+    @pytest.mark.parametrize("name,found", [
+        ("USER", True),
+        ("ADMIN", True),
+        ("NONEXISTENT", False),
+    ])
+    async def test_get_role_id_by_name(self, name, found):
+        role_id = await get_role_id_by_name(name)
+        assert (role_id is not None) is found
 
     async def test_check_role_name_by_id(self):
         role_id = await get_role_id_by_name("USER")
         name = await check_role_name_by_id(role_id)
         assert name == "USER"
-
-    async def test_select_max_role_id(self):
-        max_id = await select_max_role_id()
-        assert max_id is not None
-        assert max_id >= 1
 
     async def test_check_role_returns_permissions(self, user_factory):
         await user_factory(telegram_id=7001)
@@ -156,16 +151,6 @@ class TestRoleCRUD:
         # ADMIN has BROADCAST=2 permission
         assert perms & 2 == 2
 
-    async def test_get_all_roles(self):
-        roles = await get_all_roles()
-        assert len(roles) >= 3
-        assert all(k in roles[0] for k in ('id', 'name', 'permissions', 'default'))
-
-    async def test_get_role_by_id(self):
-        role_id = await get_role_id_by_name('ADMIN')
-        role = await get_role_by_id(role_id)
-        assert role['name'] == 'ADMIN'
-
     async def test_get_roles_with_max_perms(self):
         roles = await get_roles_with_max_perms(1)
         assert all((r['permissions'] & ~1) == 0 for r in roles)
@@ -173,7 +158,7 @@ class TestRoleCRUD:
     async def test_count_users_with_role(self, user_factory):
         await user_factory(telegram_id=7003, role_id=1)
         user_role = await get_role_id_by_name('USER')
-        assert await count_users_with_role(user_role) >= 1
+        assert await count_users_with_role(user_role) == 1
 
 
 class TestCategoryCRUD:
@@ -215,17 +200,13 @@ class TestCategoryCRUD:
 
 class TestItemCRUD:
     async def test_create_and_get_item_info(self, item_factory):
-        await item_factory(name="Widget", price=50, category="Gadgets")
+        await item_factory(name="Widget", price=50, category="Gadgets",
+                           description="Desc here")
         item = await get_item_info("Widget")
         assert item is not None
         assert item["name"] == "Widget"
         assert item["price"] == Decimal("50")
-
-    async def test_get_item_info(self, item_factory):
-        await item_factory(name="InfoItem", price=75, category="InfoCat", description="Desc here")
-        info = await get_item_info("InfoItem")
-        assert info is not None
-        assert info["description"] == "Desc here"
+        assert item["description"] == "Desc here"
 
     async def test_create_item_duplicate_ignored(self, item_factory):
         await item_factory(name="DupItem", category="DupCat")
@@ -259,7 +240,7 @@ class TestItemCRUD:
             result = await add_values_to_item("RaceVal", "abc", False)
 
         assert result is False
-        assert await select_item_values_amount("RaceVal") == 1   # still just the one
+        assert await select_item_values_amount("RaceVal") == 1  # still just the one
 
     async def test_add_values_empty_returns_false(self, item_factory):
         await item_factory(name="EmptyVal", category="EmptyValCat")
@@ -389,13 +370,13 @@ class TestBalanceOperations:
         await user_factory(telegram_id=8007)
         await create_operation(8007, 300, NOW)
         total = await select_today_operations(TODAY_STR)
-        assert total >= Decimal("300")
+        assert total == Decimal("300")
 
     async def test_select_all_operations(self, user_factory):
         await user_factory(telegram_id=8008)
         await create_operation(8008, 400, NOW)
         total = await select_all_operations()
-        assert total >= Decimal("400")
+        assert total == Decimal("400")
 
     async def test_set_user_blocked(self, user_factory):
         await user_factory(telegram_id=8009)
@@ -562,9 +543,9 @@ class TestStats:
         assert await select_user_items(11003) == 2
 
     async def test_select_users_balance_empty(self):
-        total = await select_users_balance()
-        # No users, so None or 0
-        assert total is None or total == Decimal("0")
+        # Raw SQL SUM over an empty table is NULL, not 0 — callers that render
+        # this value (admin shop stats) have to cope with None.
+        assert await select_users_balance() is None
 
     async def test_select_all_operations_empty(self):
         assert await select_all_operations() == Decimal("0")

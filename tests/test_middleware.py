@@ -1,5 +1,5 @@
 import time
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from aiogram.types import CallbackQuery, Message
@@ -8,7 +8,11 @@ from bot.middleware.security import (
     check_suspicious_patterns, SecurityMiddleware, AuthenticationMiddleware,
     invalidate_auth_caches, set_auth_middleware, get_auth_middleware,
 )
-from bot.middleware.rate_limit import RateLimiter, RateLimitConfig, RedisRateLimiter
+from bot.middleware.rate_limit import (
+    RateLimiter, RateLimitConfig, RedisRateLimiter, RateLimitMiddleware,
+)
+from bot.main import _setup_rate_limiting
+from bot.states import ShopStates
 
 
 def _auth_callback(user_id: int, data: str = "profile") -> AsyncMock:
@@ -24,39 +28,26 @@ def _auth_callback(user_id: int, data: str = "profile") -> AsyncMock:
 
 class TestSuspiciousPatterns:
 
-    def test_safe_input(self):
-        assert check_suspicious_patterns("Hello, world!") is False
-
-    def test_empty_string(self):
-        assert check_suspicious_patterns("") is False
-
-    def test_none(self):
-        assert check_suspicious_patterns(None) is False
-
-    def test_sql_patterns_not_blocked(self):
-        assert check_suspicious_patterns("1 UNION SELECT * FROM users") is False
-        assert check_suspicious_patterns("1; DELETE FROM users") is False
-
-    def test_xss_script_tag(self):
-        assert check_suspicious_patterns("<script>alert(1)</script>") is True
-
-    def test_xss_javascript_protocol(self):
-        assert check_suspicious_patterns("javascript:alert(1)") is True
-
-    def test_shell_patterns_not_blocked(self):
-        assert check_suspicious_patterns("test | cat /etc/passwd") is False
-        assert check_suspicious_patterns("test `whoami`") is False
-
-    def test_path_traversal_not_blocked(self):
-        assert check_suspicious_patterns("../../etc/passwd") is False
-
-    def test_long_string(self):
-        assert check_suspicious_patterns("x" * 5000) is True
-
-    def test_normal_callback_data(self):
-        assert check_suspicious_patterns("shop") is False
-        assert check_suspicious_patterns("buy_item_123") is False
-        assert check_suspicious_patterns("profile") is False
+    @pytest.mark.parametrize("text,expected", [
+        ("Hello, world!", False),
+        ("", False),
+        (None, False),
+        ("shop", False),
+        ("buy_item_123", False),
+        ("profile", False),
+        # SQL and shell metacharacters are the DB layer's problem, not this filter's - parameterized queries handle them, so they pass through.
+        ("1 UNION SELECT * FROM users", False),
+        ("1; DELETE FROM users", False),
+        ("test | cat /etc/passwd", False),
+        ("test `whoami`", False),
+        ("../../etc/passwd", False),
+        # XSS and oversized payloads are blocked.
+        ("<script>alert(1)</script>", True),
+        ("javascript:alert(1)", True),
+        ("x" * 5000, True),
+    ])
+    def test_pattern_classification(self, text, expected):
+        assert check_suspicious_patterns(text) is expected
 
 
 class TestSecurityMiddlewareCriticalActions:
@@ -64,66 +55,40 @@ class TestSecurityMiddlewareCriticalActions:
     def setup_method(self):
         self.middleware = SecurityMiddleware()
 
-    def test_buy_is_critical(self):
-        assert self.middleware.is_critical_action("buy_item") is True
+    @pytest.mark.parametrize("data,expected", [
+        ("buy_item", True),
+        ("pay_cryptopay", True),
+        ("delete_category", True),
+        ("admin_panel", True),
+        ("role_mgmt", True),
+        ("role_new", True),
+        ("role_d_5", True),
+        ("asr_2_123456", True),
+        ("shop", False),
+        ("profile", False),
+        ("", False),
+        (None, False),
+    ])
+    def test_critical_action(self, data, expected):
+        assert self.middleware.is_critical_action(data) is expected
 
-    def test_pay_is_critical(self):
-        assert self.middleware.is_critical_action("pay_cryptopay") is True
-
-    def test_delete_is_critical(self):
-        assert self.middleware.is_critical_action("delete_category") is True
-
-    def test_admin_is_critical(self):
-        assert self.middleware.is_critical_action("admin_panel") is True
-
-    def test_shop_is_not_critical(self):
-        assert self.middleware.is_critical_action("shop") is False
-
-    def test_profile_is_not_critical(self):
-        assert self.middleware.is_critical_action("profile") is False
-
-    def test_role_mgmt_is_critical(self):
-        assert self.middleware.is_critical_action("role_mgmt") is True
-
-    def test_role_new_is_critical(self):
-        assert self.middleware.is_critical_action("role_new") is True
-
-    def test_role_delete_is_critical(self):
-        assert self.middleware.is_critical_action("role_d_5") is True
-
-    def test_asr_is_critical(self):
-        assert self.middleware.is_critical_action("asr_2_123456") is True
-
-    def test_empty_string(self):
-        assert self.middleware.is_critical_action("") is False
-
-    def test_none(self):
-        assert self.middleware.is_critical_action(None) is False
-
-    def test_buy_is_replay_protected(self):
-        assert self.middleware.is_replay_protected("buy_item") is True
-
-    def test_pay_is_replay_protected(self):
-        assert self.middleware.is_replay_protected("pay_cryptopay") is True
-
-    def test_role_mgmt_not_replay_protected(self):
-        assert self.middleware.is_replay_protected("role_mgmt") is False
-
-    def test_admin_not_replay_protected(self):
-        assert self.middleware.is_replay_protected("admin_panel") is False
-
-    def test_asr_not_replay_protected(self):
-        assert self.middleware.is_replay_protected("asr_2_123") is False
+    @pytest.mark.parametrize("data,expected", [
+        ("buy_item", True),
+        ("pay_cryptopay", True),
+        # Admin navigation is critical but idempotent — replaying it is harmless.
+        ("role_mgmt", False),
+        ("admin_panel", False),
+        ("asr_2_123", False),
+    ])
+    def test_replay_protected(self, data, expected):
+        assert self.middleware.is_replay_protected(data) is expected
 
 
 class TestRateLimitActionMapping:
     def setup_method(self):
-        from bot.middleware.rate_limit import RateLimitMiddleware
         self.mw = RateLimitMiddleware()
 
     def _action(self, data, state=None):
-        from unittest.mock import MagicMock
-        from aiogram.types import CallbackQuery
         call = MagicMock(spec=CallbackQuery)
         call.data = data
         return self.mw._get_action_from_event(call, {"raw_state": state})
@@ -152,10 +117,6 @@ class TestRateLimitActionMapping:
         assert self._action("something_else") == "default"
 
     def test_search_text_input_recognised_by_state(self):
-        from unittest.mock import MagicMock
-        from aiogram.types import Message
-        from bot.states import ShopStates
-
         message = MagicMock(spec=Message)
         message.text = "netflix"
         action = self.mw._get_action_from_event(
@@ -164,9 +125,6 @@ class TestRateLimitActionMapping:
         assert action == "search"
 
     def test_plain_text_without_state_is_default(self):
-        from unittest.mock import MagicMock
-        from aiogram.types import Message
-
         message = MagicMock(spec=Message)
         message.text = "netflix"
         assert self.mw._get_action_from_event(message, {"raw_state": None}) == "default"
@@ -177,9 +135,6 @@ class TestRateLimitActionMapping:
             assert action in config.action_limits, f"{action!r} is mapped but unlimited"
 
     def test_startup_does_not_shadow_the_limits(self):
-        from unittest.mock import MagicMock, patch
-        from bot.main import _setup_rate_limiting
-
         with patch('bot.main.setup_rate_limiting') as setup:
             _setup_rate_limiting(MagicMock(), auth_middleware=MagicMock())
 
@@ -482,29 +437,8 @@ class TestRoleCacheRedis:
         assert "auth:role:210002" not in fake_cache.store
 
 
-class TestPermissionHasAnyAdminPerm:
-
-    def test_use_only_is_not_admin(self):
-        from bot.database.models import Permission
-        assert Permission.has_any_admin_perm(1) is False
-
-    def test_admin_perms_is_admin(self):
-        from bot.database.models import Permission
-        assert Permission.has_any_admin_perm(31) is True
-
-    def test_single_admin_bit_is_admin(self):
-        from bot.database.models import Permission
-        assert Permission.has_any_admin_perm(2) is True  # BROADCAST only
-
-    def test_zero_is_not_admin(self):
-        from bot.database.models import Permission
-        assert Permission.has_any_admin_perm(0) is False
-
-
 class TestSecurityMiddlewareWithoutFromUser:
     async def test_suspicious_text_without_from_user_does_not_crash(self):
-        from bot.middleware.security import SecurityMiddleware
-
         mw = SecurityMiddleware()
 
         event = MagicMock(spec=Message)
@@ -516,8 +450,6 @@ class TestSecurityMiddlewareWithoutFromUser:
         assert await mw(handler, event, {}) == "passed"
 
     async def test_benign_text_without_from_user_passes(self):
-        from bot.middleware.security import SecurityMiddleware
-
         mw = SecurityMiddleware()
 
         event = MagicMock(spec=Message)

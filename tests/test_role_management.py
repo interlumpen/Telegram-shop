@@ -1,5 +1,8 @@
 import asyncio
+import time as _time
 from unittest.mock import patch, AsyncMock
+
+import pytest
 
 from bot.database.methods.read import (
     get_all_roles, get_role_by_id, get_roles_with_max_perms,
@@ -9,6 +12,15 @@ from bot.database.methods.read import (
 from bot.database.methods.create import create_role
 from bot.database.methods.update import update_role
 from bot.database.methods.delete import delete_role
+from bot.database.models import Permission
+from bot.handlers.admin.role_management import (
+    role_management_handler, role_view_handler, role_create_name, role_edit_name,
+    role_delete_confirm, assign_role_list, assign_role_confirm,
+    _perms_done, _toggle_perm, _format_permissions, _build_perms_keyboard,
+)
+from bot.middleware.security import (
+    AuthenticationMiddleware, set_auth_middleware, get_auth_middleware,
+)
 
 
 class TestRoleCRUDMethods:
@@ -150,7 +162,6 @@ class TestRoleCRUDMethods:
 class TestRoleManagementHandlers:
 
     async def test_role_list_handler(self, make_callback_query, fsm_context):
-        from bot.handlers.admin.role_management import role_management_handler
 
         call = make_callback_query(data="role_mgmt", user_id=900100)
 
@@ -163,7 +174,6 @@ class TestRoleManagementHandlers:
         assert "admin.roles.list_title" in text
 
     async def test_role_view_handler(self, make_callback_query):
-        from bot.handlers.admin.role_management import role_view_handler
 
         role_id = await get_role_id_by_name('USER')
         call = make_callback_query(data=f"role_v_{role_id}", user_id=900101)
@@ -177,7 +187,6 @@ class TestRoleManagementHandlers:
         assert "admin.roles.detail" in text
 
     async def test_role_view_perm_denied(self, make_callback_query):
-        from bot.handlers.admin.role_management import role_view_handler
 
         # OWNER role has perms=127, caller has perms=31 (ADMIN)
         role_id = await get_role_id_by_name('OWNER')
@@ -187,10 +196,11 @@ class TestRoleManagementHandlers:
                    new_callable=AsyncMock, return_value=31):
             await role_view_handler(call)
 
-        call.answer.assert_called_once()
+        call.answer.assert_called_once_with('admin.roles.perm_denied', show_alert=True)
+        # Denied means the role detail is never rendered.
+        call.message.edit_text.assert_not_called()
 
     async def test_role_create_name(self, make_message, fsm_context):
-        from bot.handlers.admin.role_management import role_create_name
 
         msg = make_message(text="Moderator", user_id=900103)
         await fsm_context.set_state("waiting_role_name")
@@ -205,7 +215,6 @@ class TestRoleManagementHandlers:
         assert data['mode'] == 'create'
 
     async def test_role_create_name_too_long(self, make_message, fsm_context):
-        from bot.handlers.admin.role_management import role_create_name
 
         msg = make_message(text="A" * 65, user_id=900104)
         await fsm_context.set_state("waiting_role_name")
@@ -219,7 +228,6 @@ class TestRoleManagementHandlers:
         assert "name_invalid" in text
 
     async def test_role_create_done(self, make_callback_query, fsm_context):
-        from bot.handlers.admin.role_management import _perms_done
 
         call = make_callback_query(data="rp_done", user_id=900105)
         await fsm_context.update_data(
@@ -236,7 +244,6 @@ class TestRoleManagementHandlers:
         assert role_id is not None
 
     async def test_role_create_duplicate(self, make_callback_query, fsm_context, role_factory):
-        from bot.handlers.admin.role_management import _perms_done
 
         await role_factory("EXISTING", 3)
         call = make_callback_query(data="rp_done", user_id=900106)
@@ -251,7 +258,6 @@ class TestRoleManagementHandlers:
         assert "name_exists" in text
 
     async def test_role_edit_skip_name(self, make_message, fsm_context):
-        from bot.handlers.admin.role_management import role_edit_name
 
         await fsm_context.update_data(
             role_id=1, role_name="ORIGINAL", role_perms=3, caller_perms=127, mode='edit'
@@ -266,7 +272,6 @@ class TestRoleManagementHandlers:
         assert data['role_name'] == 'ORIGINAL'
 
     async def test_role_edit_done(self, make_callback_query, fsm_context, role_factory):
-        from bot.handlers.admin.role_management import _perms_done
 
         role_id = await role_factory("EDITABLE", 3)
         call = make_callback_query(data="rp_done", user_id=900108)
@@ -284,7 +289,6 @@ class TestRoleManagementHandlers:
         assert role['permissions'] == 7
 
     async def test_perms_done_escalation_denied(self, make_callback_query, fsm_context):
-        from bot.handlers.admin.role_management import _perms_done
 
         call = make_callback_query(data="rp_done", user_id=900109)
         await fsm_context.update_data(
@@ -293,10 +297,12 @@ class TestRoleManagementHandlers:
 
         await _perms_done(call, fsm_context)
 
-        call.answer.assert_called_once()
+        call.answer.assert_called_once_with('admin.roles.perm_denied', show_alert=True)
+        # The escalated role must not have been created.
+        assert "ESCALATED" not in [r['name'] for r in await get_all_roles()]
+        call.message.edit_text.assert_not_called()
 
     async def test_toggle_perm(self, make_callback_query, fsm_context):
-        from bot.handlers.admin.role_management import _toggle_perm
 
         call = make_callback_query(data="rp_t_2", user_id=900110)  # BROADCAST=2
         await fsm_context.update_data(role_perms=1, caller_perms=127)
@@ -307,7 +313,6 @@ class TestRoleManagementHandlers:
         assert data['role_perms'] == 3  # 1 XOR 2 = 3
 
     async def test_toggle_perm_off(self, make_callback_query, fsm_context):
-        from bot.handlers.admin.role_management import _toggle_perm
 
         call = make_callback_query(data="rp_t_2", user_id=900111)
         await fsm_context.update_data(role_perms=3, caller_perms=127)
@@ -318,7 +323,6 @@ class TestRoleManagementHandlers:
         assert data['role_perms'] == 1  # 3 XOR 2 = 1
 
     async def test_toggle_perm_denied(self, make_callback_query, fsm_context):
-        from bot.handlers.admin.role_management import _toggle_perm
 
         call = make_callback_query(data="rp_t_64", user_id=900112)  # OWN=64
         await fsm_context.update_data(role_perms=0, caller_perms=31)  # No OWN perm
@@ -330,7 +334,6 @@ class TestRoleManagementHandlers:
         assert data['role_perms'] == 0  # Unchanged
 
     async def test_delete_role_confirm(self, make_callback_query, role_factory):
-        from bot.handlers.admin.role_management import role_delete_confirm
 
         role_id = await role_factory("DELETEME", 3)
         call = make_callback_query(data=f"role_dc_{role_id}", user_id=900113)
@@ -345,7 +348,6 @@ class TestRoleManagementHandlers:
         assert await get_role_by_id(role_id) is None
 
     async def test_delete_role_perm_denied(self, make_callback_query):
-        from bot.handlers.admin.role_management import role_delete_confirm
 
         # OWNER role has perms=127, caller has perms=31
         role_id = await get_role_id_by_name('OWNER')
@@ -355,10 +357,12 @@ class TestRoleManagementHandlers:
                    new_callable=AsyncMock, return_value=31):
             await role_delete_confirm(call)
 
-        call.answer.assert_called_once()
+        call.answer.assert_called_once_with('admin.roles.perm_denied', show_alert=True)
+        call.message.edit_text.assert_not_called()
+        # The role is still there — no confirmation screen, no deletion.
+        assert await get_role_by_id(role_id) is not None
 
     async def test_assign_role_list(self, make_callback_query, user_factory):
-        from bot.handlers.admin.role_management import assign_role_list
 
         await user_factory(telegram_id=700010, role_id=1)
         call = make_callback_query(data="asr_list_700010", user_id=900115)
@@ -372,7 +376,6 @@ class TestRoleManagementHandlers:
         assert "admin.roles.assign_prompt" in text
 
     async def test_assign_role_list_owner_protected(self, make_callback_query, user_factory):
-        from bot.handlers.admin.role_management import assign_role_list
 
         max_role = await select_max_role_id()
         await user_factory(telegram_id=700011, role_id=max_role)
@@ -383,9 +386,10 @@ class TestRoleManagementHandlers:
             await assign_role_list(call)
 
         call.answer.assert_called_once()
+        # The owner's role picker is never offered.
+        call.message.edit_text.assert_not_called()
 
     async def test_assign_role_perm_denied(self, make_callback_query, user_factory):
-        from bot.handlers.admin.role_management import assign_role_confirm
 
         await user_factory(telegram_id=700012, role_id=1)
         owner_role_id = await get_role_id_by_name('OWNER')
@@ -404,25 +408,21 @@ class TestRoleManagementHandlers:
 class TestHelpers:
 
     def test_format_permissions_all(self):
-        from bot.handlers.admin.role_management import _format_permissions
         result = _format_permissions(127)
         assert "USE" in result
         assert "BROADCAST" in result
         assert "OWNER" in result
 
     def test_format_permissions_none(self):
-        from bot.handlers.admin.role_management import _format_permissions
         assert _format_permissions(0) == "\u2014"  # em dash
 
     def test_format_permissions_partial(self):
-        from bot.handlers.admin.role_management import _format_permissions
         result = _format_permissions(3)  # USE + BROADCAST
         assert "USE" in result
         assert "BROADCAST" in result
         assert "SHOP" not in result
 
     def test_build_perms_keyboard_filters_by_caller(self):
-        from bot.handlers.admin.role_management import _build_perms_keyboard
         # Caller only has USE + BROADCAST (3)
         markup = _build_perms_keyboard(0, 3)
         texts = [btn.text for row in markup.inline_keyboard for btn in row]
@@ -433,7 +433,6 @@ class TestHelpers:
         assert any("BROADCAST" in t for t in perm_buttons)
 
     def test_build_perms_keyboard_shows_checked(self):
-        from bot.handlers.admin.role_management import _build_perms_keyboard
         markup = _build_perms_keyboard(1, 127)  # USE is on
         texts = [btn.text for row in markup.inline_keyboard for btn in row]
         use_btn = next(t for t in texts if "USE" in t)
@@ -442,33 +441,23 @@ class TestHelpers:
 
 class TestPermissionHelpers:
 
-    def test_subset_same(self):
-        from bot.database.models import Permission
-        assert Permission.is_subset(31, 31) is True
+    @pytest.mark.parametrize("perms,against,expected", [
+        (31, 31, True),   # identical masks
+        (1, 31, True),    # USE is a subset of ADMIN
+        (32, 31, False),  # ADMINS_MANAGE is not in ADMIN(31)
+        (0, 0, True),
+    ])
+    def test_is_subset(self, perms, against, expected):
+        assert Permission.is_subset(perms, against) is expected
 
-    def test_subset_less_bits(self):
-        from bot.database.models import Permission
-        assert Permission.is_subset(1, 31) is True  # USE is subset of ADMIN
-
-    def test_subset_fails_extra_bit(self):
-        from bot.database.models import Permission
-        assert Permission.is_subset(32, 31) is False  # ADMINS_MANAGE not in ADMIN(31)
-
-    def test_subset_zero(self):
-        from bot.database.models import Permission
-        assert Permission.is_subset(0, 0) is True
-
-    def test_has_any_admin_perm_true(self):
-        from bot.database.models import Permission
-        assert Permission.has_any_admin_perm(31) is True  # ADMIN
-
-    def test_has_any_admin_perm_false(self):
-        from bot.database.models import Permission
-        assert Permission.has_any_admin_perm(1) is False  # Only USE
-
-    def test_has_any_admin_perm_zero(self):
-        from bot.database.models import Permission
-        assert Permission.has_any_admin_perm(0) is False
+    @pytest.mark.parametrize("perms,expected", [
+        (31, True),   # ADMIN
+        (2, True),    # a single admin bit (BROADCAST) is enough
+        (1, False),   # USE only
+        (0, False),
+    ])
+    def test_has_any_admin_perm(self, perms, expected):
+        assert Permission.has_any_admin_perm(perms) is expected
 
 
 class TestBitwiseRegressions:
@@ -489,7 +478,6 @@ class TestBitwiseRegressions:
 
     async def test_perms_done_escalation_denied_bitwise(self, make_callback_query, fsm_context):
         """perms=32 (ADMINS_MANAGE only) denied when caller=31 (ADMIN)."""
-        from bot.handlers.admin.role_management import _perms_done
 
         call = make_callback_query(data="rp_done", user_id=900120)
         await fsm_context.update_data(
@@ -498,19 +486,14 @@ class TestBitwiseRegressions:
 
         await _perms_done(call, fsm_context)
 
-        call.answer.assert_called_once()
+        call.answer.assert_called_once_with('admin.roles.perm_denied', show_alert=True)
+        assert "ESCALATED2" not in [r['name'] for r in await get_all_roles()]
 
 
 class TestRolePermissionCacheFlush:
     async def test_editing_permissions_flushes_role_caches(
         self, make_callback_query, fsm_context, fake_cache, role_factory
     ):
-        from bot.handlers.admin.role_management import _perms_done
-        from bot.database.models import Permission
-        from bot.middleware.security import (
-            AuthenticationMiddleware, set_auth_middleware, get_auth_middleware,
-        )
-        import time as _time
 
         role_id = await role_factory(name="TOFLUSH", permissions=Permission.USE | Permission.STATS_VIEW)
 

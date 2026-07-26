@@ -8,6 +8,9 @@ from bot.database.main import Database
 from bot.database.models.main import Goods, PromoCodes
 from bot.database.methods.pricing import effective_price
 from bot.database.methods.transactions import buy_item_transaction
+from bot.database.methods.update import set_item_sale
+from bot.database.methods.read import get_item_info
+from bot.handlers.admin.sale_management import sale_item_name, sale_percent, sale_days
 from bot.states import SaleFSM
 
 
@@ -38,75 +41,27 @@ async def _create_promo(code: str, discount_type: str, value, **kw) -> None:
 
 class TestEffectivePrice:
 
-    def test_no_sale_returns_original(self):
+    @pytest.mark.parametrize("price,percent,until,expected_final,expected_on_sale", [
+        # No sale configured at all.
+        ("100.00", None, None, "100.00", False),
+        ("100.00", Decimal("20"), _future(), "80.00", True),
+        ("100.00", Decimal("20"), _past(), "100.00", False),        # expired
+        ("100.00", Decimal("0"), _future(), "100.00", False),       # 0% is not a sale
+        ("100.00", Decimal("150"), _future(), "0.00", True),        # clamped at 100%
+        # A naive datetime is read as UTC rather than rejected.
+        ("50.00", Decimal("10"), datetime.now() + timedelta(hours=1), "45.00", True),
+        # Redis round-trips datetimes as strings (default=str), in two shapes.
+        ("100.00", "20", _future().isoformat(), "80.00", True),     # ISO 'T' separator
+        ("100.00", "20", str(_future()), "80.00", True),            # space separator
+        ("100.00", "20", "not-a-date", "100.00", False),            # unparseable
+    ])
+    def test_pricing(self, price, percent, until, expected_final, expected_on_sale):
         final, on_sale, original = effective_price(
-            {"price": Decimal("100.00"), "sale_percent": None, "sale_until": None}
+            {"price": Decimal(price), "sale_percent": percent, "sale_until": until}
         )
-        assert final == Decimal("100.00")
-        assert on_sale is False
-        assert original == Decimal("100.00")
-
-    def test_active_sale_applies_discount(self):
-        final, on_sale, original = effective_price(
-            {"price": Decimal("100.00"), "sale_percent": Decimal("20"), "sale_until": _future()}
-        )
-        assert final == Decimal("80.00")
-        assert on_sale is True
-        assert original == Decimal("100.00")
-
-    def test_expired_sale_falls_back_to_original(self):
-        final, on_sale, _ = effective_price(
-            {"price": Decimal("100.00"), "sale_percent": Decimal("20"), "sale_until": _past()}
-        )
-        assert final == Decimal("100.00")
-        assert on_sale is False
-
-    def test_zero_percent_is_not_a_sale(self):
-        final, on_sale, _ = effective_price(
-            {"price": Decimal("100.00"), "sale_percent": Decimal("0"), "sale_until": _future()}
-        )
-        assert final == Decimal("100.00")
-        assert on_sale is False
-
-    def test_percent_clamped_to_100(self):
-        final, on_sale, _ = effective_price(
-            {"price": Decimal("100.00"), "sale_percent": Decimal("150"), "sale_until": _future()}
-        )
-        assert final == Decimal("0.00")
-        assert on_sale is True
-
-    def test_naive_sale_until_treated_as_utc(self):
-        naive_future = datetime.now() + timedelta(hours=1)
-        final, on_sale, _ = effective_price(
-            {"price": Decimal("50.00"), "sale_percent": Decimal("10"), "sale_until": naive_future}
-        )
-        assert on_sale is True
-        assert final == Decimal("45.00")
-
-    def test_string_sale_until_from_cache(self):
-        # Redis round-trip serializes datetime -> ISO string (default=str).
-        iso = _future().isoformat()
-        final, on_sale, _ = effective_price(
-            {"price": Decimal("100.00"), "sale_percent": "20", "sale_until": iso}
-        )
-        assert on_sale is True
-        assert final == Decimal("80.00")
-
-    def test_string_sale_until_space_separator(self):
-        # str(datetime) uses a space separator instead of 'T'.
-        s = str(_future())
-        final, on_sale, _ = effective_price(
-            {"price": Decimal("100.00"), "sale_percent": "20", "sale_until": s}
-        )
-        assert on_sale is True
-        assert final == Decimal("80.00")
-
-    def test_malformed_sale_until_falls_back(self):
-        final, on_sale, _ = effective_price(
-            {"price": Decimal("100.00"), "sale_percent": "20", "sale_until": "not-a-date"}
-        )
-        assert on_sale is False
-        assert final == Decimal("100.00")
+        assert final == Decimal(expected_final)
+        assert on_sale is expected_on_sale
+        assert original == Decimal(price)
 
 
 # --- Purchase flow integration tests ---
@@ -149,8 +104,6 @@ class TestSalePurchase:
 class TestSetItemSale:
 
     async def test_sets_sale_fields(self, item_factory):
-        from bot.database.methods.update import set_item_sale
-        from bot.database.methods.read import get_item_info
         await item_factory(name="M1", price=100, values=[("v", False)])
 
         ok = await set_item_sale("M1", Decimal("25"), _future())
@@ -162,8 +115,6 @@ class TestSetItemSale:
         assert final == Decimal("75.00")
 
     async def test_clears_sale(self, item_factory):
-        from bot.database.methods.update import set_item_sale
-        from bot.database.methods.read import get_item_info
         await item_factory(name="M2", price=100, values=[("v", False)])
         await _set_sale("M2", Decimal("30"), _future())
 
@@ -175,7 +126,6 @@ class TestSetItemSale:
         assert on_sale is False
 
     async def test_missing_item_returns_false(self):
-        from bot.database.methods.update import set_item_sale
         assert await set_item_sale("NoSuchItem", Decimal("10"), _future()) is False
 
 
@@ -184,8 +134,6 @@ class TestSetItemSale:
 class TestSaleAdminFlow:
 
     async def test_fsm_sets_sale(self, item_factory, make_message, fsm_context):
-        from bot.database.methods.read import get_item_info
-        from bot.handlers.admin.sale_management import sale_item_name, sale_percent, sale_days
         await item_factory(name="FsmSale", price=100, values=[("v", False)])
 
         await sale_item_name(make_message(text="FsmSale", user_id=1), fsm_context)
@@ -198,8 +146,6 @@ class TestSaleAdminFlow:
         assert final == Decimal("75.00")
 
     async def test_fsm_zero_percent_disables(self, item_factory, make_message, fsm_context):
-        from bot.database.methods.read import get_item_info
-        from bot.handlers.admin.sale_management import sale_item_name, sale_percent
         await item_factory(name="FsmOff", price=100, values=[("v", False)])
         await _set_sale("FsmOff", Decimal("40"), _future())
 
@@ -211,7 +157,6 @@ class TestSaleAdminFlow:
         assert on_sale is False
 
     async def test_fsm_invalid_percent_rejected(self, item_factory, make_message, fsm_context):
-        from bot.handlers.admin.sale_management import sale_item_name, sale_percent
         await item_factory(name="FsmBad", price=100, values=[("v", False)])
 
         await sale_item_name(make_message(text="FsmBad", user_id=1), fsm_context)
