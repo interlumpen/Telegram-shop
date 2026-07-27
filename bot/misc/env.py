@@ -6,6 +6,12 @@ from urllib.parse import quote_plus
 
 _env_logger = logging.getLogger(__name__)
 
+_DEFAULT_ADMIN_PASSWORD = "admin"
+_DEFAULT_SECRET_KEY = "change-me-in-production"
+
+# An empty host means "not bound anywhere reachable" as far as this check cares.
+_LOOPBACK_HOSTS = frozenset({"", "localhost", "127.0.0.1", "::1", "[::1]"})
+
 
 class EnvKeys(ABC):
     """Secure environment configuration with validation"""
@@ -70,14 +76,17 @@ class EnvKeys(ABC):
     ADMIN_HOST: Final = _get_optional("ADMIN_HOST", _get_optional("MONITORING_HOST", "localhost"))
     ADMIN_PORT: Final = int(_get_optional("ADMIN_PORT", _get_optional("MONITORING_PORT", "9090")))
     ADMIN_USERNAME: Final = _get_optional("ADMIN_USERNAME", "admin")
-    ADMIN_PASSWORD: Final = _get_optional("ADMIN_PASSWORD", "admin")
-    SECRET_KEY: Final = _get_optional("SECRET_KEY", "change-me-in-production")
+    ADMIN_PASSWORD: Final = _get_optional("ADMIN_PASSWORD", _DEFAULT_ADMIN_PASSWORD)
+    SECRET_KEY: Final = _get_optional("SECRET_KEY", _DEFAULT_SECRET_KEY)
+    ADMIN_COOKIE_SECURE: Final = _get_optional("ADMIN_COOKIE_SECURE", "auto")
 
     # Webhook
     WEBHOOK_ENABLED: Final = _get_optional("WEBHOOK_ENABLED", "0")
     WEBHOOK_URL: Final = _get_optional("WEBHOOK_URL", "")
     WEBHOOK_PATH: Final = _get_optional("WEBHOOK_PATH", "/webhook")
     WEBHOOK_SECRET: Final = _get_optional("WEBHOOK_SECRET", "")
+    WEBHOOK_HOST: Final = _get_optional("WEBHOOK_HOST", "0.0.0.0")
+    WEBHOOK_PORT: Final = int(_get_optional("WEBHOOK_PORT", "8080"))
 
     # Cleanup
     AUDIT_RETENTION_DAYS: Final = int(_get_optional("AUDIT_RETENTION_DAYS", "90"))
@@ -86,18 +95,53 @@ class EnvKeys(ABC):
     DATABASE_URL: Final = f"postgresql+asyncpg://{POSTGRES_USER}:{quote_plus(POSTGRES_PASSWORD)}@{POSTGRES_HOST}:{DB_PORT}/{POSTGRES_DB}"
 
     @classmethod
+    def panel_is_exposed(cls) -> bool:
+        """Whether the admin panel is bound somewhere off-host.
+
+        Webhook mode counts as exposed regardless of the bind address: it is by
+        definition a public production deployment, and the placeholder
+        credentials have no place in one.
+        """
+        return (
+            cls.ADMIN_HOST.strip().lower() not in _LOOPBACK_HOSTS
+            or cls.WEBHOOK_ENABLED == "1"
+        )
+
+    @classmethod
+    def session_cookie_secure(cls) -> bool:
+        """Whether the admin session cookie should be marked Secure."""
+        setting = cls.ADMIN_COOKIE_SECURE.strip().lower()
+        if setting in ("1", "true", "yes"):
+            return True
+        if setting in ("0", "false", "no"):
+            return False
+        return cls.panel_is_exposed()
+
+    @classmethod
     def validate(cls) -> None:
-        """Emit non-fatal configuration/security warnings."""
-        if cls.ADMIN_PASSWORD == "admin":
-            _env_logger.warning(
-                "SECURITY: ADMIN_PASSWORD is set to the default value 'admin'. "
-                "Change it immediately via the ADMIN_PASSWORD env variable."
+        """Check configuration: fatal on unsafe defaults, warnings otherwise."""
+        insecure = []
+        if cls.SECRET_KEY == _DEFAULT_SECRET_KEY:
+            insecure.append(
+                "SECRET_KEY is the shipped default — anyone who can reach the panel "
+                "can forge an admin session. Generate one with: "
+                'python -c "import secrets; print(secrets.token_hex(32))"'
             )
-        if cls.SECRET_KEY == "change-me-in-production":
-            _env_logger.warning(
-                "SECURITY: SECRET_KEY is set to the default value. "
-                "Set a strong random SECRET_KEY env variable for session security."
+        if cls.ADMIN_PASSWORD == _DEFAULT_ADMIN_PASSWORD:
+            insecure.append(
+                "ADMIN_PASSWORD is the shipped default 'admin'. Set a strong password."
             )
+
+        if insecure:
+            if cls.panel_is_exposed():
+                raise RuntimeError(
+                    "Refusing to start: the admin panel is reachable "
+                    f"(ADMIN_HOST={cls.ADMIN_HOST!r}, WEBHOOK_ENABLED={cls.WEBHOOK_ENABLED!r}) "
+                    "with insecure default credentials.\n  - " + "\n  - ".join(insecure)
+                )
+            for problem in insecure:
+                _env_logger.warning("SECURITY: %s", problem)
+
         if int(cls.MIN_AMOUNT) >= int(cls.MAX_AMOUNT):
             _env_logger.warning(
                 "CONFIG: MIN_AMOUNT (%s) >= MAX_AMOUNT (%s). "

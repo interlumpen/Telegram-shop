@@ -13,7 +13,8 @@ from bot.database.methods.read import (
 )
 from bot.database.methods.create import create_item, subscribe_to_stock
 from bot.database.methods.lazy_queries import query_categories, query_items_in_category
-from bot.database.methods.update import update_balance, set_role, set_user_blocked, update_item
+from bot.database.methods.update import set_role, set_user_blocked, update_item
+from bot.database.methods.transactions import admin_balance_change
 from bot.database.methods.delete import delete_item, delete_category
 from bot.database.methods.transactions import buy_item_transaction, \
     process_payment_with_referral
@@ -223,7 +224,9 @@ class TestCacheInvalidationFunctions:
 
         assert f"stats:daily:{today_local}" not in fake_cache.store
         assert f"stats:daily:{today_utc}" not in fake_cache.store
-        assert "stats:global" not in fake_cache.store
+        # stats:global is an all-time aggregate read only by the dashboard; it
+        # rides its own 300s TTL rather than being recomputed after every write.
+        assert fake_cache.store["stats:global"] == 100
         assert "user_count:" not in fake_cache.store
         assert "admin_count:" not in fake_cache.store
         # Targeted invalidation intentionally leaves stale dated keys to the
@@ -267,12 +270,15 @@ class TestCacheInvalidationFunctions:
 class TestCacheInvalidationAfterMutations:
     """Test that DB mutation functions trigger the correct cache invalidation."""
 
-    async def test_update_balance_invalidates_cache(self, user_factory, fake_cache):
+    async def test_balance_change_invalidates_cache(self, user_factory, fake_cache):
+        from decimal import Decimal
+
         user = await user_factory(telegram_id=100001)
         user_id = user["telegram_id"]
         fake_cache.store[f"user:{user_id}"] = {"telegram_id": user_id, "balance": 0}
 
-        await update_balance(user_id, 500)
+        ok, msg = await admin_balance_change(user_id, Decimal("500"))
+        assert ok, msg
         await asyncio.sleep(0)
 
         assert f"user:{user_id}" not in fake_cache.store
@@ -620,3 +626,45 @@ class TestCategoryMoveInvalidation:
         assert (ok, err) == (True, None)
         assert "category_items:FromCat:count" not in fake_cache.store
         assert "category_items:ToCat:count" not in fake_cache.store
+
+
+class TestNegativeRoleCaching:
+    async def test_unknown_user_is_looked_up_once(self, monkeypatch):
+        from bot.middleware.security import resolve_role_cached
+
+        calls = 0
+
+        async def counting_check_role(_user_id):
+            nonlocal calls
+            calls += 1
+            return 0
+
+        monkeypatch.setattr(
+            "bot.database.methods.check_role", counting_check_role, raising=False,
+        )
+
+        l1 = {}
+        assert await resolve_role_cached(999_000_001, l1) == 0
+        assert await resolve_role_cached(999_000_001, l1) == 0
+        assert calls == 1
+
+    async def test_negative_entry_expires_sooner_than_a_real_role(self, monkeypatch):
+        import time
+        from bot.middleware.security import resolve_role_cached, NEGATIVE_ROLE_TTL
+
+        calls = 0
+
+        async def counting_check_role(_user_id):
+            nonlocal calls
+            calls += 1
+            return 0
+
+        monkeypatch.setattr(
+            "bot.database.methods.check_role", counting_check_role, raising=False,
+        )
+
+        # Seed an entry that is still inside the full role TTL but past the
+        # shorter negative one — a registration in between must be picked up.
+        l1 = {999_000_002: (0, time.time() - NEGATIVE_ROLE_TTL - 1)}
+        assert await resolve_role_cached(999_000_002, l1, ttl=600) == 0
+        assert calls == 1

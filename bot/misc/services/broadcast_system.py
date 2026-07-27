@@ -36,11 +36,14 @@ class BroadcastStats:
 class BroadcastManager:
     """Manager for mass mailing with optimization"""
 
+    DEFAULT_BATCH_SIZE = 25
+    DEFAULT_BATCH_DELAY = 1.0
+
     def __init__(
             self,
             bot: Bot,
-            batch_size: int = 30,
-            batch_delay: float = 1.0,
+            batch_size: int = DEFAULT_BATCH_SIZE,
+            batch_delay: float = DEFAULT_BATCH_DELAY,
             retry_count: int = 3
     ):
         """
@@ -76,7 +79,7 @@ class BroadcastManager:
                     text=text,
                     reply_markup=reply_markup,
                     parse_mode=parse_mode,
-                    disable_notification=True # Don't spam notifications
+                    disable_notification=True  # Don't spam notifications
                 )
                 return "sent"
 
@@ -164,6 +167,13 @@ class BroadcastManager:
                 else:
                     # "failed" or an unexpected Exception from gather
                     stats.failed += 1
+
+            if (i // self.batch_size) % 20 == 0:
+                logger.info(
+                    "Broadcast progress: %s/%s (sent=%s failed=%s blocked=%s)",
+                    min(i + self.batch_size, stats.total), stats.total,
+                    stats.sent, stats.failed, stats.blocked,
+                )
 
             # Calling a progress collback
             if progress_callback:

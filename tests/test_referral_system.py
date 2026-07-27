@@ -6,7 +6,8 @@ from sqlalchemy import select
 
 import bot.handlers.user.referral_system as ref_mod
 from bot.database.main import Database
-from bot.database.methods.create import create_user, create_referral_earning
+from bot.database.methods.create import create_user
+from tests.factories import add_referral_earning
 from bot.database.methods.read import (
     get_one_referral_earning, check_user_referrals, get_referral_earnings_stats,
 )
@@ -98,7 +99,7 @@ class TestViewAllEarnings:
             referral_id=700021,
             role=1,
         )
-        await create_referral_earning(
+        await add_referral_earning(
             referrer_id=700021,
             referral_id=700022,
             amount=50,
@@ -127,7 +128,7 @@ class TestEarningDetail:
             referral_id=700030,
             role=1,
         )
-        await create_referral_earning(
+        await add_referral_earning(
             referrer_id=700030,
             referral_id=700031,
             amount=100,

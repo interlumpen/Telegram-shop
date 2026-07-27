@@ -166,7 +166,7 @@ class AuditModelView(ModelView):
             resource_type=self.name,
             resource_id=str(getattr(model, 'id', getattr(model, 'name', None))),
             details=_safe_model_repr(model),
-            ip_address=request.client.host,
+            ip_address=_client_ip(request),
         )
 
     async def after_model_delete(self, model: Any, request: Request) -> None:
@@ -175,7 +175,7 @@ class AuditModelView(ModelView):
             resource_type=self.name,
             resource_id=str(getattr(model, 'id', getattr(model, 'name', None))),
             details=_safe_model_repr(model),
-            ip_address=request.client.host,
+            ip_address=_client_ip(request),
         )
 
 
@@ -687,7 +687,13 @@ def create_admin_app(bot: Any = None) -> Starlette:
     ] + export_routes
 
     app = Starlette(routes=routes)
-    app.add_middleware(SessionMiddleware, secret_key=EnvKeys.SECRET_KEY, max_age=1800)
+    app.add_middleware(
+        SessionMiddleware,
+        secret_key=EnvKeys.SECRET_KEY,
+        max_age=1800,
+        https_only=EnvKeys.session_cookie_secure(),
+        same_site="strict",
+    )
 
     auth_backend = AdminAuth(secret_key=EnvKeys.SECRET_KEY)
     admin = Admin(

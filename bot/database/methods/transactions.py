@@ -2,7 +2,7 @@ from datetime import datetime, timezone
 from decimal import Decimal
 from uuid import uuid4
 
-from sqlalchemy import select, delete as sa_delete, update as sa_update
+from sqlalchemy import select, exists, delete as sa_delete, update as sa_update
 from sqlalchemy.exc import IntegrityError, OperationalError, DBAPIError
 
 from bot.database.models import User, ItemValues, Goods, Categories, BoughtGoods, Payments, Operations
@@ -326,6 +326,12 @@ async def checkout_cart_transaction(
     Atomic cart checkout — purchase all items from user's cart in one transaction.
     Promo codes are read from cart_items.promo_code and validated at checkout time.
 
+    A promo code is a single redemption, so it discounts a single line — the most
+    expensive one it validly applies to. A code that applies to no line at all
+    (expired, used up, bound to a different product) is simply dropped from that
+    line; the cart view renders the same rule, so the two totals agree and the
+    ``expected_total`` guard below catches any drift.
+
     ``expected_total`` is the total shown to the user on the confirmation dialog.
     If the price/sale changed in between, the recomputed total won't match and the
     checkout aborts with ``price_changed`` instead of silently charging a
@@ -366,12 +372,12 @@ async def checkout_cart_transaction(
 
                 # 3. Resolve items, validate promos, calculate total
                 purchases = []
-                total_price = Decimal(0)
                 items_to_remove = []
-                # promo_id -> promo; a promo is redeemed once per checkout even if it
-                # is attached to multiple cart items (avoids uq_promo_usage_per_user).
-                # A category-bound promo can still ride several lines.
-                promos_to_record: dict[int, PromoCodes] = {}
+                # code -> promo row, fetched and locked once per checkout even when
+                # the same code sits on several cart lines.
+                promos_by_code: dict[str, PromoCodes | None] = {}
+                # promo id -> "this user has already redeemed it", resolved once.
+                promo_used: dict[int, bool] = {}
 
                 for ci in cart_items:
                     goods = goods_by_id.get(ci.item_id)
@@ -428,31 +434,61 @@ async def checkout_cart_transaction(
                     price, _on_sale, _original_price = effective_price(goods)
                     line_price = (price * qty).quantize(Decimal("0.01"))
 
-                    # Validate and apply promo code if stored on cart item
+                    # Resolve the promo for this line. A code that does not apply
+                    # (expired, used up, bound to another product) is dropped from the line
+                    promo = None
                     if ci.promo_code:
-                        promo = (await s.execute(
-                            select(PromoCodes).where(PromoCodes.code == ci.promo_code.upper()).with_for_update()
-                        )).scalars().first()
-
-                        # Any invalidity aborts checkout instead of silently charging
-                        # full price (the promo was attached to the cart earlier).
-                        if await promo_rule_error(s, promo, user_id, goods=goods):
-                            raise _Abort("promo_expired_during_checkout")
-
-                        # Percent scales with quantity; fixed comes off the line once. Clamped so a bad discount can't go negative.
-                        line_price = apply_promo_discount(
-                            price, promo.discount_type, promo.discount_value, qty
-                        )
-                        promos_to_record[promo.id] = promo
+                        code = ci.promo_code.upper()
+                        if code not in promos_by_code:
+                            promos_by_code[code] = (await s.execute(
+                                select(PromoCodes).where(PromoCodes.code == code).with_for_update()
+                            )).scalars().first()
+                        candidate = promos_by_code[code]
+                        if candidate is not None:
+                            if candidate.id not in promo_used:
+                                promo_used[candidate.id] = bool((await s.execute(
+                                    select(exists().where(
+                                        PromoCodeUsages.promo_id == candidate.id,
+                                        PromoCodeUsages.user_id == user_id,
+                                    ))
+                                )).scalar())
+                            if not await promo_rule_error(
+                                s, candidate, user_id, goods=goods,
+                                used=promo_used[candidate.id],
+                            ):
+                                promo = candidate
 
                     purchases.append({
+                        'cart_id': ci.id,
                         'goods': goods,
+                        'qty': qty,
+                        'unit_price': price,
+                        'line_price': line_price,
+                        'promo': promo,
                         'delivered': delivered,
                         'values_to_delete': values_to_delete,
-                        # The line total is authoritative; per-unit prices are derived from it so the BoughtGoods rows sum back to what is charged.
-                        'unit_prices': _split_amount(line_price, qty),
                     })
-                    total_price += line_price
+
+                promos_to_record: dict[int, PromoCodes] = {}
+                for promo in {
+                    p['promo'].id: p['promo'] for p in purchases if p['promo'] is not None
+                }.values():
+                    eligible = [p for p in purchases if p['promo'] is not None and p['promo'].id == promo.id]
+                    best = max(eligible, key=lambda p: (p['line_price'], -p['cart_id']))
+                    for p in eligible:
+                        if p is not best:
+                            p['promo'] = None
+                    # Percent scales with quantity; fixed comes off the line once. Clamped so a bad discount can't go negative.
+                    best['line_price'] = apply_promo_discount(
+                        best['unit_price'], promo.discount_type, promo.discount_value, best['qty']
+                    )
+                    promos_to_record[promo.id] = promo
+
+                for p in purchases:
+                    # The line total is authoritative; per-unit prices are derived from it so the BoughtGoods rows sum back to what is charged.
+                    p['unit_prices'] = _split_amount(p['line_price'], p['qty'])
+
+                total_price = sum((p['line_price'] for p in purchases), Decimal(0))
 
                 # Remove invalid cart items
                 if items_to_remove:

@@ -73,7 +73,7 @@ class BroadcastMessage(BaseModel):
         """Validate HTML tags after all fields are set"""
         if self.parse_mode == 'HTML':
             # Basic HTML validation - check for balanced tags
-            allowed_tags = ['b', 'i', 'u', 's', 'code', 'pre', 'a']
+            allowed_tags = SANITIZE_ALLOWED_TAGS
 
             # Simple check for unclosed tags
             for tag in allowed_tags:
@@ -152,8 +152,12 @@ def validate_money_amount(amount, min_amount: Decimal = Decimal("0.01"),
         raise ValueError(f"Invalid amount: {e}")
 
 
+# Tags sanitize_html restores after escaping. Kept next to the function so the broadcast validator can check exactly the tags that will survive.
+SANITIZE_ALLOWED_TAGS = ('b', 'i', 'u', 'code')
+
+
 def sanitize_html(text: str) -> str:
-    """Sanitize HTML for safe display"""
+    """Escape text, then re-enable a small set of formatting tags."""
     # Escape dangerous characters
     text = text.replace('&', '&amp;')
     text = text.replace('<', '&lt;')
@@ -162,14 +166,8 @@ def sanitize_html(text: str) -> str:
     text = text.replace("'", '&#39;')
 
     # Allow only safe tags back
-    safe_tags = {
-        '&lt;b&gt;': '<b>', '&lt;/b&gt;': '</b>',
-        '&lt;i&gt;': '<i>', '&lt;/i&gt;': '</i>',
-        '&lt;u&gt;': '<u>', '&lt;/u&gt;': '</u>',
-        '&lt;code&gt;': '<code>', '&lt;/code&gt;': '</code>',
-    }
-
-    for escaped, original in safe_tags.items():
-        text = text.replace(escaped, original)
+    for tag in SANITIZE_ALLOWED_TAGS:
+        text = text.replace(f'&lt;{tag}&gt;', f'<{tag}>')
+        text = text.replace(f'&lt;/{tag}&gt;', f'</{tag}>')
 
     return text

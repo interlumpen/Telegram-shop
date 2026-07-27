@@ -38,3 +38,21 @@ def safe_create_task(coro: Coroutine[Any, Any, Any]) -> None:
     task = loop.create_task(coro)
     _background_tasks.add(task)
     task.add_done_callback(_on_task_done)
+
+
+async def drain_background_tasks(timeout: float = 5.0) -> None:
+    """Wait for in-flight fire-and-forget tasks to finish.
+
+    Called during shutdown so a committed write's cache invalidation is not lost,
+    and — more importantly — so nothing is still holding a session when the
+    engine is disposed.
+    """
+    pending = list(_background_tasks)
+    if not pending:
+        return
+    _done, still_running = await asyncio.wait(pending, timeout=timeout)
+    if still_running:
+        logger.warning(
+            "%d background task(s) did not finish within %.0fs of shutdown",
+            len(still_running), timeout,
+        )

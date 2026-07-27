@@ -235,8 +235,10 @@ def mock_localize():
 @pytest.fixture
 def user_factory():
     """Factory to create test users."""
+    from sqlalchemy import update as sa_update
+    from bot.database.main import Database
+    from bot.database.models.main import User
     from bot.database.methods.create import create_user
-    from bot.database.methods.update import update_balance
     from bot.database.methods.read import check_user
 
     async def _create(
@@ -252,10 +254,27 @@ def user_factory():
             role=role_id,
         )
         if balance > 0:
-            await update_balance(telegram_id, balance)
+            async with Database().session() as s:
+                await s.execute(
+                    sa_update(User).where(User.telegram_id == telegram_id).values(balance=balance)
+                )
         return await check_user(telegram_id)
 
     return _create
+
+
+@pytest.fixture
+def operation_factory():
+    """Seed a balance Operations row (see tests/factories.py)."""
+    from tests.factories import add_operation
+    return add_operation
+
+
+@pytest.fixture
+def referral_earning_factory():
+    """Seed a ReferralEarnings row (see tests/factories.py)."""
+    from tests.factories import add_referral_earning
+    return add_referral_earning
 
 
 @pytest.fixture

@@ -12,8 +12,7 @@ from bot.keyboards import back, payment_menu, close, get_payment_choice
 from bot.logger_mesh import logger
 from bot.database.methods.audit import log_audit
 from bot.database.methods.cache_utils import safe_create_task
-from bot.misc import EnvKeys, ItemPurchaseRequest, validate_telegram_id, validate_money_amount, PaymentRequest, \
-    sanitize_html
+from bot.misc import EnvKeys, ItemPurchaseRequest, validate_telegram_id, validate_money_amount, PaymentRequest
 from bot.handlers.other import _any_payment_method_enabled, is_safe_item_name, caller_name
 from bot.misc.metrics import get_metrics
 from bot.misc.services import CryptoPayAPI, CryptoPayAPIError, send_stars_invoice, send_fiat_invoice
@@ -504,11 +503,13 @@ async def buy_item_callback_handler(call: CallbackQuery, state: FSMContext):
             })
             metrics.track_conversion("purchase_funnel", "purchase", call.from_user.id)
 
-        safe_value = sanitize_html(purchase_data['value'])
+        # Escaped, never "sanitized": a delivered value is data the buyer copies
+        # verbatim, so a key that happens to contain <b> must show as <b>.
+        safe_value = esc(purchase_data['value'])
         username = esc(call.from_user.username or call.from_user.first_name)
 
         # The promo was consumed by this purchase
-        await state.update_data(applied_promo=None, applied_promo_data=None)
+        await state.update_data(applied_promo=None)
 
         from bot.keyboards.inline import simple_buttons
         buttons = [

@@ -10,6 +10,10 @@ logger = logging.getLogger(__name__)
 class RecoveryManager:
     """Disaster Recovery Manager — payment recovery and health monitoring"""
 
+    PENDING_PAYMENT_INTERVAL = 300
+    HEALTH_CHECK_INTERVAL = 60
+    ERROR_BACKOFF = 30
+
     def __init__(self, bot):
         self.bot = bot
         self.recovery_tasks = []
@@ -20,13 +24,13 @@ class RecoveryManager:
         logger.info("Starting recovery manager...")
         self.running = True
 
-        self.recovery_tasks.append(
-            asyncio.create_task(self._safe_run(self.recover_pending_payments))
-        )
+        self.recovery_tasks.append(asyncio.create_task(
+            self._run_periodically(self.recover_pending_payments, self.PENDING_PAYMENT_INTERVAL)
+        ))
 
-        self.recovery_tasks.append(
-            asyncio.create_task(self._safe_run(self.periodic_health_check))
-        )
+        self.recovery_tasks.append(asyncio.create_task(
+            self._run_periodically(self.periodic_health_check, self.HEALTH_CHECK_INTERVAL)
+        ))
 
     async def stop(self):
         """Stopping the recovery system"""
@@ -36,53 +40,49 @@ class RecoveryManager:
         await asyncio.gather(*self.recovery_tasks, return_exceptions=True)
         logger.info("Recovery manager stopped")
 
-    async def _safe_run(self, coro_func, *args):
-        """Safe startup with automatic restart on failure"""
+    async def _run_periodically(self, step, interval: int):
+        """Run one pass of `step` every `interval` seconds until stopped"""
         while self.running:
             try:
-                await coro_func(*args)
+                await step()
             except asyncio.CancelledError:
                 raise
             except Exception as e:
-                logger.error(f"Recovery task error: {e}", exc_info=True)
-                await asyncio.sleep(30)
+                logger.error(
+                    "Recovery task %s failed: %s",
+                    getattr(step, "__name__", step), e, exc_info=True,
+                )
+                await asyncio.sleep(self.ERROR_BACKOFF)
+                continue
+            await asyncio.sleep(interval)
 
     async def recover_pending_payments(self):
-        """Recovery of suspended payments"""
+        """One sweep over CryptoPay payments left pending for over an hour."""
         from bot.database import Database
         from bot.database.models import Payments
 
-        while self.running:
-            try:
-                payment_copies = []
-                async with Database().session() as s:
-                    cutoff = datetime.now(timezone.utc) - timedelta(hours=1)
-                    result = await s.execute(
-                        select(Payments).where(
-                            Payments.status == "pending",
-                            Payments.created_at < cutoff,
-                            Payments.provider == "cryptopay"
-                        )
-                    )
-                    pending_payments = result.scalars().all()
+        payment_copies = []
+        async with Database().session() as s:
+            cutoff = datetime.now(timezone.utc) - timedelta(hours=1)
+            result = await s.execute(
+                select(Payments).where(
+                    Payments.status == "pending",
+                    Payments.created_at < cutoff,
+                    Payments.provider == "cryptopay"
+                )
+            )
+            for p in result.scalars().all():
+                payment_copies.append({
+                    'id': p.id,
+                    'provider': p.provider,
+                    'external_id': p.external_id,
+                    'user_id': p.user_id,
+                    'amount': p.amount,
+                    'currency': p.currency,
+                })
 
-                    for p in pending_payments:
-                        payment_copies.append({
-                            'id': p.id,
-                            'provider': p.provider,
-                            'external_id': p.external_id,
-                            'user_id': p.user_id,
-                            'amount': p.amount,
-                            'currency': p.currency,
-                        })
-
-                for pc in payment_copies:
-                    await self._check_and_process_payment(pc)
-
-            except Exception as e:
-                logger.error(f"Error recovering payments: {e}")
-
-            await asyncio.sleep(300)
+        for pc in payment_copies:
+            await self._check_and_process_payment(pc)
 
     async def _check_and_process_payment(self, payment):
         """Verification and processing of a specific payment.
@@ -143,23 +143,16 @@ class RecoveryManager:
             )
 
     async def periodic_health_check(self):
-        """Periodic system health checks"""
+        """One DB + cache health probe"""
         from bot.database import Database
 
-        while self.running:
-            try:
-                async with Database().session() as s:
-                    await s.execute(text("SELECT 1"))
+        async with Database().session() as s:
+            await s.execute(text("SELECT 1"))
 
-                from bot.misc.caching.cache import get_cache_manager
-                cache = get_cache_manager()
-                if cache:
-                    await cache.check_health()
-                    await cache.set("health:check", "ok", ttl=60)
+        from bot.misc.caching.cache import get_cache_manager
+        cache = get_cache_manager()
+        if cache:
+            await cache.check_health()
+            await cache.set("health:check", "ok", ttl=60)
 
-                logger.debug("Health check passed: DB and cache are alive")
-
-            except Exception as e:
-                logger.error(f"Health check failed: {e}")
-
-            await asyncio.sleep(60)
+        logger.debug("Health check passed: DB and cache are alive")

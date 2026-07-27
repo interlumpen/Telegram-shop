@@ -11,11 +11,11 @@ from aiogram.exceptions import TelegramBadRequest, TelegramForbiddenError
 from bot.i18n import localize
 from bot.database.models import Permission
 from bot.database.methods import (
-    select_user_operations_total, select_user_items, check_role_name_by_id, check_user_referrals, check_user_cached,
-    get_referral_earnings_stats, get_one_referral_earning,
+    check_role_name_by_id, check_user_cached, get_one_referral_earning,
     query_user_bought_items, query_user_referrals, query_referral_earnings_from_user, query_all_referral_earnings,
-    is_user_blocked, admin_balance_change
+    admin_balance_change
 )
+from bot.database.methods.read import get_user_profile_aggregates
 from bot.keyboards import back, close, simple_buttons, lazy_paginated_keyboard
 from bot.database.methods.audit import log_audit
 from bot.filters import HasPermissionFilter
@@ -36,19 +36,17 @@ async def _build_user_profile(bot, target_id: int, caller_perms: int = 0):
     if not user:
         return None
 
-    # Independent reads — issue them together instead of six serial round-trips.
-    (
-        first_name, overall_balance, items_count, role, referrals,
-        earnings_stats, blocked,
-    ) = await asyncio.gather(
+    # One Telegram call and one database query
+    first_name, agg = await asyncio.gather(
         display_name(bot, target_id),
-        select_user_operations_total(target_id),
-        select_user_items(target_id),
-        check_role_name_by_id(user.get('role_id')),
-        check_user_referrals(user.get('telegram_id')),
-        get_referral_earnings_stats(target_id),
-        is_user_blocked(target_id),
+        get_user_profile_aggregates(target_id, user.get('role_id')),
     )
+    overall_balance = agg['operations_total']
+    items_count = agg['items_count']
+    role = agg['role_name']
+    referrals = agg['referrals']
+    earnings_stats = agg['earnings']
+    blocked = agg['blocked']
 
     has_referrals = referrals > 0
     has_earnings = earnings_stats['total_earnings_count'] > 0
@@ -442,8 +440,8 @@ async def process_replenish_user_balance(message: Message, state: FSMContext):
             balance=amount
         )
 
-        # Apply top-up (atomic: operation + balance in one transaction)
-        success, msg = await admin_balance_change(user_update.telegram_id, Decimal(int(amount)))
+        # Apply top-up (atomic: operation + balance in one transaction).
+        success, msg = await admin_balance_change(user_update.telegram_id, amount)
         if not success:
             await message.answer(
                 localize('errors.something_wrong'),
@@ -455,7 +453,7 @@ async def process_replenish_user_balance(message: Message, state: FSMContext):
         await message.answer(
             localize('admin.users.balance.topped',
                      name=_esc(target_name),
-                     amount=int(amount),
+                     amount=amount,
                      currency=EnvKeys.PAY_CURRENCY),
             reply_markup=back(f'check-user_{user_id}')
         )
@@ -463,14 +461,14 @@ async def process_replenish_user_balance(message: Message, state: FSMContext):
         # Audit logging
         admin_name = caller_name(message)
         await log_audit("balance_topup", user_id=message.from_user.id, resource_type="User", resource_id=str(user_id),
-                        details=f"admin={admin_name}, target={target_name}, amount={int(amount)}")
+                        details=f"admin={admin_name}, target={target_name}, amount={amount}")
 
         # Notify user
         try:
             await message.bot.send_message(
                 chat_id=user_id,
                 text=localize('admin.users.balance.topped.notify',
-                              amount=int(amount),
+                              amount=amount,
                               currency=EnvKeys.PAY_CURRENCY),
                 reply_markup=close()
             )
@@ -524,11 +522,11 @@ async def process_deduct_user_balance(message: Message, state: FSMContext):
         )
 
         # Apply deduction (atomic: check + operation + balance in one transaction)
-        success, msg = await admin_balance_change(user_id, Decimal(-int(amount)))
+        success, msg = await admin_balance_change(user_id, -amount)
         if not success:
             if msg == "insufficient_funds":
                 db_user = await check_user_cached(user_id)
-                current_balance = int(float(db_user.get('balance', 0))) if db_user else 0
+                current_balance = Decimal(str(db_user.get('balance') or 0)) if db_user else Decimal(0)
                 await message.answer(
                     localize('admin.users.balance.insufficient',
                              balance=current_balance,
@@ -546,7 +544,7 @@ async def process_deduct_user_balance(message: Message, state: FSMContext):
         await message.answer(
             localize('admin.users.balance.deducted',
                      name=_esc(target_name),
-                     amount=int(amount),
+                     amount=amount,
                      currency=EnvKeys.PAY_CURRENCY),
             reply_markup=back(f'check-user_{user_id}')
         )
@@ -554,14 +552,14 @@ async def process_deduct_user_balance(message: Message, state: FSMContext):
         # Audit logging
         admin_name = caller_name(message)
         await log_audit("balance_deduct", user_id=message.from_user.id, resource_type="User", resource_id=str(user_id),
-                        details=f"admin={admin_name}, target={target_name}, amount={int(amount)}")
+                        details=f"admin={admin_name}, target={target_name}, amount={amount}")
 
         # Notify user
         try:
             await message.bot.send_message(
                 chat_id=user_id,
                 text=localize('admin.users.balance.deducted.notify',
-                              amount=int(amount),
+                              amount=amount,
                               currency=EnvKeys.PAY_CURRENCY),
                 reply_markup=close()
             )

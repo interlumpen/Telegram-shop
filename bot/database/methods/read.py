@@ -404,19 +404,12 @@ async def select_all_operations() -> Decimal:
         return (await s.execute(select(func.sum(Operations.operation_value)))).scalar() or Decimal(0)
 
 
-async def select_users_balance():
-    """Return sum of all users' balances."""
+async def select_users_balance() -> Decimal:
+    """Return sum of all users' balances (0 when there are none)."""
     async with Database().session() as s:
-        return (await s.execute(select(func.sum(User.balance)))).scalar()
-
-
-async def select_user_operations(user_id: int | str) -> list[float]:
-    """Return list of operation amounts for user."""
-    async with Database().session() as s:
-        result = await s.execute(
-            select(Operations.operation_value).where(Operations.user_id == user_id)
-        )
-        return [row[0] for row in result.all()]
+        return (await s.execute(
+            select(func.coalesce(func.sum(User.balance), 0))
+        )).scalar() or Decimal(0)
 
 
 async def select_user_operations_total(user_id: int | str) -> Decimal:
@@ -442,6 +435,62 @@ async def get_user_referral(user_id: int) -> Optional[int]:
         result = await s.execute(select(User.referral_id).where(User.telegram_id == user_id))
         row = result.first()
         return row[0] if row else None
+
+
+async def get_user_profile_aggregates(user_id: int, role_id: int | None) -> dict:
+    """Everything the admin user-profile screen needs, in one query."""
+    async with Database().session() as s:
+        row = (await s.execute(
+            select(
+                select(func.coalesce(func.sum(Operations.operation_value), 0))
+                .where(Operations.user_id == user_id)
+                .scalar_subquery().label("operations_total"),
+
+                select(func.count()).select_from(BoughtGoods)
+                .where(BoughtGoods.buyer_id == user_id)
+                .scalar_subquery().label("items_count"),
+
+                select(func.count()).select_from(User)
+                .where(User.referral_id == user_id)
+                .scalar_subquery().label("referrals"),
+
+                select(func.count(ReferralEarnings.id))
+                .where(ReferralEarnings.referrer_id == user_id)
+                .scalar_subquery().label("earnings_count"),
+
+                select(func.coalesce(func.sum(ReferralEarnings.amount), 0))
+                .where(ReferralEarnings.referrer_id == user_id)
+                .scalar_subquery().label("earnings_amount"),
+
+                select(func.coalesce(func.sum(ReferralEarnings.original_amount), 0))
+                .where(ReferralEarnings.referrer_id == user_id)
+                .scalar_subquery().label("earnings_original"),
+
+                select(func.count(func.distinct(ReferralEarnings.referral_id)))
+                .where(ReferralEarnings.referrer_id == user_id)
+                .scalar_subquery().label("active_referrals"),
+
+                select(User.is_blocked).where(User.telegram_id == user_id)
+                .scalar_subquery().label("is_blocked"),
+
+                select(Role.name).where(Role.id == role_id)
+                .scalar_subquery().label("role_name"),
+            )
+        )).one()
+
+    return {
+        "operations_total": row.operations_total or Decimal(0),
+        "items_count": row.items_count or 0,
+        "referrals": row.referrals or 0,
+        "role_name": row.role_name,
+        "blocked": bool(row.is_blocked),
+        "earnings": {
+            "total_earnings_count": row.earnings_count or 0,
+            "total_amount": row.earnings_amount or Decimal(0),
+            "total_original_amount": row.earnings_original or Decimal(0),
+            "active_referrals_count": row.active_referrals or 0,
+        },
+    }
 
 
 async def get_referral_earnings_stats(referrer_id: int) -> Dict:
@@ -606,7 +655,7 @@ async def invalidate_stats_cache():
         today_local = datetime.date.today().isoformat()
         today_utc = datetime.datetime.now(datetime.timezone.utc).date().isoformat()
         await cache.delete_many({
-            "stats:global", f"stats:daily:{today_local}",
+            f"stats:daily:{today_local}",
             f"stats:daily:{today_utc}", "user_count:", "admin_count:",
         })
 

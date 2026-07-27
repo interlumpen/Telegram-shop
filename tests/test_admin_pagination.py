@@ -2,7 +2,8 @@ import datetime
 
 import pytest
 
-from bot.database.methods.create import create_user, create_referral_earning
+from bot.database.methods.create import create_user
+from tests.factories import add_referral_earning
 
 from bot.handlers.admin.user_management import (
     admin_view_referrals_handler, admin_referrals_pagination_handler,
@@ -37,7 +38,7 @@ def _button_labels(kwargs):
 async def _referrer_with_referral(referrer_id, referral_id):
     await create_user(referrer_id, NOW, referral_id=None, role=1)
     await create_user(referral_id, NOW, referral_id=referrer_id, role=1)
-    await create_referral_earning(referrer_id, referral_id, amount=50, original_amount=500)
+    await add_referral_earning(referrer_id, referral_id, amount=50, original_amount=500)
 
 
 REFERRAL_VIEWS = [

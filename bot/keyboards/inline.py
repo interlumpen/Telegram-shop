@@ -173,7 +173,8 @@ def item_info(
 
 def cart_keyboard(items: list[dict]) -> InlineKeyboardMarkup:
     """
-    Cart view: a quantity stepper plus a remove button per line.
+    Cart view: a quantity stepper, an optional promo-drop button, and a remove
+    button per line.
     """
     kb = InlineKeyboardBuilder()
     for item in items:
@@ -185,6 +186,11 @@ def cart_keyboard(items: list[dict]) -> InlineKeyboardMarkup:
             ),
             InlineKeyboardButton(text="➕", callback_data=f"cart_qty:{item['id']}:1"),
         )
+        if item.get('promo_code'):
+            kb.row(InlineKeyboardButton(
+                text=localize("btn.cart_remove_promo", code=item['promo_code']),
+                callback_data=f"cart_unpromo:{item['id']}",
+            ))
         kb.row(InlineKeyboardButton(
             text=localize("btn.cart_remove_item", name=item['item_name']),
             callback_data=f"cart_remove:{item['id']}",

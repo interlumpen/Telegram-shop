@@ -18,8 +18,7 @@ async def notify_restock(bot: Bot, item_name: str) -> int:
     if not user_ids:
         return 0
 
-    # Batched rather than a naive loop
-    manager = BroadcastManager(bot, batch_size=30, batch_delay=1.0)
+    manager = BroadcastManager(bot)
     stats = await manager.broadcast(
         user_ids=user_ids,
         text=localize("stock.back_in_stock", name=html_escape(item_name, quote=False)),

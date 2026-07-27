@@ -8,7 +8,8 @@ import pytest
 from sqlalchemy import select
 
 from bot.database.main import Database
-from bot.database.methods.create import create_operation, create_pending_payment
+from bot.database.methods.create import create_pending_payment
+from tests.factories import add_operation
 from bot.database.models.main import BoughtGoods, User
 from bot.web.export import (
     BATCH_SIZE, _sanitize_cell, _parse_date_params, _check_auth, _stream_csv,
@@ -170,7 +171,7 @@ class TestExportEndpoints:
 
     async def test_operations_export(self, user_factory):
         await user_factory(telegram_id=770040)
-        await create_operation(770040, 150, NOW)
+        await add_operation(770040, 150, NOW)
 
         response = await export_operations(_request(session=self.AUTHED))
         rows = list(csv.reader(io.StringIO(await _collect(response))))
@@ -192,7 +193,7 @@ class TestExportEndpoints:
 
     async def test_date_filter_excludes_rows_outside_the_window(self, user_factory):
         await user_factory(telegram_id=770060)
-        await create_operation(770060, 10, NOW)
+        await add_operation(770060, 10, NOW)
 
         far_future = (NOW + datetime.timedelta(days=2)).strftime("%Y-%m-%d")
         response = await export_operations(

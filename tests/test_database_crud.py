@@ -8,7 +8,7 @@ from sqlalchemy import select
 
 from bot.database.methods.create import (
     create_user, create_item, add_values_to_item,
-    create_operation, create_pending_payment, create_referral_earning,
+    create_pending_payment,
 )
 from bot.database.methods.read import (
     check_user, check_role, get_role_id_by_name,
@@ -19,7 +19,6 @@ from bot.database.methods.read import (
     select_item_values_amount,
     select_count_items, select_count_goods,
     select_count_categories, select_user_items,
-    select_user_operations,
     check_user_referrals, get_user_referral,
     get_referral_earnings_stats,
     get_one_referral_earning,
@@ -30,11 +29,11 @@ from bot.database.methods.read import (
     count_users_with_role,
 )
 from bot.database.methods.update import (
-    update_balance, set_role, set_user_blocked,
+    set_role, set_user_blocked,
     is_user_blocked, update_item, update_category,
 )
 from bot.database.methods.delete import (
-    delete_item, delete_only_items,
+    delete_item,
     delete_item_from_position, delete_category,
 )
 
@@ -398,12 +397,6 @@ class TestItemCRUD:
         assert await get_item_info("DelItem") is None
         assert await select_item_values_amount("DelItem") == 0
 
-    async def test_delete_only_items(self, item_factory):
-        await item_factory(name="DelOnlyItem", category="DOCat", values=[("x", False)])
-        await delete_only_items("DelOnlyItem")
-        assert await get_item_info("DelOnlyItem") is not None
-        assert await select_item_values_amount("DelOnlyItem") == 0
-
     async def test_delete_item_from_position(self, item_factory):
         await item_factory(name="PosItem", category="PosCat", values=[("p1", False), ("p2", False)])
         # Get one item value id via async DB session
@@ -421,61 +414,33 @@ class TestItemCRUD:
 
 
 class TestBalanceOperations:
-    async def test_update_balance(self, user_factory):
-        await user_factory(telegram_id=8001)
-        await update_balance(8001, 500)
-        user = await check_user(8001)
-        assert user["balance"] == Decimal("500")
-
-    async def test_update_balance_multiple(self, user_factory):
-        await user_factory(telegram_id=8002)
-        await update_balance(8002, 100)
-        await update_balance(8002, 200)
-        user = await check_user(8002)
-        assert user["balance"] == Decimal("300")
-
     async def test_select_users_balance(self, user_factory):
         await user_factory(telegram_id=8003, balance=100)
         await user_factory(telegram_id=8004, balance=250)
         total = await select_users_balance()
         assert total == Decimal("350")
 
-    async def test_create_operation(self, user_factory):
-        await user_factory(telegram_id=8005)
-        await create_operation(8005, 150, NOW)
-        ops = await select_user_operations(8005)
-        assert len(ops) == 1
-        assert ops[0] == Decimal("150")
-
-    async def test_select_user_operations_multiple(self, user_factory):
-        await user_factory(telegram_id=8006)
-        await create_operation(8006, 100, NOW)
-        await create_operation(8006, 200, NOW)
-        ops = await select_user_operations(8006)
-        assert len(ops) == 2
-
-    async def test_select_user_operations_total_matches_python_sum(self, user_factory):
+    async def test_select_user_operations_total_sums_every_row(self, user_factory, operation_factory):
         from bot.database.methods.read import select_user_operations_total
 
         await user_factory(telegram_id=8016)
         assert await select_user_operations_total(8016) == Decimal("0")
 
-        await create_operation(8016, 100, NOW)
+        await operation_factory(8016, 100, NOW)
         assert await select_user_operations_total(8016) == Decimal("100")
 
-        await create_operation(8016, 250, NOW)
-        ops = await select_user_operations(8016)
-        assert await select_user_operations_total(8016) == sum(ops)
+        await operation_factory(8016, 250, NOW)
+        assert await select_user_operations_total(8016) == Decimal("350")
 
-    async def test_select_today_operations(self, user_factory):
+    async def test_select_today_operations(self, user_factory, operation_factory):
         await user_factory(telegram_id=8007)
-        await create_operation(8007, 300, NOW)
+        await operation_factory(8007, 300, NOW)
         total = await select_today_operations(TODAY_STR)
         assert total == Decimal("300")
 
-    async def test_select_all_operations(self, user_factory):
+    async def test_select_all_operations(self, user_factory, operation_factory):
         await user_factory(telegram_id=8008)
-        await create_operation(8008, 400, NOW)
+        await operation_factory(8008, 400, NOW)
         total = await select_all_operations()
         assert total == Decimal("400")
 
@@ -552,20 +517,20 @@ class TestReferrals:
         await user_factory(telegram_id=10007)
         assert await get_user_referral(10007) is None
 
-    async def test_create_referral_earning(self, user_factory):
+    async def test_referral_earnings_stats(self, user_factory, referral_earning_factory):
         await user_factory(telegram_id=10008)
         await user_factory(telegram_id=10009, referral_id=10008)
-        await create_referral_earning(10008, 10009, 50, 500)
+        await referral_earning_factory(10008, 10009, 50, 500)
         stats = await get_referral_earnings_stats(10008)
         assert stats["total_earnings_count"] == 1
         assert stats["total_amount"] == Decimal("50")
         assert stats["total_original_amount"] == Decimal("500")
         assert stats["active_referrals_count"] == 1
 
-    async def test_get_one_referral_earning(self, user_factory):
+    async def test_get_one_referral_earning(self, user_factory, referral_earning_factory):
         await user_factory(telegram_id=10010)
         await user_factory(telegram_id=10011, referral_id=10010)
-        await create_referral_earning(10010, 10011, 25, 250)
+        await referral_earning_factory(10010, 10011, 25, 250)
         # Get the earning id via async DB session
         from bot.database import Database as DB
         from bot.database.models import ReferralEarnings
@@ -644,9 +609,7 @@ class TestStats:
         assert await select_user_items(11003) == 2
 
     async def test_select_users_balance_empty(self):
-        # Raw SQL SUM over an empty table is NULL, not 0 — callers that render
-        # this value (admin shop stats) have to cope with None.
-        assert await select_users_balance() is None
+        assert await select_users_balance() == Decimal(0)
 
     async def test_select_all_operations_empty(self):
         assert await select_all_operations() == Decimal("0")

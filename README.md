@@ -122,7 +122,7 @@ panel, and the background workers. There is no broker and no worker pool — the
 flowchart TD
     U([Telegram user]) --> API[Telegram Bot API]
     API -->|long polling · default| DP
-    API -->|webhook POST| WH["POST /webhook<br/>route appended to the running admin app"]
+    API -->|webhook POST| WH["POST /webhook<br/>own Starlette app on WEBHOOK_PORT"]
     WH -->|secret token compared in constant time| DP
     DP["aiogram Dispatcher<br/>allowed updates: message, callback_query,<br/>pre_checkout_query, successful_payment"]
     DP --> M1["RateLimit<br/>global 30/min + per-action buckets"]
@@ -170,9 +170,12 @@ flowchart TD
 
 Worth knowing:
 
-- **Webhook mode reuses the admin server.** `WEBHOOK_ENABLED=1` appends a
-  `POST /webhook` route onto the *already running* Starlette app rather than
-  starting a second one; the secret header is compared with `hmac.compare_digest`.
+- **Webhook mode runs its own listener.** `WEBHOOK_ENABLED=1` starts a second,
+  minimal Starlette app on `WEBHOOK_HOST:WEBHOOK_PORT` serving nothing but
+  `POST {WEBHOOK_PATH}`; the secret header is compared with `hmac.compare_digest`.
+  It is deliberately *not* mounted on the admin app — Telegram has to reach the
+  webhook, and nothing else should come along with it. Point your TLS-terminating
+  reverse proxy at the webhook port only.
 - **Redis is optional.** Without it: in-memory FSM, no caching, and a per-process
   rate limiter and role cache. With it, that state is shared and survives a
   restart. The connection is verified with a PING at startup, so a
@@ -293,28 +296,37 @@ are **required**; everything else has a sensible default.
 <details>
 <summary><b>Web admin panel</b></summary>
 
-| Variable                            | Description         | Default                   |
-|-------------------------------------|---------------------|---------------------------|
-| `ADMIN_HOST` / `ADMIN_PORT`         | Bind address / port | `localhost` / `9090`      |
-| `ADMIN_USERNAME` / `ADMIN_PASSWORD` | Panel login         | `admin` / `admin`         |
-| `SECRET_KEY`                        | Session signing key | `change-me-in-production` |
+| Variable                            | Description                                                       | Default                   |
+|-------------------------------------|-------------------------------------------------------------------|---------------------------|
+| `ADMIN_HOST` / `ADMIN_PORT`         | Bind address / port                                               | `localhost` / `9090`      |
+| `ADMIN_USERNAME` / `ADMIN_PASSWORD` | Panel login                                                       | `admin` / `admin`         |
+| `SECRET_KEY`                        | Session signing key                                               | `change-me-in-production` |
+| `ADMIN_COOKIE_SECURE`               | Mark session cookie `Secure`; `auto` = on unless loopback-only    | `auto` (or `1` / `0`)     |
 
-Change `ADMIN_PASSWORD` and `SECRET_KEY` before exposing the panel. In Docker the panel is
-published on `127.0.0.1:9090` only.
+`SECRET_KEY` signs the admin session cookie, so leaving it at the shipped default means anyone
+who can reach the panel can forge a logged-in session and export every user and payment.
+**The bot refuses to start** with a default `SECRET_KEY` or `ADMIN_PASSWORD` when the panel is
+reachable — that is, when `ADMIN_HOST` is not loopback or `WEBHOOK_ENABLED=1`. On a
+loopback-only bind it is a warning instead, so local development still works.
+
+In Docker the panel is published on `127.0.0.1:9090` only. `ADMIN_COOKIE_SECURE` (`auto` by
+default) marks the session cookie `Secure` whenever the panel is not loopback-only; set it to
+`0` if you deliberately terminate TLS elsewhere and need plain HTTP on the hop.
 </details>
 
 <details>
 <summary><b>Database, Redis, webhook, cleanup</b></summary>
 
-| Variable                                                              | Description                                                     | Default                                  |
-|-----------------------------------------------------------------------|-----------------------------------------------------------------|------------------------------------------|
-| `POSTGRES_DB` / `POSTGRES_USER` / `POSTGRES_PASSWORD`                 | Database credentials                                            | **required**                             |
-| `POSTGRES_HOST` / `DB_PORT`                                           | Host / port                                                     | `localhost` (or `db` in Docker) / `5432` |
-| `DB_POOL_SIZE` / `DB_MAX_OVERFLOW`                                    | Connection pool size and burst headroom                         | `10` / `20`                              |
-| `REDIS_ENABLED`                                                       | `1` = Redis caching + persistent FSM; `0` = in‑memory, no cache | `1`                                      |
-| `REDIS_HOST` / `REDIS_PORT` / `REDIS_DB` / `REDIS_PASSWORD`           | Redis connection                                                | `localhost` / `6379` / `0` / –           |
-| `WEBHOOK_ENABLED` / `WEBHOOK_URL` / `WEBHOOK_PATH` / `WEBHOOK_SECRET` | Webhook mode (default: long polling)                            | `0` / – / `/webhook` / –                 |
-| `AUDIT_RETENTION_DAYS` / `PAYMENTS_RETENTION_DAYS`                    | Auto‑cleanup age (`0` disables)                                 | `90` / `90`                              |
+| Variable                                                              | Description                                                       | Default                                  |
+|-----------------------------------------------------------------------|-------------------------------------------------------------------|------------------------------------------|
+| `POSTGRES_DB` / `POSTGRES_USER` / `POSTGRES_PASSWORD`                 | Database credentials                                              | **required**                             |
+| `POSTGRES_HOST` / `DB_PORT`                                           | Host / port                                                       | `localhost` (or `db` in Docker) / `5432` |
+| `DB_POOL_SIZE` / `DB_MAX_OVERFLOW`                                    | Connection pool size and burst headroom                           | `10` / `20`                              |
+| `REDIS_ENABLED`                                                       | `1` = Redis caching + persistent FSM; `0` = in‑memory, no cache   | `1`                                      |
+| `REDIS_HOST` / `REDIS_PORT` / `REDIS_DB` / `REDIS_PASSWORD`           | Redis connection                                                  | `localhost` / `6379` / `0` / –           |
+| `WEBHOOK_ENABLED` / `WEBHOOK_URL` / `WEBHOOK_PATH` / `WEBHOOK_SECRET` | Webhook mode (default: long polling)                              | `0` / – / `/webhook` / –                 |
+| `WEBHOOK_HOST` / `WEBHOOK_PORT`                                       | Bind address of the webhook listener (its own app, not the panel) | `0.0.0.0` / `8080`                       |
+| `AUDIT_RETENTION_DAYS` / `PAYMENTS_RETENTION_DAYS`                    | Auto‑cleanup age in days; `0` or negative disables the sweep      | `90` / `90`                              |
 
 </details>
 
@@ -567,7 +579,7 @@ users waiting for it, just like the in‑chat flow.
 
 ## 🧪 Testing
 
-**944 tests, 76 % line coverage** (`pytest`). The data layer runs against a
+**958 tests, 76 % line coverage** (`pytest`). The data layer runs against a
 real in‑memory async SQLite database (real SQL, transactions, and constraints) — only external
 services are mocked (Telegram Bot API, CryptoPay, Redis). What's covered:
 

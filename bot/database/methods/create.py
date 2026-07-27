@@ -4,7 +4,7 @@ from decimal import Decimal
 from sqlalchemy import select, exists, func as sa_func, insert as sa_insert
 from sqlalchemy.exc import IntegrityError
 
-from bot.database.models import User, ItemValues, Goods, Categories, Operations, Payments, ReferralEarnings, Role
+from bot.database.models import User, ItemValues, Goods, Categories, Payments, Role
 from bot.database.models.main import PromoCodes, CartItems, Reviews, StockSubscriptions, promo_scope_for
 from bot.database import Database
 from bot.database.methods.cache_utils import safe_create_task
@@ -187,12 +187,6 @@ async def create_category(category_name: str) -> None:
     safe_create_task(invalidate_category_cache(category_name))
 
 
-async def create_operation(user_id: int, value: int, operation_time: datetime) -> None:
-    """Record completed balance operation; commit."""
-    async with Database().session() as s:
-        s.add(Operations(user_id=user_id, operation_value=value, operation_time=operation_time))
-
-
 async def create_pending_payment(provider: str, external_id: str, user_id: int, amount: int, currency: str) -> None:
     """Create pending payment."""
     async with Database().session() as s:
@@ -204,19 +198,6 @@ async def create_pending_payment(provider: str, external_id: str, user_id: int, 
             currency=currency,
             status="pending"
         ))
-
-
-async def create_referral_earning(referrer_id: int, referral_id: int, amount: int, original_amount: int) -> None:
-    """Create a referral credit record."""
-    async with Database().session() as s:
-        s.add(
-            ReferralEarnings(
-                referrer_id=referrer_id,
-                referral_id=referral_id,
-                amount=Decimal(amount),
-                original_amount=Decimal(original_amount)
-            )
-        )
 
 
 async def create_role(name: str, permissions: int) -> int | None:

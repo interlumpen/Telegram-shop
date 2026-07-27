@@ -272,6 +272,8 @@ class AuthenticationMiddleware(BaseMiddleware):
 
 ROLE_CACHE_TTL = 300
 
+NEGATIVE_ROLE_TTL = 30
+
 # In-process role cache used when no middleware instance is registered (tests, one-off scripts). The live bot always goes through the middleware's own map.
 _standalone_role_cache: Dict[int, tuple[int, float]] = {}
 
@@ -292,7 +294,7 @@ async def resolve_role_cached(
     entry = l1.get(user_id)
     if entry is not None:
         role, timestamp = entry
-        if time.time() - timestamp < ttl:
+        if time.time() - timestamp < (ttl if role else NEGATIVE_ROLE_TTL):
             return role
 
     from bot.misc.caching import get_cache_manager
@@ -313,14 +315,12 @@ async def resolve_role_cached(
     from bot.database.methods import check_role
     role = await check_role(user_id) or 0
 
-    # Only cache real users. role == 0 means the user does not exist in the DB.
-    if role:
-        l1[user_id] = (role, time.time())
-        if redis_ok:
-            try:
-                await cache.set(f"auth:role:{user_id}", role, ttl=ttl)
-            except Exception:
-                pass
+    l1[user_id] = (role, time.time())
+    if role and redis_ok:
+        try:
+            await cache.set(f"auth:role:{user_id}", role, ttl=ttl)
+        except Exception:
+            pass
 
     return role
 

@@ -2,7 +2,7 @@ from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 
 import pytest
-from sqlalchemy import select
+from sqlalchemy import func, select
 
 from bot.database.main import Database
 from bot.database.models.main import PromoCodes, PromoCodeUsages, Goods, promo_scope_for
@@ -11,7 +11,7 @@ from bot.database.methods.transactions import (
 )
 from bot.database.methods.read import validate_promo_for_item
 from bot.database.methods.create import add_to_cart
-from bot.handlers.user.cart import _resolve_promo_price, _calc_cart_total_with_promos
+from bot.handlers.user.cart import _cart_view_data, _calc_cart_total_with_promos
 
 
 def _future(hours: int = 1) -> datetime:
@@ -183,16 +183,21 @@ class TestDanglingPromoBindings:
         assert ok, msg
         assert data["price"] == 50.0
 
-    async def test_dangling_promo_aborts_cart_checkout(self, user_factory, item_factory):
-        """Covers the per-cart-line call in checkout_cart_transaction."""
+    async def test_dangling_promo_dropped_at_cart_checkout(self, user_factory, item_factory):
+        """Covers the per-cart-line call in checkout_cart_transaction.
+
+        A promo whose binding was deleted applies to nothing, but it must not
+        wedge the cart: the line is charged at full price instead.
+        """
         await user_factory(telegram_id=820005, balance=1000)
         await item_factory(name="D5", price=100, values=[("v", False)])
         await _make_promo("DANGCART", "percent", "50", category_id=None, scope="category")
         await add_to_cart(820005, "D5", promo_code="DANGCART")
 
-        ok, msg, _ = await checkout_cart_transaction(820005)
+        ok, msg, results = await checkout_cart_transaction(820005)
 
-        assert (ok, msg) == (False, "promo_expired_during_checkout")
+        assert ok, msg
+        assert results[0]["price"] == 100.0
 
     async def test_validator_rejects_dangling_category(self, user_factory, item_factory):
         await user_factory(telegram_id=820006)
@@ -239,13 +244,42 @@ class TestCartPromoValidation:
         assert ok, msg
         assert results[0]["price"] == 90.0
 
-    async def test_cart_promo_invalid_aborts(self, user_factory, item_factory):
+    async def test_cart_promo_expired_is_dropped_not_fatal(self, user_factory, item_factory):
+        """An expired code must not lock the user out of their own cart."""
         await user_factory(telegram_id=810002, balance=1000)
         await item_factory(name="C2", price=100, values=[("v", False)])
         await _make_promo("CEXP", "percent", "10", expires_at=_past())
         await add_to_cart(810002, "C2", promo_code="CEXP")
-        ok, msg, _ = await checkout_cart_transaction(810002)
-        assert (ok, msg) == (False, "promo_expired_during_checkout")
+        ok, msg, results = await checkout_cart_transaction(810002)
+        assert ok, msg
+        assert results[0]["price"] == 100.0
+
+    async def test_promo_discounts_only_the_most_expensive_line(self, user_factory, item_factory):
+        """One redemption is one line — otherwise a single-use code halves a whole cart."""
+        await user_factory(telegram_id=810004, balance=10000)
+        await item_factory(name="C4a", price=100, values=[("a", False)])
+        await item_factory(name="C4b", price=300, values=[("b", False)])
+        await item_factory(name="C4c", price=200, values=[("c", False)])
+        await _make_promo("SPREAD50", "percent", "50")
+        for name in ("C4a", "C4b", "C4c"):
+            await add_to_cart(810004, name, promo_code="SPREAD50")
+
+        ok, msg, results = await checkout_cart_transaction(810004)
+
+        assert ok, msg
+        # 100 + 150 (the 300 line, halved) + 200
+        assert sorted(r["price"] for r in results) == [100.0, 150.0, 200.0]
+
+        # ...and it counted as exactly one redemption.
+        async with Database().session() as s:
+            promo = (await s.execute(
+                select(PromoCodes).where(PromoCodes.code == "SPREAD50")
+            )).scalars().one()
+            assert promo.current_uses == 1
+            usages = (await s.execute(
+                select(func.count(PromoCodeUsages.id)).where(PromoCodeUsages.promo_id == promo.id)
+            )).scalar()
+            assert usages == 1
 
     async def test_expected_total_mismatch_aborts(self, user_factory, item_factory):
         await user_factory(telegram_id=810003, balance=1000)
@@ -263,7 +297,14 @@ class TestCartPromoValidation:
 
 class TestCartDisplayMatchesCheckout:
     async def _line_total(self, price, code, item_name, user_id, qty=1):
-        return await _resolve_promo_price(Decimal(str(price)), code, item_name, user_id, qty)
+        """The discount the cart actually renders for this line, or None.
+
+        Goes through _cart_view_data rather than a helper of its own, so these
+        assert what the user really sees before confirming.
+        """
+        await add_to_cart(user_id, item_name, promo_code=code, quantity=qty)
+        _items, _info, line_data, _total = await _cart_view_data(user_id)
+        return next(iter(line_data.values()))['discounted']
 
     async def test_valid_promo_discounts_the_line(self, user_factory, item_factory):
         await user_factory(telegram_id=830001)
@@ -345,6 +386,23 @@ class TestCartDisplayMatchesCheckout:
         await add_to_cart(830010, "CD10", promo_code="CDT2")
 
         assert await _calc_cart_total_with_promos(830010) == Decimal("90.00")
+
+    async def test_cart_total_matches_checkout_when_a_promo_spans_lines(
+        self, user_factory, item_factory
+    ):
+        """The confirmation dialog and the charge must pick the same line."""
+        await user_factory(telegram_id=830011, balance=10000)
+        await item_factory(name="CD11a", price=100, values=[("a", False)])
+        await item_factory(name="CD11b", price=300, values=[("b", False)])
+        await _make_promo("CDSPAN", "percent", "50")
+        for name in ("CD11a", "CD11b"):
+            await add_to_cart(830011, name, promo_code="CDSPAN")
+
+        shown = await _calc_cart_total_with_promos(830011)
+        assert shown == Decimal("250.00")  # 100 + 150
+
+        ok, msg, _ = await checkout_cart_transaction(830011, expected_total=shown)
+        assert ok, msg
 
 
 # --- validate_promo_for_item (read-only, granular keys) ---

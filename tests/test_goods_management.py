@@ -160,8 +160,12 @@ class TestNavigateItemsInPosition:
         await show_str_item(make_message(text="Vanishing", user_id=1), fsm_context)
         item_hash = generate_short_hash("Vanishing")
 
-        from bot.database.methods.delete import delete_only_items
-        await delete_only_items("Vanishing")
+        from sqlalchemy import delete as sa_delete, select as sa_select
+        from bot.database.main import Database
+        from bot.database.models.main import Goods, ItemValues
+        async with Database().session() as s:
+            item_id = (await s.execute(sa_select(Goods.id).where(Goods.name == "Vanishing"))).scalar()
+            await s.execute(sa_delete(ItemValues).where(ItemValues.item_id == item_id))
 
         call = make_callback_query(data=f"gip_{item_hash}_0", user_id=1)
         await navigate_items_in_goods(call, fsm_context)

@@ -2,6 +2,7 @@ import asyncio
 import hmac
 import logging
 import json
+import signal
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
@@ -40,6 +41,8 @@ class AppContext:
     cache_scheduler: Optional[CacheScheduler] = None
     admin_server: Optional["object"] = None  # uvicorn.Server, imported lazily
     admin_server_task: Optional[asyncio.Task] = None
+    webhook_server: Optional["object"] = None  # uvicorn.Server for the webhook listener
+    webhook_server_task: Optional[asyncio.Task] = None
     webhook_active: bool = False
 
 
@@ -205,6 +208,9 @@ async def _shutdown(ctx: AppContext, bot: Bot) -> None:
     if ctx.cleanup_manager:
         await ctx.cleanup_manager.stop()
 
+    if ctx.cache_scheduler:
+        await ctx.cache_scheduler.stop()
+
     # Delete webhook if it was active
     if ctx.webhook_active:
         try:
@@ -212,13 +218,19 @@ async def _shutdown(ctx: AppContext, bot: Bot) -> None:
         except Exception as e:
             logging.error(f"Failed to delete webhook: {e}")
 
-    # Admin server stop
+    # Admin + webhook servers stop
     if ctx.admin_server:
         ctx.admin_server.should_exit = True
+    if ctx.webhook_server:
+        ctx.webhook_server.should_exit = True
 
     # Close CryptoPay shared HTTP session
     from bot.misc.services.payment import CryptoPayAPI
     await CryptoPayAPI.close_session()
+
+    # Let fire-and-forget invalidations and audit rows land while the engine and Redis are both still open.
+    from bot.database.methods.cache_utils import drain_background_tasks
+    await drain_background_tasks()
 
     # Drain buffered audit rows while the engine is still open.
     await stop_audit_buffer()
@@ -252,8 +264,37 @@ _ALLOWED_UPDATES = [
 ]
 
 
+def _install_shutdown_signals(callback) -> None:
+    """Route SIGINT/SIGTERM to `callback`.
+
+    aiogram installs these itself for polling (handle_signals=True); webhook mode
+    has to do it, or SIGTERM from `docker stop` kills the process outright and
+    the graceful shutdown never runs.
+    """
+    loop = asyncio.get_running_loop()
+    for sig in (signal.SIGINT, signal.SIGTERM):
+        try:
+            loop.add_signal_handler(sig, callback)
+        except (NotImplementedError, AttributeError, ValueError, RuntimeError):
+            try:
+                signal.signal(sig, lambda *_: loop.call_soon_threadsafe(callback))
+            except (ValueError, OSError):
+                logging.warning("Could not install a shutdown handler for %s", sig)
+
+
 async def _run_webhook(dp: Dispatcher, bot: Bot, ctx: AppContext) -> None:
-    """Run in webhook mode by mounting a route onto the already-running admin app."""
+    """Run in webhook mode on a dedicated app and port.
+
+    The webhook endpoint has to be reachable from Telegram; the admin panel must
+    not be.
+    """
+    import uvicorn
+    from starlette.applications import Starlette
+    from starlette.requests import Request
+    from starlette.responses import Response
+    from starlette.routing import Route
+    from aiogram.types import Update
+
     webhook_path = EnvKeys.WEBHOOK_PATH or "/webhook"
     webhook_url = f"{EnvKeys.WEBHOOK_URL}{webhook_path}"
 
@@ -264,11 +305,6 @@ async def _run_webhook(dp: Dispatcher, bot: Bot, ctx: AppContext) -> None:
     )
     ctx.webhook_active = True
     logging.info(f"Webhook set: {webhook_url}")
-
-    from starlette.requests import Request
-    from starlette.responses import Response
-    from starlette.routing import Route
-    from aiogram.types import Update
 
     # Strong references to in-flight update tasks (the loop keeps only weak ones).
     pending: set[asyncio.Task] = set()
@@ -294,13 +330,36 @@ async def _run_webhook(dp: Dispatcher, bot: Bot, ctx: AppContext) -> None:
         task.add_done_callback(pending.discard)
         return Response(status_code=200)
 
-    # The admin server is already running, patch its app's routes.
-    ctx.admin_server.config.app.routes.append(
-        Route(webhook_path, webhook_handler, methods=["POST"])
+    webhook_app = Starlette(routes=[Route(webhook_path, webhook_handler, methods=["POST"])])
+    config = uvicorn.Config(
+        webhook_app,
+        host=EnvKeys.WEBHOOK_HOST,
+        port=EnvKeys.WEBHOOK_PORT,
+        log_level="warning",
+    )
+    ctx.webhook_server = uvicorn.Server(config)
+    ctx.webhook_server_task = asyncio.create_task(ctx.webhook_server.serve())
+    logging.info(
+        "Webhook listener on %s:%s%s",
+        EnvKeys.WEBHOOK_HOST, EnvKeys.WEBHOOK_PORT, webhook_path,
     )
 
-    # Keep the process running
-    await asyncio.Event().wait()
+    stop = asyncio.Event()
+    _install_shutdown_signals(stop.set)
+
+    stop_waiter = asyncio.create_task(stop.wait())
+    try:
+        await asyncio.wait(
+            {stop_waiter, ctx.webhook_server_task},
+            return_when=asyncio.FIRST_COMPLETED,
+        )
+    finally:
+        stop_waiter.cancel()
+
+    # Stop accepting new updates, then let the in-flight ones finish.
+    ctx.webhook_server.should_exit = True
+    if pending:
+        await asyncio.gather(*pending, return_exceptions=True)
 
 
 async def start_bot() -> None:
@@ -348,9 +407,6 @@ async def start_bot() -> None:
         finally:
             # Correctly closing connections (called once, whether normal or abnormal exit)
             await _shutdown(ctx, bot)
-
-            if ctx.cache_scheduler:
-                await ctx.cache_scheduler.stop()
 
             if isinstance(storage, RedisStorage):
                 await storage.close()

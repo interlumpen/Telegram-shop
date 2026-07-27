@@ -146,3 +146,52 @@ class TestBroadcastMessage:
     def test_rejected(self, text):
         with pytest.raises(ValidationError):
             BroadcastMessage(text=text)
+
+
+class TestEnvValidation:
+    def _env(self, monkeypatch, **overrides):
+        from bot.misc.env import EnvKeys
+        defaults = {
+            "ADMIN_HOST": "localhost",
+            "WEBHOOK_ENABLED": "0",
+            "SECRET_KEY": "a-real-key",
+            "ADMIN_PASSWORD": "a-real-password",
+            "ADMIN_COOKIE_SECURE": "auto",
+        }
+        for key, value in {**defaults, **overrides}.items():
+            monkeypatch.setattr(EnvKeys, key, value, raising=False)
+        return EnvKeys
+
+    @pytest.mark.parametrize("exposure", [
+        {"ADMIN_HOST": "0.0.0.0"},
+        {"WEBHOOK_ENABLED": "1"},
+    ])
+    @pytest.mark.parametrize("bad", [
+        {"SECRET_KEY": "change-me-in-production"},
+        {"ADMIN_PASSWORD": "admin"},
+    ])
+    def test_default_credentials_are_fatal_when_reachable(self, monkeypatch, exposure, bad):
+        env = self._env(monkeypatch, **exposure, **bad)
+        with pytest.raises(RuntimeError, match="Refusing to start"):
+            env.validate()
+
+    def test_default_credentials_only_warn_on_loopback(self, monkeypatch):
+        env = self._env(
+            monkeypatch,
+            SECRET_KEY="change-me-in-production", ADMIN_PASSWORD="admin",
+        )
+        env.validate()  # must not raise — local development still works
+
+    def test_real_credentials_pass_when_exposed(self, monkeypatch):
+        env = self._env(monkeypatch, ADMIN_HOST="0.0.0.0")
+        env.validate()
+
+    @pytest.mark.parametrize("setting,host,expected", [
+        ("auto", "localhost", False),
+        ("auto", "0.0.0.0", True),
+        ("0", "0.0.0.0", False),
+        ("1", "localhost", True),
+    ])
+    def test_session_cookie_secure(self, monkeypatch, setting, host, expected):
+        env = self._env(monkeypatch, ADMIN_COOKIE_SECURE=setting, ADMIN_HOST=host)
+        assert env.session_cookie_secure() is expected

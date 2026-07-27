@@ -89,12 +89,8 @@ async def broadcast_messages(message: Message, state: FSMContext):
             except (TelegramBadRequest, TelegramForbiddenError) as e:
                 await log_audit("broadcast_progress_fail", level="WARNING", details=str(e))
 
-        # Start the mailing
-        manager = BroadcastManager(
-            bot=message.bot,
-            batch_size=30,
-            batch_delay=1.0
-        )
+        # Start the mailing at the manager's default Telegram-safe pace.
+        manager = BroadcastManager(bot=message.bot)
         broadcast_managers[admin_id] = manager
 
         stats = await manager.broadcast(

@@ -260,8 +260,8 @@ async def single_flight(cache, cache_key: str, compute, ttl: int, should_cache=N
                 await cache.set(cache_key, result, ttl)
             return result
     finally:
-        # Waiters already hold a reference to this lock object; a late-arriving task simply creates a fresh one. Keeps the dict from growing forever.
-        _single_flight_locks.pop(cache_key, None)
+        if _single_flight_locks.get(cache_key) is lock:
+            del _single_flight_locks[cache_key]
 
 
 def cache_result(

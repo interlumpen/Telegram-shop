@@ -491,6 +491,7 @@ class TestStatsAggregates:
             "users": 0,
             "orders": Decimal(0),
             "operations": Decimal(0),
+            "orders_count": 0,
         }
 
 

@@ -1,6 +1,6 @@
 from sqlalchemy import exc, select, update
 
-from bot.database.methods.read import invalidate_user_cache, invalidate_stats_cache, invalidate_item_cache, \
+from bot.database.methods.read import invalidate_user_cache, invalidate_item_cache, \
     invalidate_category_cache
 from bot.database.methods.cache_utils import safe_create_task
 from bot.database.methods.create import CART_MAX_QTY_PER_ITEM
@@ -18,17 +18,6 @@ async def set_role(telegram_id: int, role: int) -> None:
         )
 
     safe_create_task(invalidate_user_cache(telegram_id))
-
-
-async def update_balance(telegram_id: int, summ: int) -> None:
-    """Increase user's balance by `summ` and commit."""
-    async with Database().session() as s:
-        await s.execute(
-            update(User).where(User.telegram_id == telegram_id).values(balance=User.balance + summ)
-        )
-
-    safe_create_task(invalidate_user_cache(telegram_id))
-    safe_create_task(invalidate_stats_cache())
 
 
 async def update_item(item_name: str, new_name: str, description: str, price, category: str) -> tuple[bool, str | None]:
@@ -159,6 +148,18 @@ async def set_cart_item_quantity(cart_item_id: int, user_id: int, delta: int) ->
 
         row.quantity = new_qty
         return True, "success", new_qty
+
+
+async def clear_cart_item_promo(cart_item_id: int, user_id: int) -> bool:
+    """Drop the promo code from one cart line. Scoped by user_id so one user
+    cannot touch another's cart. Returns True if a line was updated."""
+    async with Database().session() as s:
+        result = await s.execute(
+            update(CartItems)
+            .where(CartItems.id == cart_item_id, CartItems.user_id == user_id)
+            .values(promo_code=None)
+        )
+        return result.rowcount > 0
 
 
 async def is_user_blocked(telegram_id: int) -> bool:

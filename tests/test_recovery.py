@@ -2,6 +2,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 from sqlalchemy import select
 
+from bot.misc.services.cleanup import CleanupManager
 from bot.misc.services.recovery import RecoveryManager
 from bot.database.methods.create import create_pending_payment
 from bot.database.main import Database
@@ -73,13 +74,7 @@ class TestRecoveryManager:
     async def test_health_check_does_not_call_telegram(self, fake_cache):
         """The per-minute health check must not spend a Telegram API call —
         polling already proves connectivity."""
-        self.manager.running = True
-
-        async def stop_after_first(_delay):
-            self.manager.running = False
-
-        with patch('bot.misc.services.recovery.asyncio.sleep', side_effect=stop_after_first):
-            await self.manager.periodic_health_check()
+        await self.manager.periodic_health_check()
 
         self.bot.get_me.assert_not_awaited()
         assert fake_cache.store.get("health:check") == "ok"
@@ -96,8 +91,8 @@ class TestRecoveryManager:
         await self.manager.stop()
         assert self.manager.running is False
 
-    async def test_safe_run_handles_exceptions(self):
-        """_safe_run should swallow a task crash, back off, and restart the loop."""
+    async def test_run_periodically_survives_a_crash(self):
+        """A failing pass must back off and be retried, not kill the task."""
         self.manager.running = True
         call_count = 0
 
@@ -109,13 +104,15 @@ class TestRecoveryManager:
             # Second iteration: stop the loop so the test terminates.
             self.manager.running = False
 
-        # Patch the 30s backoff so the retry happens immediately.
+        # Patch the sleeps so neither the backoff nor the interval really waits.
         with patch("bot.misc.services.recovery.asyncio.sleep", new=AsyncMock()) as mock_sleep:
-            # Pass the coroutine *function* (as start() does), not a coroutine object.
-            await self.manager._safe_run(flaky)
+            await self.manager._run_periodically(flaky, interval=300)
 
         assert call_count == 2  # crashed once, then retried
-        mock_sleep.assert_awaited_once()  # backed off between attempts
+        # Backoff after the crash, then the normal interval after the good pass.
+        assert [c.args[0] for c in mock_sleep.await_args_list] == [
+            self.manager.ERROR_BACKOFF, 300,
+        ]
 
     async def test_check_and_process_api_timeout(self, user_factory):
         """API timeout should not crash the recovery manager."""
@@ -196,3 +193,63 @@ class TestRecoveryManager:
         async with Database().session() as s:
             p = (await s.execute(select(Payments).filter(Payments.external_id == "stars_ext_1"))).scalars().first()
             assert p.status == "pending"
+
+
+class TestCleanupRetention:
+    def setup_method(self):
+        self.manager = CleanupManager()
+
+    async def _run_one_sweep(self, monkeypatch, *, audit_days, payments_days):
+        from bot.misc.env import EnvKeys
+        monkeypatch.setattr(EnvKeys, "AUDIT_RETENTION_DAYS", audit_days, raising=False)
+        monkeypatch.setattr(EnvKeys, "PAYMENTS_RETENTION_DAYS", payments_days, raising=False)
+
+        self.manager.running = True
+
+        async def stop_before_working(_delay):
+            # daily_cleanup sleeps until 04:00 UTC first; skip the wait, then
+            # end the loop after this single pass.
+            self.manager.running = False
+
+        with patch("bot.misc.services.cleanup.asyncio.sleep", side_effect=stop_before_working):
+            await self.manager.daily_cleanup()
+
+    async def _seed(self):
+        from datetime import datetime, timedelta, timezone
+        from bot.database.models.main import AuditLog, Payments as P
+        old = datetime.now(timezone.utc) - timedelta(days=365)
+        async with Database().session() as s:
+            s.add(AuditLog(timestamp=old, level="INFO", action="ancient"))
+            s.add(P(provider="cryptopay", external_id="ret_old", user_id=None,
+                    amount=10, currency="RUB", status="pending", created_at=old))
+
+    async def _counts(self):
+        from sqlalchemy import func
+        from bot.database.models.main import AuditLog, Payments as P
+        async with Database().session() as s:
+            audit = (await s.execute(select(func.count(AuditLog.id)))).scalar()
+            payments = (await s.execute(select(func.count(P.id)))).scalar()
+        return audit, payments
+
+    async def test_zero_retention_deletes_nothing(self, monkeypatch):
+        await self._seed()
+        before = await self._counts()
+
+        await self._run_one_sweep(monkeypatch, audit_days=0, payments_days=0)
+
+        # The sweep logs its own audit row, so audit can only have grown.
+        audit_after, payments_after = await self._counts()
+        assert audit_after >= before[0]
+        assert payments_after == before[1]
+
+    async def test_positive_retention_still_prunes(self, monkeypatch):
+        await self._seed()
+
+        await self._run_one_sweep(monkeypatch, audit_days=90, payments_days=90)
+
+        from bot.database.models.main import Payments as P
+        async with Database().session() as s:
+            stale = (await s.execute(
+                select(P).where(P.external_id == "ret_old")
+            )).scalars().first()
+        assert stale is None

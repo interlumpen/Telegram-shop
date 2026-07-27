@@ -52,24 +52,30 @@ class CleanupManager:
                 from bot.misc.env import EnvKeys
                 from bot.database.methods.audit import log_audit
 
-                audit_cutoff = datetime.now(timezone.utc) - timedelta(days=EnvKeys.AUDIT_RETENTION_DAYS)
-                payments_cutoff = datetime.now(timezone.utc) - timedelta(days=EnvKeys.PAYMENTS_RETENTION_DAYS)
+                audit_days = EnvKeys.AUDIT_RETENTION_DAYS
+                payments_days = EnvKeys.PAYMENTS_RETENTION_DAYS
+                now = datetime.now(timezone.utc)
+
+                audit_deleted = 0
+                payments_deleted = 0
 
                 async with Database().session() as s:
                     # 1. Delete old audit_log entries
-                    audit_result = await s.execute(
-                        delete(AuditLog).where(AuditLog.timestamp < audit_cutoff)
-                    )
-                    audit_deleted = audit_result.rowcount
+                    if audit_days > 0:
+                        audit_result = await s.execute(
+                            delete(AuditLog).where(AuditLog.timestamp < now - timedelta(days=audit_days))
+                        )
+                        audit_deleted = audit_result.rowcount
 
                     # 2. Delete old pending/failed payments
-                    payments_result = await s.execute(
-                        delete(Payments).where(
-                            Payments.status.in_(['pending', 'failed']),
-                            Payments.created_at < payments_cutoff
+                    if payments_days > 0:
+                        payments_result = await s.execute(
+                            delete(Payments).where(
+                                Payments.status.in_(['pending', 'failed']),
+                                Payments.created_at < now - timedelta(days=payments_days)
+                            )
                         )
-                    )
-                    payments_deleted = payments_result.rowcount
+                        payments_deleted = payments_result.rowcount
 
                 await log_audit(
                     "daily_cleanup",

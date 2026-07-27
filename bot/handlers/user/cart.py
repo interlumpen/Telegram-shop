@@ -7,9 +7,8 @@ from aiogram.fsm.context import FSMContext
 from aiogram.exceptions import TelegramBadRequest
 
 from bot.database.methods.create import add_to_cart, CART_MAX_QTY_PER_ITEM
-from bot.database.methods.read import get_cart_items, validate_promo_for_item, \
-    validate_promos_for_cart
-from bot.database.methods.update import set_cart_item_quantity
+from bot.database.methods.read import get_cart_items, validate_promos_for_cart
+from bot.database.methods.update import set_cart_item_quantity, clear_cart_item_promo
 from bot.database.methods.delete import remove_from_cart, clear_cart
 from bot.database.methods.transactions import checkout_cart_transaction
 from bot.keyboards.inline import back, simple_buttons, cart_keyboard
@@ -23,29 +22,14 @@ router = Router()
 RECEIPT_MAX_BUTTONS = 10
 
 
-async def _resolve_promo_price(price: Decimal, promo_code: str | None, item_name: str,
-                               user_id: int, quantity: int = 1) -> Decimal | None:
-    """Return the discounted line total, or None if the promo does not apply.
-
-    A percent promo scales with quantity; a fixed promo comes off the line once.
-    """
-    if not promo_code:
-        return None
-
-    valid, _err, promo = await validate_promo_for_item(promo_code, item_name, user_id)
-    if not valid:
-        return None
-
-    # Same clamped math as checkout, so the displayed total matches what is charged.
-    return apply_promo_discount(price, promo['discount_type'], promo['discount_value'], quantity)
-
-
 async def _cart_view_data(user_id: int) -> tuple[list[dict], dict[str, dict], dict[int, dict], Decimal]:
     """Load everything a cart render or total needs in three queries total.
 
-    Returns (items, info_map, line_data, total); line_data maps cart line id
-    to {'line_total', 'discounted', 'on_sale', 'original'} using the same
-    clamped math as checkout, so the displayed total matches what is charged.
+    Returns (items, info_map, line_data, total); line_data maps cart line id to
+    {'line_total', 'discounted', 'eligible', 'on_sale', 'original'} using the
+    same clamped math *and the same one-promo-one-line rule* as
+    checkout_cart_transaction, so the displayed total matches what is charged.
+    ``eligible`` marks a line whose promo is valid but was spent on another line.
     Lines whose item no longer exists are absent from line_data.
     """
     items = await get_cart_items(user_id)
@@ -58,7 +42,9 @@ async def _cart_view_data(user_id: int) -> tuple[list[dict], dict[str, dict], di
     promo_results = await validate_promos_for_cart(user_id, items, info_map)
 
     line_data: dict[int, dict] = {}
-    total = Decimal(0)
+    # promo id -> cart line ids it validly applies to
+    promo_lines: dict[int, list[int]] = {}
+
     for item in items:
         info = info_map.get(item['item_name'])
         if not info:
@@ -66,22 +52,32 @@ async def _cart_view_data(user_id: int) -> tuple[list[dict], dict[str, dict], di
         qty = item['quantity']
         base_price, on_sale, original = effective_price(info)
 
-        discounted = None
+        promo = None
         res = promo_results.get(item['id'])
         if res is not None and res[0]:
             promo = res[2]
-            discounted = apply_promo_discount(
-                base_price, promo['discount_type'], promo['discount_value'], qty,
-            )
+            promo_lines.setdefault(promo['id'], []).append(item['id'])
 
-        line_total = discounted if discounted is not None else (base_price * qty).quantize(Decimal("0.01"))
         line_data[item['id']] = {
-            'line_total': line_total,
-            'discounted': discounted,
+            'line_total': (base_price * qty).quantize(Decimal("0.01")),
+            'discounted': None,
+            'eligible': promo is not None,
             'on_sale': on_sale,
             'original': original,
+            'promo': promo,
+            'qty': qty,
+            'unit_price': base_price,
         }
-        total += line_total
+
+    for line_ids in promo_lines.values():
+        best_id = max(line_ids, key=lambda lid: (line_data[lid]['line_total'], -lid))
+        ld = line_data[best_id]
+        ld['discounted'] = apply_promo_discount(
+            ld['unit_price'], ld['promo']['discount_type'], ld['promo']['discount_value'], ld['qty'],
+        )
+        ld['line_total'] = ld['discounted']
+
+    total = sum((ld['line_total'] for ld in line_data.values()), Decimal(0))
     return items, info_map, line_data, total
 
 
@@ -119,6 +115,13 @@ async def _show_cart(call: CallbackQuery):
                 "cart.item_promo", name=name, qty=qty,
                 original=(original * qty).quantize(Decimal("0.01")), price=line_total,
                 currency=EnvKeys.PAY_CURRENCY, code=code,
+            ))
+        elif ld['eligible']:
+            # Valid code, but its single redemption went to another line.
+            lines.append(localize(
+                "cart.item_promo_elsewhere", name=name, qty=qty,
+                price=line_total, currency=EnvKeys.PAY_CURRENCY,
+                code=code,
             ))
         elif item.get('promo_code'):
             lines.append(localize(
@@ -222,6 +225,22 @@ async def remove_cart_item_handler(call: CallbackQuery, state: FSMContext):
     await _show_cart(call)
 
 
+@router.callback_query(F.data.startswith("cart_unpromo:"))
+async def cart_remove_promo_handler(call: CallbackQuery, state: FSMContext):
+    """Drop the promo code from one cart line. Format: cart_unpromo:{id}"""
+    try:
+        cart_item_id = int(call.data.split(":")[1])
+    except (ValueError, IndexError):
+        await call.answer(localize("errors.invalid_data"), show_alert=True)
+        return
+
+    if await clear_cart_item_promo(cart_item_id, call.from_user.id):
+        await call.answer(localize("promo.removed"))
+    else:
+        await call.answer(localize("cart.item_not_found"), show_alert=True)
+    await _show_cart(call)
+
+
 @router.callback_query(F.data == "cart_clear")
 async def clear_cart_handler(call: CallbackQuery, state: FSMContext):
     await clear_cart(call.from_user.id)
@@ -318,7 +337,6 @@ async def cart_checkout_confirm_handler(call: CallbackQuery, state: FSMContext):
             "out_of_stock": localize("cart.out_of_stock"),
             "insufficient_funds": localize("shop.insufficient_funds"),
             "transaction_error": localize("errors.something_wrong"),
-            "promo_expired_during_checkout": localize("cart.promo_expired"),
             "price_changed": localize("cart.price_changed"),
         }
         await call.message.edit_text(

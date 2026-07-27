@@ -554,6 +554,76 @@ class TestItemInfo:
         assert "quantity_unlimited" in text
 
 
+class TestAppliedPromoDoesNotFollowTheUser:
+    async def _promo(self, code, percent="50", **kw):
+        from bot.database.models.main import PromoCodes
+        from bot.database.main import Database
+        from decimal import Decimal
+        async with Database().session() as s:
+            s.add(PromoCodes(
+                code=code, discount_type="percent", discount_value=Decimal(percent),
+                scope=kw.pop("scope", "global"), max_uses=0, current_uses=0,
+                is_active=True, **kw,
+            ))
+
+    async def _open(self, make_callback_query, fsm_context, name, user_id):
+        call = make_callback_query(data="itm:0:0", user_id=user_id)
+        await fsm_context.update_data(
+            goods_page_items=[name], goods_page_num=0, current_category="PromoCat",
+        )
+        await item_info_callback_handler(call, fsm_context)
+        return call
+
+    async def test_switching_items_clears_the_applied_promo(
+        self, make_callback_query, fsm_context, item_factory, user_factory
+    ):
+        await user_factory(telegram_id=600040)
+        await item_factory(name="PromoA", price=100, category="PromoCat", values=[("a", False)])
+        await item_factory(name="PromoB", price=100, category="PromoCat", values=[("b", False)])
+        await self._promo("CARRY50")
+
+        await self._open(make_callback_query, fsm_context, "PromoA", 600040)
+        await fsm_context.update_data(applied_promo="CARRY50")
+
+        await self._open(make_callback_query, fsm_context, "PromoB", 600040)
+
+        data = await fsm_context.get_data()
+        assert data["csrf_item"] == "PromoB"
+        assert data["applied_promo"] is None
+
+    async def test_reopening_the_same_item_keeps_the_promo(
+        self, make_callback_query, fsm_context, item_factory, user_factory
+    ):
+        await user_factory(telegram_id=600041)
+        await item_factory(name="PromoSame", price=100, category="PromoCat", values=[("v", False)])
+        await self._promo("KEEP50")
+
+        await self._open(make_callback_query, fsm_context, "PromoSame", 600041)
+        await fsm_context.update_data(applied_promo="KEEP50")
+        call = await self._open(make_callback_query, fsm_context, "PromoSame", 600041)
+
+        assert (await fsm_context.get_data())["applied_promo"] == "KEEP50"
+        assert "price_discounted" in call.message.edit_text.call_args[0][0]
+
+    async def test_a_promo_that_stopped_applying_is_dropped_on_render(
+        self, make_callback_query, fsm_context, item_factory, user_factory
+    ):
+        """State is not trusted: the code is re-checked against this product."""
+        from datetime import datetime, timedelta, timezone
+
+        await user_factory(telegram_id=600042)
+        await item_factory(name="PromoExp", price=100, category="PromoCat", values=[("v", False)])
+        await self._promo("GONE50", expires_at=datetime.now(timezone.utc) - timedelta(hours=1))
+
+        await self._open(make_callback_query, fsm_context, "PromoExp", 600042)
+        await fsm_context.update_data(applied_promo="GONE50")
+        call = await self._open(make_callback_query, fsm_context, "PromoExp", 600042)
+
+        text = call.message.edit_text.call_args[0][0]
+        assert "price_discounted" not in text
+        assert (await fsm_context.get_data())["applied_promo"] is None
+
+
 class TestBoughtItems:
 
     async def test_bought_items_empty(self, make_callback_query, fsm_context, user_factory):

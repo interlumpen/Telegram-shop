@@ -17,6 +17,7 @@ from bot.database.methods.read import (
     get_user_review, invalidate_rating_cache, is_subscribed_to_stock,
     check_value_cached,
 )
+from bot.database.methods.pricing import apply_promo_discount
 from bot.database.methods.create import create_review, subscribe_to_stock
 from bot.database.methods.delete import unsubscribe_from_stock
 from bot.database.methods.lazy_queries import query_item_reviews, query_goods_search, query_items_in_category
@@ -103,18 +104,23 @@ async def _render_item_page(target, state: FSMContext, item_name: str, back_data
         out_of_stock and user_id and await is_subscribed_to_stock(user_id, item_name)
     )
 
-    applied_promo = data.get('applied_promo')
-
     # Build price line. Sale price (if any) is the base; a promo stacks on top.
     sale_price, on_sale, original_price = effective_price(item_info_data)
     price = sale_price
-    if applied_promo:
-        promo_data = data.get('applied_promo_data', {})
-        if promo_data.get('discount_type') == 'percent':
-            discount = price * Decimal(str(promo_data.get('discount_value', 0))) / 100
+
+    applied_promo = data.get('applied_promo')
+    discounted = None
+    if applied_promo and user_id:
+        valid, _err, promo = await validate_promo_for_item(applied_promo, item_name, user_id)
+        if valid:
+            discounted = apply_promo_discount(
+                price, promo['discount_type'], promo['discount_value'], 1
+            )
         else:
-            discount = min(Decimal(str(promo_data.get('discount_value', 0))), price)
-        discounted = (price - discount).quantize(Decimal("0.01"))
+            applied_promo = None
+            await state.update_data(applied_promo=None)
+
+    if discounted is not None:
         price_line = localize(
             "shop.item.price_discounted",
             original=original_price, discounted=discounted,
@@ -312,7 +318,10 @@ async def _open_item(call: CallbackQuery, state: FSMContext, item_name: str, bac
         metrics.track_conversion("purchase_funnel", "view_item", call.from_user.id)
 
     # Save item name and back_data in state
-    await state.update_data(csrf_item=item_name, item_back_data=back_data)
+    updates = {"csrf_item": item_name, "item_back_data": back_data}
+    if (await state.get_data()).get('csrf_item') != item_name:
+        updates["applied_promo"] = None
+    await state.update_data(**updates)
 
     await _render_item_page(call, state, item_name, back_data, user_id=call.from_user.id)
 
@@ -506,14 +515,8 @@ async def promo_code_text_handler(message: Message, state: FSMContext):
         await message.answer(localize(error_key), reply_markup=back("back_to_item"))
         return
 
-    # Store promo data for discounted price display
-    await state.update_data(
-        applied_promo=code,
-        applied_promo_data={
-            'discount_type': promo_data.get('discount_type'),
-            'discount_value': str(promo_data.get('discount_value', 0)),
-        },
-    )
+    # Only the code is kept. The discount itself is re-derived on every render from the live promo row, so a code that stops applying stops showing.
+    await state.update_data(applied_promo=code)
 
     # Re-render item page with discounted price
     await _render_item_page(message, state, item_name, user_id=message.from_user.id)
@@ -521,7 +524,7 @@ async def promo_code_text_handler(message: Message, state: FSMContext):
 
 @router.callback_query(F.data == "remove_promo")
 async def remove_promo_handler(call: CallbackQuery, state: FSMContext):
-    await state.update_data(applied_promo=None, applied_promo_data=None)
+    await state.update_data(applied_promo=None)
     data = await state.get_data()
     item_name = data.get('csrf_item')
     if item_name:

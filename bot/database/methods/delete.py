@@ -26,17 +26,6 @@ async def delete_item(item_name: str) -> None:
         safe_create_task(invalidate_category_cache(category_name))
 
 
-async def delete_only_items(item_name: str) -> None:
-    """Delete all stock entries (ItemValues) for a product, keep Goods row."""
-    async with Database().session() as s:
-        item_id = (await s.execute(select(Goods.id).where(Goods.name == item_name))).scalar()
-        if item_id:
-            await s.execute(sa_delete(ItemValues).where(ItemValues.item_id == item_id))
-
-    # Stock count changed to zero — drop the cached item_info/item_values.
-    safe_create_task(invalidate_item_cache(item_name))
-
-
 async def delete_item_from_position(item_id: int) -> None:
     """Delete a single stock row by its ItemValues id."""
     async with Database().session() as s:

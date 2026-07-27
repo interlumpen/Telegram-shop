@@ -14,19 +14,19 @@ from bot.database.methods import (
     select_today_users, get_user_count, select_today_orders,
     select_all_orders, select_today_operations, select_users_balance, select_all_operations,
     select_count_items, select_count_goods, select_count_categories, select_count_bought_items,
-    select_bought_item, check_user_referrals, check_role_name_by_id, select_user_items,
-    select_user_operations_total, query_all_users, check_user_cached
+    select_bought_item, query_all_users, check_user_cached
 )
 from bot.database.methods.read import (
     get_roles_with_user_counts, select_unique_buyers, select_avg_order,
-    select_today_orders_count, select_blocked_users_count,
+    select_today_orders_count, select_blocked_users_count, get_user_profile_aggregates,
 )
 from bot.keyboards import back, simple_buttons, lazy_paginated_keyboard
 from bot.filters import HasPermissionFilter, HasAnyPermissionFilter
 from bot.handlers.admin._common import user_profile_lines
 from bot.handlers.other import display_name
 from bot.database.methods.audit import log_audit
-from bot.misc import EnvKeys, LazyPaginator, sanitize_html, SearchQuery, StatsCache, get_cache_manager
+from bot.database.methods.cache_utils import safe_create_task
+from bot.misc import EnvKeys, LazyPaginator, SearchQuery, StatsCache, get_cache_manager
 from bot.i18n import localize, esc
 from bot.states import GoodsFSM
 
@@ -45,7 +45,7 @@ def init_stats_cache():
     cache_manager = get_cache_manager()
     if cache_manager:
         stats_cache = StatsCache(cache_manager)
-        asyncio.create_task(stats_cache.warm_up_cache())
+        safe_create_task(stats_cache.warm_up_cache())
 
 
 @router.callback_query(F.data == "shop_management", HasAnyPermissionFilter(
@@ -122,52 +122,49 @@ async def statistics_callback_handler(call: CallbackQuery):
     """
     today_str = datetime.date.today().isoformat()
 
-    shared_reads = [
-        select_unique_buyers(),
-        select_avg_order(),
-        select_today_orders_count(today_str),
-        select_blocked_users_count(),
-        select_users_balance(),
-        select_all_operations(),
-        select_count_categories(),
-        select_count_bought_items(),
-        get_roles_with_user_counts(),
-    ]
-
     if stats_cache:
-        extra_reads = [
+        roles, daily, glob, dash = await asyncio.gather(
+            get_roles_with_user_counts(),
             stats_cache.get_daily_stats(today_str),
             stats_cache.get_global_stats(),
-        ]
+            stats_cache.get_dashboard_stats(),
+        )
+        today_users, today_orders = daily['users'], daily['orders']
+        today_topups, today_sold_count = daily['operations'], daily['orders_count']
+
+        users, all_orders = glob['total_users'], glob['total_revenue']
+        items, goods = glob['total_items'], glob['total_goods']
+
+        unique_buyers, avg_order = dash['unique_buyers'], dash['avg_order']
+        sold_count, blocked_count = dash['sold_count'], dash['blocked_users']
+        system_balance, all_topups = dash['users_balance'], dash['all_operations']
+        categories = dash['categories']
     else:
-        # Fallback on direct requests if cache is unavailable
-        extra_reads = [
+        # Redis is off — no cache to populate, so fall back to individual reads.
+        (
+            roles,
+            today_users, today_orders, today_topups, today_sold_count,
+            users, all_orders, items, goods,
+            unique_buyers, avg_order, sold_count, blocked_count,
+            system_balance, all_topups, categories,
+        ) = await asyncio.gather(
+            get_roles_with_user_counts(),
             select_today_users(today_str),
             select_today_orders(today_str),
             select_today_operations(today_str),
+            select_today_orders_count(today_str),
             get_user_count(),
             select_all_orders(),
             select_count_items(),
             select_count_goods(),
-        ]
-
-    results = await asyncio.gather(*shared_reads, *extra_reads)
-
-    (unique_buyers, avg_order, today_sold_count, blocked_count,
-     system_balance, all_topups, categories, sold_count, roles) = results[:9]
-
-    if stats_cache:
-        daily_stats, global_stats = results[9:]
-        today_users = daily_stats['users']
-        today_orders = daily_stats['orders']
-        today_topups = daily_stats['operations']
-        users = global_stats['total_users']
-        all_orders = global_stats['total_revenue']
-        items = global_stats['total_items']
-        goods = global_stats['total_goods']
-    else:
-        (today_users, today_orders, today_topups,
-         users, all_orders, items, goods) = results[9:]
+            select_unique_buyers(),
+            select_avg_order(),
+            select_count_bought_items(),
+            select_blocked_users_count(),
+            select_users_balance(),
+            select_all_operations(),
+            select_count_categories(),
+        )
 
     text = localize(
         "admin.shop.stats.template",
@@ -263,18 +260,15 @@ async def show_user_info(call: CallbackQuery):
         await call.answer(localize("admin.users.not_found"), show_alert=True)
         return
 
-    first_name, overall_balance, items, role, referrals = await asyncio.gather(
+    first_name, agg = await asyncio.gather(
         display_name(call.message.bot, user_id),
-        select_user_operations_total(user_id),
-        select_user_items(user_id),
-        check_role_name_by_id(user.get('role_id')),
-        check_user_referrals(user.get('telegram_id')),
+        get_user_profile_aggregates(user_id, user.get('role_id')),
     )
 
     text = '\n'.join(user_profile_lines(
         user, first_name, user_id,
-        overall_balance=overall_balance, items_count=items,
-        role=role, referrals=referrals, include_referral_id=True,
+        overall_balance=agg['operations_total'], items_count=agg['items_count'],
+        role=agg['role_name'], referrals=agg['referrals'], include_referral_id=True,
     )) + '\n'
 
     await call.message.edit_text(text, parse_mode="HTML", reply_markup=back("users_list"))
@@ -314,8 +308,8 @@ async def process_item_show(message: Message, state: FSMContext):
 
         item = await select_bought_item(int(msg))
         if item:
-            # Sanitize output values
-            safe_value = sanitize_html(item['value'])
+            # Escaped: this must render exactly what was delivered to the buyer, tags and all.
+            safe_value = esc(item['value'])
 
             text = (
                 f"{localize('purchases.item.name', name=esc(item['item_name']))}\n"
