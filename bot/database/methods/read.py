@@ -1,4 +1,3 @@
-import asyncio
 import datetime
 from decimal import Decimal
 from functools import wraps
@@ -10,56 +9,39 @@ from sqlalchemy import func, exists, select, inspect as sa_inspect
 from bot.database.models import Database, User, ItemValues, Goods, Categories, Role, BoughtGoods, \
     Operations, ReferralEarnings, Permission
 from bot.database.models.main import PromoCodes, PromoCodeUsages, CartItems, Reviews, StockSubscriptions
-from bot.misc.caching import get_cache_manager
+from bot.misc.caching import get_cache_manager, single_flight
 
 F = TypeVar('F', bound=Callable[..., Coroutine[Any, Any, Any]])
-
-
-# Single-flight locks for cache misses, keyed by cache key. In-process only —
-# sufficient for the single-instance deployment; with several workers each
-# process would recompute at most once per expiry.
-_cache_locks: dict[str, "asyncio.Lock"] = {}
 
 
 def async_cached(ttl: int = 300, key_prefix: str = "", cache_empty: bool = True) -> Callable[[F], F]:
     """Decorator for async functions with caching.
 
-    Misses are single-flighted: concurrent callers of the same key wait for
-    one computation instead of all hitting the DB when a hot key expires.
+    Misses are single-flighted (see single_flight): concurrent callers of the
+    same key wait for one computation instead of all hitting the DB when a hot
+    key expires.
     """
 
     def decorator(async_func: F) -> F:
         @wraps(async_func)
         async def async_wrapper(*args, **kwargs):
-            cache_key = f"{key_prefix or async_func.__name__}:{':'.join(str(arg) for arg in args)}"
+            key_parts = [str(arg) for arg in args]
+            # Keyword arguments belong in the key too:
+            # without them f(1) and f(x=1) would share the entry f: and serve each other's results.
+            key_parts.extend(f"{k}={v}" for k, v in sorted(kwargs.items()))
+            cache_key = f"{key_prefix or async_func.__name__}:{':'.join(key_parts)}"
 
             cache = get_cache_manager()
             if not cache:
                 return await async_func(*args, **kwargs)
 
-            cached_value = await cache.get(cache_key)
-            if cached_value is not None:
-                return cached_value
-
-            lock = _cache_locks.get(cache_key)
-            if lock is None:
-                lock = _cache_locks[cache_key] = asyncio.Lock()
-            try:
-                async with lock:
-                    cached_value = await cache.get(cache_key)
-                    if cached_value is not None:
-                        return cached_value
-
-                    result = await async_func(*args, **kwargs)
-
-                    if result is not None and (cache_empty or result):
-                        await cache.set(cache_key, result, ttl)
-                    return result
-            finally:
-                # Waiters already hold a reference to this lock object; a
-                # late-arriving task simply creates a fresh one. Keeps the
-                # dict from growing unboundedly.
-                _cache_locks.pop(cache_key, None)
+            return await single_flight(
+                cache, cache_key, lambda: async_func(*args, **kwargs), ttl,
+                should_cache=(
+                    None if cache_empty
+                    else (lambda result: result is not None and bool(result))
+                ),
+            )
 
         return async_wrapper
 
@@ -504,10 +486,14 @@ async def check_user_cached(telegram_id: int | str):
     return await check_user(telegram_id)
 
 
-@async_cached(ttl=300, key_prefix="role", cache_empty=False)
-async def check_role_cached(telegram_id: int):
-    """Cached Role Verification. role 0 (unknown user) is intentionally not cached."""
-    return await check_role(telegram_id)
+async def check_role_cached(telegram_id: int) -> int:
+    """Cached permission bitmask for a user.
+
+    Delegates to the shared role cache in the auth middleware (in-process tier
+    first, then Redis, then the DB). role 0 (unknown user) is intentionally not cached.
+    """
+    from bot.middleware.security import get_role_cached
+    return await get_role_cached(telegram_id)
 
 
 @async_cached(ttl=1800, key_prefix="category")
@@ -548,14 +534,20 @@ async def select_admins_cached():
 
 # Cache invalidation functions
 async def invalidate_user_cache(user_id: int):
-    """Invalidate user cache (both role caches: read-side and auth middleware)."""
+    """Invalidate a user's cached row, role and paginator counts.
+
+    Batched into one round-trip: this runs on every purchase, payment, checkout
+    and balance change. Only keys the app actually writes are listed.
+    New per-user caches must be added below.
+    """
     cache = get_cache_manager()
     if cache:
-        await cache.delete(f"user:{user_id}")
-        await cache.delete(f"role:{user_id}")
-        await cache.delete(f"auth:role:{user_id}")
-        await cache.invalidate_pattern(f"user_stats:{user_id}:*")
-        await cache.invalidate_pattern(f"user_items:{user_id}:*")
+        await cache.delete_many((
+            f"user:{user_id}",
+            f"auth:role:{user_id}",
+            f"count:bought:{user_id}",
+            f"count:ops:{user_id}",
+        ))
 
     # The auth middleware keeps its own in-process role cache; drop that entry
     # too so a role change takes effect before its TTL.
@@ -570,22 +562,33 @@ async def invalidate_item_cache(item_name: str, category_name: str = None):
     """
     cache = get_cache_manager()
     if cache:
-        await cache.delete(f"item_info:{item_name}")
-        await cache.delete(f"item_values:{item_name}")
-        await cache.delete(f"item_infinite:{item_name}")
-        await cache.delete(f"avg_rating:{item_name}")
+        keys = [
+            f"item_info:{item_name}",
+            f"item_values:{item_name}",
+            f"item_infinite:{item_name}",
+            f"avg_rating:{item_name}",
+            f"count:reviews:{item_name}",
+            f"count:stock:{item_name}",
+        ]
         if category_name:
-            await cache.delete(f"category:{category_name}")
-            await cache.delete(f"category_items:{category_name}:count")
+            keys.append(f"category:{category_name}")
+            keys.append(f"category_items:{category_name}:count")
+        await cache.delete_many(keys)
 
 
 async def invalidate_category_cache(category_name: str):
-    """Invalidate category cache"""
+    """Invalidate category cache.
+
+    ``category_items:<name>:count`` is the only key in that namespace
+    (lazy_queries._cached_count), so it is deleted by name.
+    """
     cache = get_cache_manager()
     if cache:
-        await cache.delete(f"category:{category_name}")
-        await cache.delete("categories:count")
-        await cache.invalidate_pattern(f"category_items:{category_name}:*")
+        await cache.delete_many((
+            f"category:{category_name}",
+            "categories:count",
+            f"category_items:{category_name}:count",
+        ))
 
 
 async def invalidate_stats_cache():
@@ -602,9 +605,10 @@ async def invalidate_stats_cache():
     if cache:
         today_local = datetime.date.today().isoformat()
         today_utc = datetime.datetime.now(datetime.timezone.utc).date().isoformat()
-        for key in {"stats:global", f"stats:daily:{today_local}",
-                    f"stats:daily:{today_utc}", "user_count:", "admin_count:"}:
-            await cache.delete(key)
+        await cache.delete_many({
+            "stats:global", f"stats:daily:{today_local}",
+            f"stats:daily:{today_utc}", "user_count:", "admin_count:",
+        })
 
 
 # --- Promo codes ---
@@ -843,7 +847,10 @@ async def get_user_review(user_id: int, item_name: str) -> dict | None:
 
 
 async def invalidate_rating_cache(item_name: str):
-    """Invalidate avg rating cache for an item."""
+    """Invalidate the review caches for an item (average and count)."""
     cache = get_cache_manager()
     if cache:
-        await cache.delete(f"avg_rating:{item_name}")
+        await cache.delete_many((
+            f"avg_rating:{item_name}",
+            f"count:reviews:{item_name}",
+        ))

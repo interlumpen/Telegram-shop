@@ -3,10 +3,11 @@ from aiogram.exceptions import TelegramForbiddenError, TelegramBadRequest, Teleg
 from aiogram.types import CallbackQuery, Message
 
 from bot.database.models import Permission
-from bot.database.methods import get_item_info_cached, add_values_to_item, update_item, check_value, \
+from bot.database.methods import get_item_info_cached, update_item, check_value, \
     get_category_name_by_id
+from bot.database.methods.create import add_values_bulk, normalize_values
 from bot.database.methods.transactions import replace_item_stock_and_meta
-from bot.handlers.other import _parse_channel_username, is_safe_item_name, display_name
+from bot.handlers.other import _parse_channel_username, is_safe_item_name, caller_name
 from bot.handlers.admin._common import _notify_restock_safe, parse_price
 
 from bot.keyboards.inline import back, question_buttons, simple_buttons
@@ -104,29 +105,9 @@ async def updating_item_amount(call: CallbackQuery, state):
     item_name = data.get('item_name')
     raw_values: list[str] = data.get("item_values", []) or []
 
-    added = 0
-    skipped_db_dup = 0
-    skipped_batch_dup = 0
-    skipped_invalid = 0
-    seen_in_batch: set[str] = set()
-
-    for v in raw_values:
-        v_norm = (v or "").strip()
-        if not v_norm:
-            skipped_invalid += 1
-            continue
-
-        # Duplicate inside current batch
-        if v_norm in seen_in_batch:
-            skipped_batch_dup += 1
-            continue
-        seen_in_batch.add(v_norm)
-
-        # Try insert — False means it already exists in DB
-        if await add_values_to_item(item_name, v_norm, False):
-            added += 1
-        else:
-            skipped_db_dup += 1
+    added, skipped_db_dup, skipped_batch_dup, skipped_invalid = await add_values_bulk(
+        item_name, raw_values, is_infinity=False
+    )
 
     text_lines = [
         localize('admin.goods.update.values.result.title'),
@@ -165,7 +146,7 @@ async def updating_item_amount(call: CallbackQuery, state):
         except TelegramBadRequest as e:
             await call.answer(localize("errors.channel.telegram_bad_request", e=e))
 
-    admin_name = await display_name(call.message.bot, call.from_user.id)
+    admin_name = caller_name(call)
     await log_audit("add_item_values", user_id=call.from_user.id, resource_type="Item", resource_id=item_name,
                     details=f"admin={admin_name}, added={added}")
     await state.clear()
@@ -276,7 +257,7 @@ async def update_item_process(call: CallbackQuery, state):
             await state.clear()
             return
         await call.message.edit_text(localize('admin.goods.update.success'), reply_markup=back('goods_management'))
-        admin_name = await display_name(call.message.bot, call.from_user.id)
+        admin_name = caller_name(call)
         await log_audit("update_item", user_id=call.from_user.id, resource_type="Item", resource_id=item_new_name,
                         details=f"admin={admin_name}, old_name={item_old_name}")
         await state.clear()
@@ -333,7 +314,7 @@ async def update_item_infinity(message: Message, state):
 
     await _notify_restock_safe(message.bot, item_new_name)
 
-    admin_name = await display_name(message.bot, message.from_user.id)
+    admin_name = caller_name(message)
     await log_audit("update_item", user_id=message.from_user.id, resource_type="Item", resource_id=item_new_name,
                     details=f"admin={admin_name}, old_name={item_old_name}")
     await state.clear()
@@ -373,17 +354,7 @@ async def update_item_no_infinity(call: CallbackQuery, state):
     raw_values: list[str] = data.get("item_values", []) or []
 
     # The transaction dedupes and drops blanks itself; count here for the report.
-    seen: set[str] = set()
-    skipped_invalid = 0
-    skipped_batch_dup = 0
-    for v in raw_values:
-        v_norm = (v or "").strip()
-        if not v_norm:
-            skipped_invalid += 1
-        elif v_norm in seen:
-            skipped_batch_dup += 1
-        else:
-            seen.add(v_norm)
+    _kept, skipped_batch_dup, skipped_invalid = normalize_values(raw_values)
 
     ok, err, added = await replace_item_stock_and_meta(
         old_name=item_old_name,
@@ -433,7 +404,7 @@ async def update_item_no_infinity(call: CallbackQuery, state):
             await call.answer(localize("errors.channel.telegram_bad_request", e=e))
 
     await call.message.edit_text("\n".join(text_lines), parse_mode="HTML", reply_markup=back('goods_management'))
-    admin_name = await display_name(call.message.bot, call.from_user.id)
+    admin_name = caller_name(call)
     await log_audit("update_item", user_id=call.from_user.id, resource_type="Item", resource_id=item_new_name,
                     details=f"admin={admin_name}, old_name={item_old_name}")
     await state.clear()

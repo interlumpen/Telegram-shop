@@ -1,6 +1,6 @@
 import asyncio
 import json
-from typing import Optional, Any
+from typing import Iterable, Optional, Any
 from redis.asyncio import Redis
 from redis.exceptions import RedisError
 from functools import wraps
@@ -16,9 +16,9 @@ class CacheManager:
     # on overflow fall back to replaying the known cache-key prefixes on recovery.
     _PENDING_CAP = 5000
     _KNOWN_PREFIXES = (
-        "user:", "role:", "auth:role:", "category:", "category_items:",
+        "user:", "auth:role:", "category:", "category_items:",
         "item_info:", "item_values:", "item_infinite:", "avg_rating:",
-        "user_count:", "admin_count:", "user_stats:", "user_items:", "stats:",
+        "user_count:", "admin_count:", "count:", "stats:",
     )
 
     def __init__(self, redis_client: Redis):
@@ -139,6 +139,34 @@ class CacheManager:
             logger.error(f"Cache delete error for key {key}: {e}")
             return False
 
+    async def delete_many(self, keys: Iterable[str]) -> bool:
+        """Delete several keys in a single round-trip.
+
+        The invalidation helpers drop 5-6 related keys at once (and a cart
+        checkout fires several of them), which as individual DELETEs cost one
+        round-trip each. Same deferral semantics as delete(): while Redis is
+        down every key is remembered for replay on recovery.
+        """
+        key_list = [k for k in keys]
+        if not key_list:
+            return True
+        if not self._healthy:
+            for key in key_list:
+                self._defer_delete(key)
+            return False
+        try:
+            await self.redis.delete(*key_list)
+            return True
+        except _REDIS_DOWN as e:
+            self._healthy = False
+            for key in key_list:
+                self._defer_delete(key)
+            logger.warning(f"Redis unavailable (delete_many): {e}")
+            return False
+        except Exception as e:
+            logger.error(f"Cache delete_many error for {len(key_list)} keys: {e}")
+            return False
+
     async def check_health(self) -> bool:
         """Ping Redis and restore healthy status if connection is back."""
         try:
@@ -198,14 +226,42 @@ class CacheManager:
         patterns = self._pending_patterns
         self._pending_deletes = set()
         self._pending_patterns = set()
-        for key in deletes:
-            await self.delete(key)
+        await self.delete_many(deletes)
         for pattern in patterns:
             await self.invalidate_pattern(pattern)
 
 
 # Single-flight locks for cache misses (in-process; single-instance deployment).
-_result_locks: dict[str, asyncio.Lock] = {}
+_single_flight_locks: dict[str, asyncio.Lock] = {}
+
+
+async def single_flight(cache, cache_key: str, compute, ttl: int, should_cache=None):
+    """Read `cache_key`, computing it at most once across concurrent callers.
+
+    The first caller computes while the rest wait on the lock and then read the value it stored.
+    ``should_cache`` decides whether a computed result is worth storing (defaults to "anything that is not None").
+    """
+    cached = await cache.get(cache_key)
+    if cached is not None:
+        return cached
+
+    lock = _single_flight_locks.get(cache_key)
+    if lock is None:
+        lock = _single_flight_locks[cache_key] = asyncio.Lock()
+    try:
+        async with lock:
+            cached = await cache.get(cache_key)
+            if cached is not None:
+                return cached
+
+            result = await compute()
+
+            if should_cache(result) if should_cache else result is not None:
+                await cache.set(cache_key, result, ttl)
+            return result
+    finally:
+        # Waiters already hold a reference to this lock object; a late-arriving task simply creates a fresh one. Keeps the dict from growing forever.
+        _single_flight_locks.pop(cache_key, None)
 
 
 def cache_result(
@@ -236,28 +292,9 @@ def cache_result(
             if not cache_manager:
                 return await func(*args, **kwargs)
 
-            cached = await cache_manager.get(cache_key)
-            if cached is not None:
-                logger.debug(f"Cache hit for {cache_key}")
-                return cached
-
-            lock = _result_locks.get(cache_key)
-            if lock is None:
-                lock = _result_locks[cache_key] = asyncio.Lock()
-            try:
-                async with lock:
-                    cached = await cache_manager.get(cache_key)
-                    if cached is not None:
-                        return cached
-
-                    result = await func(*args, **kwargs)
-
-                    if result is not None:
-                        await cache_manager.set(cache_key, result, ttl)
-                        logger.debug(f"Cache set for {cache_key}")
-                    return result
-            finally:
-                _result_locks.pop(cache_key, None)
+            return await single_flight(
+                cache_manager, cache_key, lambda: func(*args, **kwargs), ttl,
+            )
 
         return wrapper
 

@@ -67,13 +67,21 @@ def generate_short_hash(text: str, length: int = 8) -> str:
 
 
 async def display_name(bot, user_id: int) -> str:
-    """A user's display name, falling back to their id."""
+    """A display name for *someone else*, falling back to their id."""
     try:
         chat = await bot.get_chat(user_id)
     except (TelegramBadRequest, TelegramForbiddenError) as e:
         logger.debug(f"get_chat({user_id}) failed: {e}")
         return str(user_id)
     return chat.first_name or str(user_id)
+
+
+def caller_name(event) -> str:
+    """The sender's display name, taken straight from the update."""
+    user = getattr(event, "from_user", None)
+    if user is None:
+        return "unknown"
+    return user.first_name or str(user.id)
 
 
 def is_safe_item_name(name: str) -> bool:

@@ -498,9 +498,8 @@ class TestRolePermissionCacheFlush:
         role_id = await role_factory(name="TOFLUSH", permissions=Permission.USE | Permission.STATS_VIEW)
 
         # Two users' bitmasks are cached in both layers.
-        fake_cache.store["role:501"] = 129
         fake_cache.store["auth:role:501"] = 129
-        fake_cache.store["role:502"] = 129
+        fake_cache.store["auth:role:502"] = 129
 
         prev = get_auth_middleware()
         mw = AuthenticationMiddleware()
@@ -517,9 +516,8 @@ class TestRolePermissionCacheFlush:
             await _perms_done(call, fsm_context)
             await asyncio.sleep(0)
 
-            assert "role:501" not in fake_cache.store
-            assert "role:502" not in fake_cache.store
             assert "auth:role:501" not in fake_cache.store
+            assert "auth:role:502" not in fake_cache.store
             assert mw.admin_cache == {}
         finally:
             set_auth_middleware(prev)

@@ -6,7 +6,8 @@ from bot.database.models import Permission
 from bot.database.methods import (
     check_category_cached, get_item_info_cached, create_item, add_values_to_item
 )
-from bot.handlers.other import _parse_channel_username, is_safe_item_name, display_name
+from bot.database.methods.create import add_values_bulk
+from bot.handlers.other import _parse_channel_username, is_safe_item_name, caller_name
 from bot.handlers.admin._common import _notify_restock_safe, parse_price
 from bot.keyboards.inline import back, question_buttons, simple_buttons
 from bot.database.methods.audit import log_audit
@@ -157,32 +158,12 @@ async def finish_adding_items_callback_handler(call: CallbackQuery, state):
     category_name = data.get('item_category')
     raw_values: list[str] = data.get("item_values", []) or []
 
-    added = 0
-    skipped_db_dup = 0
-    skipped_batch_dup = 0
-    skipped_invalid = 0
-    seen_in_batch: set[str] = set()
-
     # Create position
     await create_item(item_name, item_description, item_price, category_name)
 
-    for v in raw_values:
-        v_norm = (v or "").strip()
-        if not v_norm:
-            skipped_invalid += 1
-            continue
-
-        # Duplicate within the current input batch
-        if v_norm in seen_in_batch:
-            skipped_batch_dup += 1
-            continue
-        seen_in_batch.add(v_norm)
-
-        # Try to insert — False means it already exists in DB
-        if await add_values_to_item(item_name, v_norm, False):
-            added += 1
-        else:
-            skipped_db_dup += 1
+    added, skipped_db_dup, skipped_batch_dup, skipped_invalid = await add_values_bulk(
+        item_name, raw_values, is_infinity=False
+    )
 
     text_lines = [
         localize('admin.goods.add.result.created'),
@@ -221,7 +202,7 @@ async def finish_adding_items_callback_handler(call: CallbackQuery, state):
         except TelegramBadRequest as e:
             await call.answer(localize("errors.channel.telegram_bad_request", e=e))
 
-    admin_name = await display_name(call.message.bot, call.from_user.id)
+    admin_name = caller_name(call)
     await log_audit("create_item", user_id=call.from_user.id, resource_type="Item", resource_id=item_name,
                     details=f"admin={admin_name}")
 
@@ -275,7 +256,7 @@ async def finish_adding_item_callback_handler(message: Message, state):
             await message.answer(localize("errors.channel.telegram_bad_request", e=e))
 
     await message.answer(localize('admin.goods.add.single.created'), reply_markup=back('goods_management'))
-    admin_name = await display_name(message.bot, message.from_user.id)
+    admin_name = caller_name(message)
     await log_audit("create_item", user_id=message.from_user.id, resource_type="Item", resource_id=item_name,
                     details=f"admin={admin_name}, infinite=true")
 

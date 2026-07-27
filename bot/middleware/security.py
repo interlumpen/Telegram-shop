@@ -219,46 +219,8 @@ class AuthenticationMiddleware(BaseMiddleware):
         return await handler(event, data)
 
     async def get_user_role_cached(self, user_id: int) -> int:
-        """Getting a user role with caching.
-
-        Reads through a shared Redis cache first (so every worker sees the same
-        role and a web-panel edit invalidates all of them), then a per-process
-        in-memory cache, then the DB. Writes populate both caches. When Redis is
-        unavailable the in-memory cache alone is used (single-instance mode).
-        """
-        from bot.misc.caching import get_cache_manager
-        cache = get_cache_manager()
-        redis_ok = cache is not None and getattr(cache, "_healthy", False)
-
-        # 1. Shared Redis cache
-        if redis_ok:
-            try:
-                cached = await cache.get(f"auth:role:{user_id}")
-                if cached is not None:
-                    return int(cached)
-            except Exception:
-                redis_ok = False
-
-        # 2. Per-process in-memory cache
-        if user_id in self.admin_cache:
-            role, timestamp = self.admin_cache[user_id]
-            if time.time() - timestamp < self.cache_ttl:
-                return role
-
-        # 3. Download from DB
-        from bot.database.methods import check_role
-        role = await check_role(user_id) or 0
-
-        # Only cache real users. role == 0 means the user does not exist in the DB
-        if role:
-            self.admin_cache[user_id] = (role, time.time())
-            if redis_ok:
-                try:
-                    await cache.set(f"auth:role:{user_id}", role, ttl=self.cache_ttl)
-                except Exception:
-                    pass
-
-        return role
+        """Getting a user role with caching. See resolve_role_cached."""
+        return await resolve_role_cached(user_id, self.admin_cache, self.cache_ttl)
 
     def invalidate_admin_cache(self, user_id: int) -> None:
         """Remove cached role for a user so permissions are re-fetched."""
@@ -308,6 +270,73 @@ class AuthenticationMiddleware(BaseMiddleware):
         return success
 
 
+ROLE_CACHE_TTL = 300
+
+# In-process role cache used when no middleware instance is registered (tests, one-off scripts). The live bot always goes through the middleware's own map.
+_standalone_role_cache: Dict[int, tuple[int, float]] = {}
+
+
+async def resolve_role_cached(
+        user_id: int,
+        l1: Dict[int, tuple[int, float]],
+        ttl: int = ROLE_CACHE_TTL,
+) -> int:
+    """A user's permission bitmask, cached in-process then in Redis.
+
+    Three tiers, cheapest first: the per-process map, the shared Redis key, then
+    the DB. One update reads the role several times (rate-limit admin bypass,
+    the admin-callback gate, HasPermissionFilter, sometimes the handler itself),
+    so serving those from memory is what keeps them off the network; a Redis hit
+    populates the in-process tier too.
+    """
+    entry = l1.get(user_id)
+    if entry is not None:
+        role, timestamp = entry
+        if time.time() - timestamp < ttl:
+            return role
+
+    from bot.misc.caching import get_cache_manager
+    cache = get_cache_manager()
+    redis_ok = cache is not None and getattr(cache, "_healthy", False)
+
+    # Shared Redis tier: survives a restart, the in-process map does not.
+    if redis_ok:
+        try:
+            cached = await cache.get(f"auth:role:{user_id}")
+            if cached is not None:
+                role = int(cached)
+                l1[user_id] = (role, time.time())
+                return role
+        except Exception:
+            redis_ok = False
+
+    from bot.database.methods import check_role
+    role = await check_role(user_id) or 0
+
+    # Only cache real users. role == 0 means the user does not exist in the DB.
+    if role:
+        l1[user_id] = (role, time.time())
+        if redis_ok:
+            try:
+                await cache.set(f"auth:role:{user_id}", role, ttl=ttl)
+            except Exception:
+                pass
+
+    return role
+
+
+async def get_role_cached(user_id: int) -> int:
+    """Cached permission bitmask, routed through the live middleware's cache.
+
+    Single entry point for every caller (read-side helpers, filters, handlers)
+    so the bitmask is never cached under two keys with two lifetimes.
+    """
+    inst = _auth_middleware_instance
+    if inst is not None:
+        return await inst.get_user_role_cached(user_id)
+    return await resolve_role_cached(user_id, _standalone_role_cache)
+
+
 _auth_middleware_instance: "AuthenticationMiddleware | None" = None
 
 
@@ -348,6 +377,7 @@ def invalidate_auth_caches(user_id: int, *, blocked: bool | None = None) -> None
             inst.blocked_users.add(user_id)
         elif blocked is False:
             inst.blocked_users.discard(user_id)
+    _standalone_role_cache.pop(user_id, None)
     _drop_redis_role(user_id)
 
 
@@ -361,6 +391,7 @@ def clear_role_auth_caches() -> None:
     inst = _auth_middleware_instance
     if inst is not None:
         inst.admin_cache.clear()
+    _standalone_role_cache.clear()
 
     from bot.misc.caching import get_cache_manager
     cache = get_cache_manager()
@@ -371,8 +402,12 @@ def clear_role_auth_caches() -> None:
 
 async def flush_all_role_caches() -> None:
     """Drop every cached permission bitmask after a Role's permissions changed."""
-    clear_role_auth_caches()
+    inst = _auth_middleware_instance
+    if inst is not None:
+        inst.admin_cache.clear()
+    _standalone_role_cache.clear()
+
     from bot.misc.caching import get_cache_manager
     cache = get_cache_manager()
     if cache is not None:
-        await cache.invalidate_pattern("role:*")
+        await cache.invalidate_pattern("auth:role:*")

@@ -12,7 +12,7 @@ from bot.database.methods.audit import log_audit
 from bot.keyboards.inline import back
 from bot.filters import HasPermissionFilter
 from bot.i18n import localize, esc
-from bot.handlers.other import display_name
+from bot.handlers.other import caller_name
 from bot.states import SaleFSM
 
 router = Router()
@@ -75,7 +75,7 @@ async def sale_percent(message: Message, state):
         await set_item_sale(item_name, None, None)
         await message.answer(localize('admin.sale.disabled', name=esc(item_name)),
                              reply_markup=back('goods_management'))
-        admin_name = await display_name(message.bot, message.from_user.id)
+        admin_name = caller_name(message)
         await log_audit("set_item_sale", user_id=message.from_user.id, resource_type="Item",
                         resource_id=item_name, details=f"admin={admin_name}, disabled")
         await state.clear()
@@ -112,7 +112,7 @@ async def sale_days(message: Message, state):
         parse_mode='HTML',
         reply_markup=back('goods_management'),
     )
-    admin_name = await display_name(message.bot, message.from_user.id)
+    admin_name = caller_name(message)
     await log_audit("set_item_sale", user_id=message.from_user.id, resource_type="Item", resource_id=item_name,
                     details=f"admin={admin_name}, percent={percent}, until={sale_until.isoformat()}")
     await state.clear()

@@ -102,11 +102,15 @@ async def query_goods_search(query: str, offset: int = 0, limit: int = 10,
 
 async def query_user_bought_items(user_id: int, offset: int = 0, limit: int = 10, count_only: bool = False) -> Any:
     """Query user's bought items with pagination"""
+    if count_only:
+        async def _count():
+            async with Database().session() as s:
+                return (await s.execute(
+                    select(func.count()).select_from(BoughtGoods).where(BoughtGoods.buyer_id == user_id)
+                )).scalar() or 0
+        return await _cached_count(f"count:bought:{user_id}", _count)
+
     async with Database().session() as s:
-        if count_only:
-            return (await s.execute(
-                select(func.count()).select_from(BoughtGoods).where(BoughtGoods.buyer_id == user_id)
-            )).scalar() or 0
         result = await s.execute(
             select(BoughtGoods)
             .where(BoughtGoods.buyer_id == user_id)
@@ -119,9 +123,13 @@ async def query_user_bought_items(user_id: int, offset: int = 0, limit: int = 10
 
 async def query_all_users(offset: int = 0, limit: int = 10, count_only: bool = False) -> Any:
     """Query all users with pagination"""
+    if count_only:
+        async def _count():
+            async with Database().session() as s:
+                return (await s.execute(select(func.count(User.telegram_id)))).scalar() or 0
+        return await _cached_count("count:users", _count)
+
     async with Database().session() as s:
-        if count_only:
-            return (await s.execute(select(func.count(User.telegram_id)))).scalar() or 0
         result = await s.execute(
             select(User.telegram_id)
             .order_by(User.telegram_id.asc())
@@ -133,30 +141,44 @@ async def query_all_users(offset: int = 0, limit: int = 10, count_only: bool = F
 
 async def query_items_in_position(item_name: str, offset: int = 0, limit: int = 10, count_only: bool = False) -> Any:
     """Query items in position with pagination"""
+    if count_only:
+        async def _count():
+            async with Database().session() as s:
+                item_id = (await s.execute(
+                    select(Goods.id).where(Goods.name == item_name)
+                )).scalar()
+                if not item_id:
+                    return 0
+                return (await s.execute(
+                    select(func.count(ItemValues.id)).where(ItemValues.item_id == item_id)
+                )).scalar() or 0
+        return await _cached_count(f"count:stock:{item_name}", _count)
+
     async with Database().session() as s:
         item_id = (await s.execute(
             select(Goods.id).where(Goods.name == item_name)
         )).scalar()
         if not item_id:
-            return 0 if count_only else []
-        query = select(ItemValues.id).where(ItemValues.item_id == item_id)
-        if count_only:
-            count_result = await s.execute(select(func.count()).select_from(query.subquery()))
-            return count_result.scalar() or 0
+            return []
         result = await s.execute(
-            query.order_by(ItemValues.id.asc()).offset(offset).limit(limit)
+            select(ItemValues.id)
+            .where(ItemValues.item_id == item_id)
+            .order_by(ItemValues.id.asc()).offset(offset).limit(limit)
         )
         return [row[0] for row in result.all()]
 
 
 async def query_user_referrals(user_id: int, offset: int = 0, limit: int = 10, count_only: bool = False) -> Any:
     """Query user's referrals with earnings info"""
-    async with Database().session() as s:
-        if count_only:
-            return (await s.execute(
-                select(func.count(User.telegram_id)).where(User.referral_id == user_id)
-            )).scalar() or 0
+    if count_only:
+        async def _count():
+            async with Database().session() as s:
+                return (await s.execute(
+                    select(func.count(User.telegram_id)).where(User.referral_id == user_id)
+                )).scalar() or 0
+        return await _cached_count(f"count:refs:{user_id}", _count)
 
+    async with Database().session() as s:
         earnings_subq = (
             select(
                 ReferralEarnings.referral_id,
@@ -194,14 +216,22 @@ async def query_user_referrals(user_id: int, offset: int = 0, limit: int = 10, c
 async def query_referral_earnings_from_user(referrer_id: int, referral_id: int, offset: int = 0, limit: int = 10,
                                             count_only: bool = False) -> Any:
     """Query earnings from specific referral"""
+    if count_only:
+        async def _count():
+            async with Database().session() as s:
+                return (await s.execute(
+                    select(func.count(ReferralEarnings.id)).where(
+                        ReferralEarnings.referrer_id == referrer_id,
+                        ReferralEarnings.referral_id == referral_id,
+                    )
+                )).scalar() or 0
+        return await _cached_count(f"count:earn:{referrer_id}:{referral_id}", _count)
+
     async with Database().session() as s:
         base = select(ReferralEarnings).where(
             ReferralEarnings.referrer_id == referrer_id,
             ReferralEarnings.referral_id == referral_id
         )
-        if count_only:
-            count_result = await s.execute(select(func.count()).select_from(base.subquery()))
-            return count_result.scalar() or 0
         result = await s.execute(
             base.order_by(desc(ReferralEarnings.created_at), desc(ReferralEarnings.id)).offset(offset).limit(limit)
         )
@@ -211,13 +241,19 @@ async def query_referral_earnings_from_user(referrer_id: int, referral_id: int, 
 async def query_all_referral_earnings(referrer_id: int, offset: int = 0, limit: int = 10,
                                       count_only: bool = False) -> Any:
     """Query all referral earnings for user"""
+    if count_only:
+        async def _count():
+            async with Database().session() as s:
+                return (await s.execute(
+                    select(func.count(ReferralEarnings.id))
+                    .where(ReferralEarnings.referrer_id == referrer_id)
+                )).scalar() or 0
+        return await _cached_count(f"count:earn:{referrer_id}", _count)
+
     async with Database().session() as s:
         base = select(ReferralEarnings).where(
             ReferralEarnings.referrer_id == referrer_id
         )
-        if count_only:
-            count_result = await s.execute(select(func.count()).select_from(base.subquery()))
-            return count_result.scalar() or 0
         result = await s.execute(
             base.order_by(desc(ReferralEarnings.created_at), desc(ReferralEarnings.id)).offset(offset).limit(limit)
         )
@@ -226,9 +262,13 @@ async def query_all_referral_earnings(referrer_id: int, offset: int = 0, limit: 
 
 async def query_promo_codes(offset: int = 0, limit: int = 10, count_only: bool = False) -> Any:
     """Query promo codes with pagination"""
+    if count_only:
+        async def _count():
+            async with Database().session() as s:
+                return (await s.execute(select(func.count(PromoCodes.id)))).scalar() or 0
+        return await _cached_count("count:promos", _count)
+
     async with Database().session() as s:
-        if count_only:
-            return (await s.execute(select(func.count(PromoCodes.id)))).scalar() or 0
         result = await s.execute(
             select(PromoCodes)
             .order_by(desc(PromoCodes.created_at), desc(PromoCodes.id))
@@ -257,6 +297,28 @@ async def query_user_operations_history(user_id: int, offset: int = 0, limit: in
                                         count_only: bool = False) -> Any:
     """Query user's full operations history (topups, purchases, referral bonuses) as UNION ALL"""
     from sqlalchemy import union_all, literal
+
+    if count_only:
+        async def _count():
+            async with Database().session() as s:
+                return (await s.execute(
+                    select(
+                        select(func.count())
+                        .select_from(Operations)
+                        .where(Operations.user_id == user_id, Operations.operation_value > 0)
+                        .scalar_subquery()
+                        + select(func.count())
+                        .select_from(BoughtGoods)
+                        .where(BoughtGoods.buyer_id == user_id)
+                        .scalar_subquery()
+                        + select(func.count())
+                        .select_from(ReferralEarnings)
+                        .where(ReferralEarnings.referrer_id == user_id)
+                        .scalar_subquery()
+                    )
+                )).scalar() or 0
+        return await _cached_count(f"count:ops:{user_id}", _count)
+
     async with Database().session() as s:
         # 1. Top-ups (operations with positive value)
         topups = (
@@ -291,9 +353,6 @@ async def query_user_operations_history(user_id: int, offset: int = 0, limit: in
 
         combined = union_all(topups, purchases, referrals).subquery()
 
-        if count_only:
-            return (await s.execute(select(func.count()).select_from(combined))).scalar() or 0
-
         result = await s.execute(
             select(combined).order_by(combined.c.date.desc(), combined.c.type, combined.c.id.desc()).offset(offset).limit(limit)
         )
@@ -310,16 +369,27 @@ async def query_user_operations_history(user_id: int, offset: int = 0, limit: in
 
 async def query_item_reviews(item_name: str, offset: int = 0, limit: int = 10,
                              count_only: bool = False) -> Any:
-    """Query reviews for an item with pagination"""
+    """Query reviews for an item with pagination.
+
+    The count also feeds the item card's review badge, which is rendered on
+    every product view — hence the cache (dropped by invalidate_rating_cache).
+    """
+    if count_only:
+        async def _count():
+            async with Database().session() as s:
+                return (await s.execute(
+                    select(func.count(Reviews.id))
+                    .join(Goods, Goods.id == Reviews.item_id)
+                    .where(Goods.name == item_name)
+                )).scalar() or 0
+        return await _cached_count(f"count:reviews:{item_name}", _count)
+
     async with Database().session() as s:
         base = (
             select(Reviews)
             .join(Goods, Goods.id == Reviews.item_id)
             .where(Goods.name == item_name)
         )
-        if count_only:
-            count_q = select(func.count()).select_from(base.subquery())
-            return (await s.execute(count_q)).scalar() or 0
         result = await s.execute(
             base.order_by(desc(Reviews.created_at), desc(Reviews.id)).offset(offset).limit(limit)
         )

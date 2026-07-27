@@ -58,14 +58,16 @@ and optional Redis caching.
 - **Admin** — an in‑chat admin menu and a **web panel** (SQLAdmin) with a built‑in help page,
   CSV export, and a full audit log. Broadcast messaging, user/balance management, catalog and
   promo management, statistics.
-- **Performance** — fully async DB (`asyncpg` + async SQLAlchemy). Hot paths stay off the
-  database: per‑update blocked checks are served from memory, audit writes happen in the
-  background, cart promo validation is batched (no per‑line queries), paginator counts and
-  hot lookups are cached, and cache misses are single‑flighted so an expiring hot key doesn't
-  stampede the DB. Every paginated list orders by a unique tiebreaker, so paging never repeats
-  or skips a row. **Optional** Redis caching and persistent FSM storage; the bot runs fine
-  without Redis (in‑memory FSM, no caching), and falls back to that automatically if Redis is
-  configured but unreachable at startup rather than failing on every update.
+- **Performance** — fully async DB (`asyncpg` + async SQLAlchemy). Hot paths stay off both the
+  database and the network: a whole update's rate‑limit decision is one Redis call, roles and
+  blocked checks are served from process memory, audit rows are batched into one multi‑row
+  insert, cart promo validation is batched (no per‑line queries), paginator counts and hot
+  lookups are cached, and cache misses are single‑flighted so an expiring hot key doesn't
+  stampede the DB. Writes invalidate caches by name in a single round‑trip — never by scanning
+  the keyspace. Every paginated list orders by a unique tiebreaker, so paging never
+  repeats or skips a row. **Optional** Redis caching and persistent FSM storage; the bot runs
+  fine without Redis (in‑memory FSM, no caching), and falls back to that automatically if Redis
+  is configured but unreachable at startup rather than failing on every update.
 - **Localization** — Russian and English.
 
 ## 🔒 Security
@@ -79,14 +81,16 @@ Implemented, and described honestly so you know what to rely on:
   DB `CHECK` constraints and a transaction guard. **Double‑spend on a purchase is prevented at
   the database layer** (row locks + stock removal + idempotent records), not by trusting the client.
 - **Access control** — Telegram‑ID authentication; a 10‑bit permission bitmask with bitwise
-  *subset* validation (you cannot create or assign a role exceeding your own); the role/permission
-  cache is shared through Redis (when enabled) so a web‑panel edit invalidates it across every
-  worker, falling back to a per‑process cache when Redis is off.
+  *subset* validation (you cannot create or assign a role exceeding your own). A permission
+  bitmask lives in exactly one cache — an in‑process tier backed by Redis (when enabled) — so
+  there is a single place to invalidate: every role change, block, or web‑panel edit clears both
+  tiers immediately.
 - **Rate limiting** — global and per‑action limits with temporary bans. When Redis is enabled the
-  limiter state is shared across workers (sliding‑window sorted sets + TTL bans, evaluated in a
-  single atomic script so concurrent updates can't slip past the limit); without Redis it degrades
-  to a per‑process in‑memory limiter. The web‑panel login limiter (5 attempts / 15 min per IP) and
-  30‑minute sessions remain per‑process.
+  limiter state is shared and the whole decision — ban check, both sliding windows, and the
+  auto‑ban on a global overrun — is evaluated in one atomic script, so concurrent updates can't
+  slip past the limit; without Redis it degrades to a per‑process in‑memory limiter with the same
+  verdicts. Admins bypass the windows but are still subject to a ban. The web‑panel login limiter
+  (5 attempts / 15 min per IP) and 30‑minute sessions remain per‑process.
 - **Web panel** — constant‑time credential/secret comparison; proxy‑aware client IP (trusts
   `X‑Forwarded‑For` only when the socket peer is loopback, so an external client can't spoof it);
   remote login with the default `admin`/`admin` is blocked; every create/edit/delete is
@@ -170,14 +174,16 @@ Worth knowing:
   `POST /webhook` route onto the *already running* Starlette app rather than
   starting a second one; the secret header is compared with `hmac.compare_digest`.
 - **Redis is optional.** Without it: in-memory FSM, no caching, and a per-process
-  rate limiter and role cache. With it, those are shared across workers. The
-  connection is verified with a PING at startup, so a configured-but-unreachable
-  Redis degrades to in-memory storage instead of breaking every update.
+  rate limiter and role cache. With it, that state is shared and survives a
+  restart. The connection is verified with a PING at startup, so a
+  configured-but-unreachable Redis degrades to in-memory storage instead of
+  breaking every update.
 - **The web panel is not read-only bookkeeping.** It runs in the same process as
   the bot, so an edit there clears the same caches and can message users — that
   is how a restock added in the panel reaches the people waiting for it.
 - **Shutdown is graceful**: tasks stopped, metrics snapshot written to
-  `data/final_metrics.json`, webhook removed, CryptoPay session and DB engine closed.
+  `data/final_metrics.json`, webhook removed, buffered audit rows flushed, CryptoPay
+  session and DB engine closed.
 
 </details>
 
@@ -304,6 +310,7 @@ published on `127.0.0.1:9090` only.
 |-----------------------------------------------------------------------|-----------------------------------------------------------------|------------------------------------------|
 | `POSTGRES_DB` / `POSTGRES_USER` / `POSTGRES_PASSWORD`                 | Database credentials                                            | **required**                             |
 | `POSTGRES_HOST` / `DB_PORT`                                           | Host / port                                                     | `localhost` (or `db` in Docker) / `5432` |
+| `DB_POOL_SIZE` / `DB_MAX_OVERFLOW`                                    | Connection pool size and burst headroom                         | `10` / `20`                              |
 | `REDIS_ENABLED`                                                       | `1` = Redis caching + persistent FSM; `0` = in‑memory, no cache | `1`                                      |
 | `REDIS_HOST` / `REDIS_PORT` / `REDIS_DB` / `REDIS_PASSWORD`           | Redis connection                                                | `localhost` / `6379` / `0` / –           |
 | `WEBHOOK_ENABLED` / `WEBHOOK_URL` / `WEBHOOK_PATH` / `WEBHOOK_SECRET` | Webhook mode (default: long polling)                            | `0` / – / `/webhook` / –                 |
@@ -381,8 +388,10 @@ cached stock count and notifies everyone waiting on that product, exactly as the
 Background workers recover stuck CryptoPay payments (checked every 5 min, verified against the
 API, idempotent), run periodic DB/Redis health checks (which also replay cache invalidations
 deferred during a Redis outage), and clean up old audit logs / pending payments. File logging
-is queued off the event loop, so disk writes never stall update handling. Shutdown is graceful
-(tasks cancelled, metrics snapshot saved, log queues flushed, connections closed).
+is queued off the event loop, so disk writes never stall update handling; the audit trail is
+written to file synchronously and to the database in batches, so a crash can cost the DB copy
+of the last few seconds but never the log itself. Shutdown is graceful (tasks cancelled, metrics
+snapshot saved, log queues and the audit buffer flushed, connections closed).
 
 ---
 
@@ -558,7 +567,7 @@ users waiting for it, just like the in‑chat flow.
 
 ## 🧪 Testing
 
-**905 tests, 75 % line coverage** (`pytest`), running in ~21 s. The data layer runs against a
+**944 tests, 76 % line coverage** (`pytest`). The data layer runs against a
 real in‑memory async SQLite database (real SQL, transactions, and constraints) — only external
 services are mocked (Telegram Bot API, CryptoPay, Redis). What's covered:
 
@@ -574,10 +583,18 @@ services are mocked (Telegram Bot API, CryptoPay, Redis). What's covered:
   and promo‑on‑sale stacking.
 - **CRUD** — users, roles (incl. custom create/edit/delete), categories, products, stock, cart
   (quantities, per‑user uniqueness), stock subscriptions, reviews, payments, operations;
-  duplicate/blocking handling; stats queries.
-- **Security & middleware** — rate limiting and bans (including that every mapped action has a
-  limit), permission‑bitmask helpers, critical / replay‑action detection, authentication, the
-  web‑panel login limiter, and role‑cache behavior.
+  duplicate/blocking handling; stats queries. Bulk stock upload is checked both for what it
+  reports (values already stored, repeats inside the pasted batch, blanks) and for what it
+  costs — a guard asserts a 50‑value upload stays a handful of statements rather than drifting
+  back into a per‑value loop.
+- **Statistics** — the dashboard aggregates, which are issued as one statement each: totals per
+  table, revenue summed from real purchases, and the daily figures respecting their day window
+  so yesterday's numbers don't leak into today's.
+- **Security & middleware** — rate limiting and bans (both backends reaching the same verdicts,
+  an action overrun still counting against the global window, admins bypassing the windows but
+  not a ban, and every mapped action having a limit), permission‑bitmask helpers, critical /
+  replay‑action detection, authentication, the web‑panel login limiter, and role‑cache behavior
+  (in‑process tier served first, Redis consulted once it is dropped).
 - **Handlers** — user flows (`/start`, profile, shop, search, cart, referrals) and admin flows
   (user/role/balance management, catalog, paginated lists, profile views).
 - **Admin FSM flows** — promo‑code creation end to end (type, value, usage cap, expiry, and
@@ -589,9 +606,13 @@ services are mocked (Telegram Bot API, CryptoPay, Redis). What's covered:
   every endpoint, and formula‑injection neutralization so a product name can't execute in a
   spreadsheet.
 - **Infrastructure** — broadcast, restock notifications, payment recovery, metrics (including
-  that user‑supplied callback data can't forge a metric line), caching & invalidation (including
-  web‑panel edits and that a Redis outage defers invalidations instead of dropping them),
-  pagination, i18n, validators, and audit logging.
+  that user‑supplied callback data can't forge a metric line), caching & invalidation (web‑panel
+  edits, a Redis outage deferring invalidations instead of dropping them, and the write path
+  staying on named deletes so it never falls back to scanning the keyspace), paginator counts
+  being reused across page turns and dropped when the user transacts, pagination, i18n,
+  validators, and audit logging — including batching: rows land on flush, a full batch does not
+  wait, shutdown drains the buffer, and a row enlisted in a caller's transaction is never
+  buffered so it still rolls back with it.
 - **Keyboards & routing** — every callback payload a keyboard generates fits Telegram's 64‑byte
   limit (a long or Cyrillic product name used to overflow it), and every pagination prefix a view
   produces has a handler registered for it, so an arrow button can't be a dead end.

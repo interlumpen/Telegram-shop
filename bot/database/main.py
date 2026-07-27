@@ -5,7 +5,7 @@ from sqlalchemy.ext.asyncio import create_async_engine, AsyncEngine, async_sessi
 from sqlalchemy.orm import DeclarativeBase
 
 from bot.database.dsn import dsn
-from bot.misc import SingletonMeta
+from bot.misc import EnvKeys, SingletonMeta
 
 
 class Base(DeclarativeBase):
@@ -16,8 +16,8 @@ class Base(DeclarativeBase):
 class Database(metaclass=SingletonMeta):
     BASE = Base
 
-    POOL_SIZE = 10
-    MAX_OVERFLOW = 20
+    POOL_SIZE = EnvKeys.DB_POOL_SIZE
+    MAX_OVERFLOW = EnvKeys.DB_MAX_OVERFLOW
 
     def __init__(self):
         self.__engine: AsyncEngine = create_async_engine(

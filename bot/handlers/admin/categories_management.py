@@ -2,7 +2,7 @@ from aiogram import Router, F
 from aiogram.types import CallbackQuery, Message
 
 from bot.i18n import localize, esc
-from bot.handlers.other import display_name
+from bot.handlers.other import caller_name
 from bot.database.models import Permission
 from bot.database.methods import check_category_cached, create_category, delete_category, update_category
 from bot.keyboards.inline import back, simple_buttons
@@ -63,7 +63,7 @@ async def process_category_for_add(message: Message, state):
                 reply_markup=back("categories_management"),
             )
 
-            admin_name = await display_name(message.bot, message.from_user.id)
+            admin_name = caller_name(message)
             await log_audit("create_category", user_id=message.from_user.id, resource_type="Category",
                             resource_id=category_name, details=f"admin={admin_name}")
 
@@ -109,7 +109,7 @@ async def process_category_for_delete(message: Message, state):
             localize("admin.categories.delete.success"),
             reply_markup=back("categories_management"),
         )
-        admin_name = await display_name(message.bot, message.from_user.id)
+        admin_name = caller_name(message)
         await log_audit("delete_category", user_id=message.from_user.id, resource_type="Category",
                         resource_id=category_name, details=f"admin={admin_name}")
 
@@ -174,7 +174,7 @@ async def check_category_name_for_update(message: Message, state):
         reply_markup=back("categories_management"),
     )
 
-    admin_name = await display_name(message.bot, message.from_user.id)
+    admin_name = caller_name(message)
     await log_audit("rename_category", user_id=message.from_user.id, resource_type="Category", resource_id=new_name,
                     details=f"admin={admin_name}, old_name={old_name}")
 

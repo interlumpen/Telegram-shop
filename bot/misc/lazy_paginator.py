@@ -61,15 +61,9 @@ class LazyPaginator:
         # Save to cache
         self._cache[page] = items
 
-        # Clear old cache if limit exceeded
+        # Evict pages outside the window around the current one
         if len(self._cache) > self.cache_pages:
-            # Keep pages around current page
-            pages_to_keep = set()
-            total_pages = await self.get_total_pages()
-            for i in range(max(0, page - 1), min(page + 2, total_pages)):
-                pages_to_keep.add(i)
-
-            # Remove pages not in range
+            pages_to_keep = {page - 1, page, page + 1}
             for cached_page in list(self._cache.keys()):
                 if cached_page not in pages_to_keep and len(self._cache) > self.cache_pages:
                     del self._cache[cached_page]

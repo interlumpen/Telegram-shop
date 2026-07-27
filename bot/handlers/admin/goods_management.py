@@ -4,7 +4,7 @@ from aiogram import Router, F
 from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, Message
 
-from bot.handlers.other import generate_short_hash, display_name
+from bot.handlers.other import generate_short_hash, caller_name
 from bot.i18n import localize, esc
 from bot.database.models import Permission
 from bot.database.methods import get_item_info_cached, delete_item, get_goods_info, delete_item_from_position, \
@@ -66,7 +66,7 @@ async def delete_str_item(message: Message, state):
             localize('admin.goods.delete.position.success'),
             reply_markup=back('goods_management')
         )
-        admin_name = await display_name(message.bot, message.from_user.id)
+        admin_name = caller_name(message)
         await log_audit("delete_item", user_id=message.from_user.id, resource_type="Item", resource_id=item_name,
                         details=f"admin={admin_name}")
     await state.clear()
@@ -334,6 +334,6 @@ async def process_delete_item_from_position(call: CallbackQuery, state: FSMConte
             reply_markup=back("goods_management")
         )
 
-    admin_name = await display_name(call.message.bot, call.from_user.id)
+    admin_name = caller_name(call)
     await log_audit("delete_item_value", user_id=call.from_user.id, resource_type="ItemValue", resource_id=str(item_id),
                     details=f"admin={admin_name}, position={position_name or '<?>'}")

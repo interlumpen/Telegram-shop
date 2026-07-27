@@ -12,6 +12,7 @@ from aiogram.fsm.storage.memory import MemoryStorage
 from aiogram.fsm.storage.redis import RedisStorage
 
 from bot.database.methods import check_category_cached
+from bot.database.methods.audit import start_audit_buffer, stop_audit_buffer
 from bot.handlers.admin.shop_management import init_stats_cache
 from bot.misc import EnvKeys
 from bot.handlers import register_all_handlers
@@ -137,6 +138,9 @@ async def _startup(dp: Dispatcher, bot: Bot, ctx: AppContext, storage) -> None:
 
     _register_middlewares(dp, analytics_middleware, auth_middleware, security_middleware)
 
+    # Batch audit
+    await start_audit_buffer()
+
     # Caching (optional Redis) and background services
     ctx.cache_scheduler = await _setup_caching(storage)
 
@@ -163,15 +167,14 @@ async def warm_up_critical_caches():
         return
 
     try:
-        # Warming up the base stats
-        await get_user_count_cached()
-        await select_admins_cached()
-
-        # Warming up popular categories and products
         from bot.database.methods import query_categories
-        categories = await query_categories(limit=5)
-        for category in categories:
-            await check_category_cached(category)
+
+        # Independent warm-ups
+        _counts, categories = await asyncio.gather(
+            asyncio.gather(get_user_count_cached(), select_admins_cached()),
+            query_categories(limit=5),
+        )
+        await asyncio.gather(*(check_category_cached(c) for c in categories))
 
         logging.info("Critical caches warmed up successfully")
     except Exception as e:
@@ -216,6 +219,9 @@ async def _shutdown(ctx: AppContext, bot: Bot) -> None:
     # Close CryptoPay shared HTTP session
     from bot.misc.services.payment import CryptoPayAPI
     await CryptoPayAPI.close_session()
+
+    # Drain buffered audit rows while the engine is still open.
+    await stop_audit_buffer()
 
     # Close database engine
     await _Database().dispose()

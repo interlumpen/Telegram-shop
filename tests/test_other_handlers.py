@@ -4,7 +4,54 @@ from aiogram.enums import ChatMemberStatus
 
 from bot.handlers.other import (
     check_sub_channel, _any_payment_method_enabled, generate_short_hash, is_safe_item_name,
+    caller_name, display_name,
 )
+
+
+class TestCallerName:
+    """Audit entries name the caller from the update itself; only a *different*
+    user's name is worth a get_chat round-trip."""
+
+    def test_uses_the_first_name_on_the_update(self, make_callback_query):
+        call = make_callback_query(data="x", user_id=555)
+        call.from_user.first_name = "Ann"
+
+        assert caller_name(call) == "Ann"
+
+    def test_falls_back_to_the_id_when_unnamed(self, make_message):
+        msg = make_message(text="x", user_id=556)
+        msg.from_user.first_name = None
+
+        assert caller_name(msg) == "556"
+
+    def test_survives_an_update_without_a_sender(self):
+        assert caller_name(MagicMock(from_user=None)) == "unknown"
+
+    def test_makes_no_api_call(self, make_callback_query):
+        call = make_callback_query(data="x", user_id=557)
+        call.from_user.first_name = "Bob"
+
+        caller_name(call)
+
+        call.message.bot.get_chat.assert_not_called()
+
+
+class TestDisplayName:
+
+    async def test_reads_another_users_name_over_the_api(self, mock_bot):
+        mock_bot.get_chat.return_value = MagicMock(first_name="Other")
+
+        assert await display_name(mock_bot, 999) == "Other"
+        mock_bot.get_chat.assert_awaited_once_with(999)
+
+    async def test_falls_back_to_the_id_when_the_api_refuses(self, mock_bot):
+        from aiogram.exceptions import TelegramForbiddenError
+
+        mock_bot.get_chat.side_effect = TelegramForbiddenError(
+            method=MagicMock(), message="blocked"
+        )
+
+        assert await display_name(mock_bot, 999) == "999"
 
 
 class TestCheckSubChannel:

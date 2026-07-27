@@ -1,3 +1,4 @@
+import asyncio
 import datetime
 from decimal import Decimal
 
@@ -246,6 +247,106 @@ class TestItemCRUD:
         await item_factory(name="EmptyVal", category="EmptyValCat")
         assert await add_values_to_item("EmptyVal", "", False) is False
         assert await add_values_to_item("EmptyVal", "   ", False) is False
+
+    async def test_bulk_insert_adds_every_value(self, item_factory):
+        from bot.database.methods.create import add_values_bulk
+
+        await item_factory(name="BulkItem", category="BulkCat")
+
+        added, db_dup, batch_dup, invalid = await add_values_bulk(
+            "BulkItem", ["a", "b", "c"], False
+        )
+
+        assert (added, db_dup, batch_dup, invalid) == (3, 0, 0, 0)
+        assert await select_item_values_amount("BulkItem") == 3
+
+    async def test_bulk_insert_reports_each_kind_of_skip(self, item_factory):
+        """The admin's upload report distinguishes values already in the DB,
+        repeats inside the pasted batch, and blanks."""
+        from bot.database.methods.create import add_values_bulk
+
+        await item_factory(name="BulkSkip", category="BulkCat2")
+        await add_values_to_item("BulkSkip", "already", False)
+
+        added, db_dup, batch_dup, invalid = await add_values_bulk(
+            "BulkSkip", ["already", "new", "new", "  ", "", " new "], False
+        )
+
+        assert added == 1              # only "new"
+        assert db_dup == 1             # "already"
+        assert batch_dup == 2          # "new" twice more (trimmed " new " matches)
+        assert invalid == 2            # "  " and ""
+        assert await select_item_values_amount("BulkSkip") == 2
+
+    async def test_bulk_insert_is_atomic_per_batch(self, item_factory):
+        from bot.database.methods.create import add_values_bulk
+
+        await item_factory(name="BulkAtomic", category="BulkCat3")
+
+        # Unknown position: nothing is written and nothing raises.
+        assert await add_values_bulk("NoSuchItem", ["x"], False) == (0, 0, 0, 0)
+        assert await select_item_values_amount("BulkAtomic") == 0
+
+    async def test_bulk_insert_of_nothing_touches_no_rows(self, item_factory):
+        from bot.database.methods.create import add_values_bulk
+
+        await item_factory(name="BulkEmpty", category="BulkCat4")
+
+        assert await add_values_bulk("BulkEmpty", ["", "   "], False) == (0, 0, 0, 2)
+        assert await add_values_bulk("BulkEmpty", [], False) == (0, 0, 0, 0)
+        assert await select_item_values_amount("BulkEmpty") == 0
+
+    async def test_bulk_insert_keeps_one_row_for_an_infinite_position(self, item_factory):
+        """An infinite position holds exactly one row that is never consumed."""
+        from bot.database.methods.create import add_values_bulk
+
+        await item_factory(name="BulkInf", category="BulkCat5")
+
+        added, _db_dup, _batch_dup, _invalid = await add_values_bulk(
+            "BulkInf", ["forever", "ignored"], True
+        )
+
+        assert added == 1
+        assert await select_item_values_amount("BulkInf") == 1
+        assert await check_value("BulkInf") is True
+
+    async def test_bulk_insert_does_not_scale_with_the_batch(self, item_factory):
+        """Regression guard: this path used to be a per-value loop costing three
+        statements and a transaction each (~150 for a 50-value upload)."""
+        from sqlalchemy import event
+        from bot.database.main import Database
+        from bot.database.methods.create import add_values_bulk
+
+        await item_factory(name="BulkCost", category="BulkCat7")
+
+        statements = []
+
+        def _record(conn, cursor, statement, params, context, executemany):
+            statements.append(statement)
+
+        engine = Database().engine.sync_engine
+        event.listen(engine, "before_cursor_execute", _record)
+        try:
+            await add_values_bulk("BulkCost", [f"v{i}" for i in range(50)], False)
+        finally:
+            event.remove(engine, "before_cursor_execute", _record)
+
+        # Resolve the position, look up existing values, one executemany insert.
+        assert len(statements) <= 5, statements
+        assert await select_item_values_amount("BulkCost") == 50
+
+    async def test_bulk_insert_invalidates_the_item_cache_once(self, item_factory, fake_cache):
+        from bot.database.methods.create import add_values_bulk
+
+        await item_factory(name="BulkCache", category="BulkCat6")
+        fake_cache.store["item_values:BulkCache"] = 0
+        fake_cache.store["item_info:BulkCache"] = {"name": "BulkCache"}
+
+        await add_values_bulk("BulkCache", ["v1", "v2"], False)
+        await asyncio.sleep(0)
+
+        assert "item_values:BulkCache" not in fake_cache.store
+        assert "item_info:BulkCache" not in fake_cache.store
 
     async def test_check_value_infinity(self, item_factory):
         await item_factory(name="InfItem", category="InfCat", values=[("inf_val", True)])

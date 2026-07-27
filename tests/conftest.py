@@ -33,6 +33,11 @@ class FakeCacheManager:
         self.store.pop(key, None)
         return True
 
+    async def delete_many(self, keys):
+        for key in keys:
+            self.store.pop(key, None)
+        return True
+
     async def invalidate_pattern(self, pattern: str):
         to_delete = [k for k in self.store if fnmatch.fnmatch(k, pattern)]
         for k in to_delete:

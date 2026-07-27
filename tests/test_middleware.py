@@ -1,3 +1,4 @@
+import math
 import time
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -10,6 +11,7 @@ from bot.middleware.security import (
 )
 from bot.middleware.rate_limit import (
     RateLimiter, RateLimitConfig, RedisRateLimiter, RateLimitMiddleware,
+    ALLOWED, BANNED, GLOBAL_EXCEEDED, ACTION_EXCEEDED,
 )
 from bot.main import _setup_rate_limiting
 from bot.states import ShopStates
@@ -346,19 +348,67 @@ class _FakeRedis:
         self.zsets.pop(key, None)
         self.kv.pop(key, None)
 
-    def register_script(self, _source):
+    async def pttl(self, key):
+        self._boom()
+        v = self.kv.get(key)
+        if not v:
+            return -2
+        _, exp = v
+        if exp is None:
+            return -1
+        return max(0, int((exp - time.time()) * 1000))
+
+    def _allow_window(self, key, now, window, limit, member):
+        """Trim the window, then record the request if it fits. True if allowed."""
+        bucket = self.zsets.setdefault(key, {})
+        for m, score in list(bucket.items()):
+            if score <= now - window:
+                del bucket[m]
+        if len(bucket) >= limit:
+            return False
+        bucket[member] = now
+        return True
+
+    def register_script(self, source):
+        """Emulate whichever of the two Lua scripts was registered.
+
+        Told apart by arity: the combined per-update check passes three keys, the
+        single-window helper one.
+        """
+
         async def _run(keys, args):
             self._boom()
-            key = keys[0]
-            now, window, limit, member = float(args[0]), float(args[1]), int(args[2]), args[3]
-            bucket = self.zsets.setdefault(key, {})
-            for m, score in list(bucket.items()):
-                if score <= now - window:
-                    del bucket[m]
-            if len(bucket) >= limit:
-                return 0
-            bucket[member] = now
-            return 1
+            if len(keys) == 1:
+                now, window, limit, member = float(args[0]), float(args[1]), int(args[2]), args[3]
+                return 1 if self._allow_window(keys[0], now, window, limit, member) else 0
+
+            ban_key, g_key, a_key = keys
+            now = float(args[0])
+            g_window, g_limit = float(args[1]), int(args[2])
+            a_window, a_limit = float(args[3]), int(args[4])
+            member, ban_secs = args[5], int(args[6])
+            has_action, bypass = int(args[7]), int(args[8])
+
+            ban_ms = await self.pttl(ban_key)
+            if ban_ms > 0:
+                return [1, math.ceil(ban_ms / 1000)]
+
+            if bypass == 1:
+                return [0, 0]
+
+            if not self._allow_window(g_key, now, g_window, g_limit, member):
+                await self.set(ban_key, "1", ex=ban_secs)
+                return [2, ban_secs]
+
+            if has_action == 1:
+                if not self._allow_window(a_key, now, a_window, a_limit, member):
+                    oldest = await self.zrange(a_key, 0, 0, withscores=True)
+                    wait = 0
+                    if oldest:
+                        wait = max(0, math.ceil(a_window - (now - oldest[0][1])))
+                    return [3, wait]
+
+            return [0, 0]
 
         return _run
 
@@ -412,6 +462,100 @@ class TestRedisRateLimiter:
         assert 5 in self.fallback.user_requests
 
 
+class TestCombinedCheck:
+    """The single-round-trip check() must reach the same verdicts as the
+    four separate calls it replaced, in the same order."""
+
+    def setup_method(self):
+        self.config = RateLimitConfig(
+            global_limit=2, global_window=60,
+            action_limits={"payment": (1, 60)}, ban_duration=300,
+        )
+        self.fallback = RateLimiter(self.config)
+
+    def _limiter(self, fail=False):
+        return RedisRateLimiter(self.config, _FakeRedis(fail=fail), self.fallback)
+
+    async def test_allows_within_both_windows(self):
+        r = self._limiter()
+        assert await r.check(1, "default") == (ALLOWED, 0)
+
+    async def test_global_overrun_bans_the_user(self):
+        r = self._limiter()
+        assert (await r.check(1, "default"))[0] == ALLOWED
+        assert (await r.check(1, "default"))[0] == ALLOWED
+
+        verdict, wait = await r.check(1, "default")
+        assert verdict == GLOBAL_EXCEEDED
+        assert wait == 300
+        # The ban is applied in the same round-trip, so the next update is
+        # rejected as banned rather than merely over the limit.
+        verdict, wait = await r.check(1, "default")
+        assert verdict == BANNED
+        assert 0 < wait <= 300
+
+    async def test_action_overrun_reports_wait_without_banning(self):
+        r = self._limiter()
+        assert (await r.check(2, "payment"))[0] == ALLOWED
+
+        verdict, wait = await r.check(2, "payment")
+        assert verdict == ACTION_EXCEEDED
+        assert 0 < wait <= 60
+        # An action overrun must not ban.
+        assert await r.is_banned(2) is False
+
+    async def test_action_overrun_still_counts_against_the_global_window(self):
+        """Order is load-bearing: the global window is recorded before the
+        action window is examined, exactly as the split calls did."""
+        r = self._limiter()
+        await r.check(3, "payment")   # 1st global, 1st action
+        await r.check(3, "payment")   # 2nd global recorded, action rejected
+
+        verdict, _wait = await r.check(3, "default")
+        assert verdict == GLOBAL_EXCEEDED
+
+    async def test_bypass_skips_windows_but_not_the_ban(self):
+        r = self._limiter()
+        for _ in range(5):
+            assert await r.check(4, "payment", bypass=True) == (ALLOWED, 0)
+
+        await r.ban_user(4)
+        verdict, wait = await r.check(4, "payment", bypass=True)
+        assert verdict == BANNED
+        assert 0 < wait <= 300
+
+    async def test_unknown_action_only_uses_the_global_window(self):
+        r = self._limiter()
+        assert (await r.check(5, "unknown"))[0] == ALLOWED
+        assert (await r.check(5, "unknown"))[0] == ALLOWED
+        assert (await r.check(5, "unknown"))[0] == GLOBAL_EXCEEDED
+
+    async def test_falls_back_to_memory_on_redis_error(self):
+        r = self._limiter(fail=True)
+        assert await r.check(6, "default") == (ALLOWED, 0)
+        assert 6 in self.fallback.user_requests
+
+    async def test_in_memory_check_matches_the_redis_verdicts(self):
+        limiter = RateLimiter(self.config)
+        assert limiter.check(7, "payment") == (ALLOWED, 0)
+
+        verdict, wait = limiter.check(7, "payment")
+        assert verdict == ACTION_EXCEEDED
+        assert 0 < wait <= 60
+
+        assert limiter.check(7, "default")[0] == GLOBAL_EXCEEDED
+        assert limiter.is_banned(7) is True
+        assert limiter.check(7, "default")[0] == BANNED
+
+    def test_in_memory_bypass_skips_windows_but_not_the_ban(self):
+        limiter = RateLimiter(self.config)
+        for _ in range(5):
+            assert limiter.check(8, "payment", bypass=True) == (ALLOWED, 0)
+
+        limiter.ban_user(8)
+        assert limiter.check(8, "payment", bypass=True)[0] == BANNED
+
+
 class TestRoleCacheRedis:
 
     async def test_read_through_and_write_through(self, user_factory, fake_cache):
@@ -422,10 +566,17 @@ class TestRoleCacheRedis:
         assert await auth.get_user_role_cached(210001) == 1
         # Written through to the shared cache...
         assert "auth:role:210001" in fake_cache.store
-        # ...and read from it first: overwrite Redis and expect the new value,
-        # even though the in-memory admin_cache still holds the old one.
+        # ...and to the in-process tier, which is checked first: a stale Redis
+        # value must not be re-read while the local entry is live.
+        assert 210001 in auth.admin_cache
         fake_cache.store["auth:role:210001"] = 999
+        assert await auth.get_user_role_cached(210001) == 1
+
+        # Dropping the local entry (what every invalidation path does) falls
+        # through to Redis rather than to the DB, and repopulates the L1 tier.
+        auth.admin_cache.pop(210001)
         assert await auth.get_user_role_cached(210001) == 999
+        assert auth.admin_cache[210001][0] == 999
 
     async def test_falls_back_to_memory_when_cache_unhealthy(self, user_factory, fake_cache):
         fake_cache._healthy = False

@@ -14,7 +14,7 @@ from bot.database.methods.audit import log_audit
 from bot.database.methods.cache_utils import safe_create_task
 from bot.misc import EnvKeys, ItemPurchaseRequest, validate_telegram_id, validate_money_amount, PaymentRequest, \
     sanitize_html
-from bot.handlers.other import _any_payment_method_enabled, is_safe_item_name
+from bot.handlers.other import _any_payment_method_enabled, is_safe_item_name, caller_name
 from bot.misc.metrics import get_metrics
 from bot.misc.services import CryptoPayAPI, CryptoPayAPIError, send_stars_invoice, send_fiat_invoice
 from bot.misc.services.payment import _minor_units_for, payload_amount
@@ -292,18 +292,12 @@ async def checking_payment(call: CallbackQuery, state: FSMContext):
             )
             await state.clear()
 
-            async def _audit(bot=call.bot, amount=balance_amount):
-                try:
-                    user_info = await bot.get_chat(user_id)
-                    await log_audit(
-                        "balance_replenish",
-                        user_id=user_id,
-                        resource_type="Payment",
-                        details=f"name={user_info.first_name}, amount={amount} {EnvKeys.PAY_CURRENCY}, provider=cryptopay",
-                    )
-                except (TelegramBadRequest, TelegramForbiddenError) as e:
-                    await log_audit("balance_replenish", level="ERROR", user_id=user_id, resource_type="Payment", details=f"log_failed: {e}")
-            safe_create_task(_audit())
+            safe_create_task(log_audit(
+                "balance_replenish",
+                user_id=user_id,
+                resource_type="Payment",
+                details=f"name={caller_name(call)}, amount={balance_amount} {EnvKeys.PAY_CURRENCY}, provider=cryptopay",
+            ))
 
         elif status == "active":
             await call.answer(localize("payments.not_paid_yet"))
@@ -415,18 +409,12 @@ async def successful_payment_handler(message: Message):
         reply_markup=back('profile')
     )
 
-    async def _audit(bot=message.bot):
-        try:
-            user_info = await bot.get_chat(user_id)
-            await log_audit(
-                "balance_replenish",
-                user_id=user_id,
-                resource_type="Payment",
-                details=f"name={user_info.first_name}, amount={amount} {EnvKeys.PAY_CURRENCY}, provider={suffix}",
-            )
-        except (TelegramBadRequest, TelegramForbiddenError) as e:
-            await log_audit("balance_replenish", level="ERROR", user_id=user_id, resource_type="Payment", details=f"log_failed: {e}")
-    safe_create_task(_audit())
+    safe_create_task(log_audit(
+        "balance_replenish",
+        user_id=user_id,
+        resource_type="Payment",
+        details=f"name={caller_name(message)}, amount={amount} {EnvKeys.PAY_CURRENCY}, provider={suffix}",
+    ))
 
 
 @router.callback_query(F.data == "buy_item")
@@ -544,19 +532,17 @@ async def buy_item_callback_handler(call: CallbackQuery, state: FSMContext):
             reply_markup=simple_buttons(buttons),
         )
 
-        async def _audit(bot=call.bot, item_name=purchase_request.item_name, data=purchase_data):
-            try:
-                user_info = await bot.get_chat(user_id)
-                await log_audit(
-                    "purchase",
-                    user_id=user_id,
-                    resource_type="Item",
-                    resource_id=item_name[:100],
-                    details=f"name={user_info.first_name[:50]}, price={data['price']} {EnvKeys.PAY_CURRENCY}, unique_id={data['unique_id']}",
-                )
-            except Exception as e:
-                await log_audit("purchase", level="ERROR", user_id=user_id, resource_type="Item", details=f"log_failed: {e}")
-        safe_create_task(_audit())
+        safe_create_task(log_audit(
+            "purchase",
+            user_id=user_id,
+            resource_type="Item",
+            resource_id=purchase_request.item_name[:100],
+            details=(
+                f"name={caller_name(call)[:50]}, "
+                f"price={purchase_data['price']} {EnvKeys.PAY_CURRENCY}, "
+                f"unique_id={purchase_data['unique_id']}"
+            ),
+        ))
 
     except Exception as e:
         logger.error(f"Critical error in purchase handler: {e}")

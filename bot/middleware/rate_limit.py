@@ -121,6 +121,23 @@ class RateLimiter:
         self.user_actions[action][user_id].append(current_time)
         return True
 
+    def check(self, user_id: int, action: str, bypass: bool = False) -> tuple[int, int]:
+        """In-memory counterpart of RedisRateLimiter.check."""
+        if self.is_banned(user_id):
+            return BANNED, self.get_wait_time(user_id)
+
+        if bypass:
+            return ALLOWED, 0
+
+        if not self.check_global_limit(user_id):
+            self.ban_user(user_id)
+            return GLOBAL_EXCEEDED, self.config.ban_duration
+
+        if not self.check_action_limit(user_id, action):
+            return ACTION_EXCEEDED, self.get_wait_time(user_id, action)
+
+        return ALLOWED, 0
+
     def get_wait_time(self, user_id: int, action: str = None) -> int:
         """Returns the wait time until the next available request"""
         if self.is_banned(user_id):
@@ -141,6 +158,13 @@ class RateLimiter:
             return int(self.config.global_window - (time.time() - oldest_request))
 
         return 0
+
+
+# Verdicts returned by RedisRateLimiter.check / RateLimiter.check.
+ALLOWED = 0
+BANNED = 1
+GLOBAL_EXCEEDED = 2
+ACTION_EXCEEDED = 3
 
 
 class RedisRateLimiter:
@@ -170,12 +194,67 @@ class RedisRateLimiter:
     return 1
     """
 
+    # The whole per-update decision in one round-trip: ban check, both sliding windows, the auto-ban on a global overrun and the bookkeeping.
+
+    # Order matters and mirrors the split version exactly: the ban is checked before the admin bypass applies,
+    # and the global window is checked *and recorded* before the action window is looked at, so a request rejected by
+    # an action limit still counts against the global budget. An admin (bypass=1) is only ban-checked — their traffic never touches the windows.
+    _CHECK_LUA = """
+    local ban_key  = KEYS[1]
+    local g_key    = KEYS[2]
+    local a_key    = KEYS[3]
+    local now      = tonumber(ARGV[1])
+    local g_window = tonumber(ARGV[2])
+    local g_limit  = tonumber(ARGV[3])
+    local a_window = tonumber(ARGV[4])
+    local a_limit  = tonumber(ARGV[5])
+    local member   = ARGV[6]
+    local ban_secs = tonumber(ARGV[7])
+    local has_act  = tonumber(ARGV[8])
+    local bypass   = tonumber(ARGV[9])
+
+    local ban_ms = redis.call('PTTL', ban_key)
+    if ban_ms > 0 then
+        return {1, math.ceil(ban_ms / 1000)}
+    end
+
+    if bypass == 1 then
+        return {0, 0}
+    end
+
+    redis.call('ZREMRANGEBYSCORE', g_key, 0, now - g_window)
+    if redis.call('ZCARD', g_key) >= g_limit then
+        redis.call('SET', ban_key, '1', 'PX', ban_secs * 1000)
+        return {2, ban_secs}
+    end
+    redis.call('ZADD', g_key, now, member)
+    redis.call('PEXPIRE', g_key, math.floor(g_window * 1000))
+
+    if has_act == 1 then
+        redis.call('ZREMRANGEBYSCORE', a_key, 0, now - a_window)
+        if redis.call('ZCARD', a_key) >= a_limit then
+            local oldest = redis.call('ZRANGE', a_key, 0, 0, 'WITHSCORES')
+            local wait = 0
+            if oldest[2] then
+                wait = math.ceil(a_window - (now - tonumber(oldest[2])))
+                if wait < 0 then wait = 0 end
+            end
+            return {3, wait}
+        end
+        redis.call('ZADD', a_key, now, member)
+        redis.call('PEXPIRE', a_key, math.floor(a_window * 1000))
+    end
+
+    return {0, 0}
+    """
+
     def __init__(self, config: RateLimitConfig, redis, fallback: "RateLimiter"):
         self.config = config
         self.redis = redis
         self.fallback = fallback
         # register_script caches by SHA and falls back to EVAL on NOSCRIPT.
         self._allow_script = redis.register_script(self._ALLOW_LUA)
+        self._check_script = redis.register_script(self._CHECK_LUA)
 
     @staticmethod
     def _member() -> str:
@@ -215,6 +294,37 @@ class RedisRateLimiter:
             return await self._allow(f"rl:a:{action}:{user_id}", window, limit)
         except Exception:
             return self.fallback.check_action_limit(user_id, action)
+
+    async def check(self, user_id: int, action: str, bypass: bool = False) -> tuple[int, int]:
+        """Run the whole rate-limit decision in one round-trip.
+
+        Returns ``(verdict, wait_seconds)`` where verdict is one of ALLOWED /
+        BANNED / GLOBAL_EXCEEDED / ACTION_EXCEEDED. ``bypass`` marks an admin:
+        the ban still applies, the windows do not. Falls back to the in-memory
+        limiter on any Redis error, exactly like the individual checks do.
+        """
+        limit, window = self.config.action_limits.get(action, (0, 0))
+        has_action = 1 if action in self.config.action_limits else 0
+        try:
+            verdict, wait = await self._check_script(
+                keys=[
+                    f"rl:ban:{user_id}",
+                    f"rl:g:{user_id}",
+                    f"rl:a:{action}:{user_id}",
+                ],
+                args=[
+                    time.time(),
+                    self.config.global_window, self.config.global_limit,
+                    window, limit,
+                    self._member(),
+                    self.config.ban_duration,
+                    has_action,
+                    1 if bypass else 0,
+                ],
+            )
+            return int(verdict), int(wait)
+        except Exception:
+            return self.fallback.check(user_id, action, bypass)
 
     async def get_wait_time(self, user_id: int, action: str = None) -> int:
         try:
@@ -360,59 +470,38 @@ class RateLimitMiddleware(BaseMiddleware):
 
         user_id = user.id
 
-        # Checking the ban
-        if await self._is_banned(user_id):
-            wait_time = await self._get_wait_time(user_id)
-
-            if isinstance(event, CallbackQuery):
-                await event.answer(
-                    localize("middleware.ban", time=wait_time),
-                    show_alert=True
-                )
-                return None
-            elif isinstance(event, Message):
-                await event.answer(
-                    localize("middleware.ban", time=wait_time)
-                )
-                return None
-
-        # Check bypass for admins
-        if await self._check_admin_bypass(user_id):
-            return await handler(event, data)
+        # Resolved up front so the limiter call can honour it server-side: an admin is still ban-checked but skips both windows.
+        # The role comes from the in-process cache on all but the first lookup.
+        bypass = await self._check_admin_bypass(user_id)
 
         # Define action
         action = self._get_action_from_event(event, data)
 
-        # Checking the limits
-        if not await self._check_global_limit(user_id):
-            await self._ban_user(user_id)
+        # Ban check plus both sliding windows, resolved in a single call.
+        backend = self._backend()
+        if backend is not None:
+            verdict, wait_time = await backend.check(user_id, action, bypass)
+        else:
+            verdict, wait_time = self.limiter.check(user_id, action, bypass)
 
-            if isinstance(event, CallbackQuery):
-                await event.answer(
-                    localize("middleware.above_limits"),
-                    show_alert=True
-                )
-            elif isinstance(event, Message):
-                await event.answer(localize("middleware.above_limits"))
-            return None
+        if verdict == ALLOWED:
+            return await handler(event, data)
 
-        if not await self._check_action_limit(user_id, action):
-            wait_time = await self._get_wait_time(user_id, action)
+        if verdict == BANNED:
+            message = localize("middleware.ban", time=wait_time)
+        elif verdict == GLOBAL_EXCEEDED:
+            message = localize("middleware.above_limits")
+        else:
+            message = localize("middleware.waiting", time=wait_time)
 
-            if isinstance(event, CallbackQuery):
-                await event.answer(
-                    localize("middleware.waiting", time=wait_time),
-                    show_alert=True
-                )
-            elif isinstance(event, Message):
-                try:
-                    await event.answer(localize("middleware.waiting", time=wait_time))
-                except TelegramBadRequest as e:
-                    logger.debug(f"Rate limit notification failed: {e}")
-            return None
-
-        # skip ahead
-        return await handler(event, data)
+        if isinstance(event, CallbackQuery):
+            await event.answer(message, show_alert=True)
+        elif isinstance(event, Message):
+            try:
+                await event.answer(message)
+            except TelegramBadRequest as e:
+                logger.debug(f"Rate limit notification failed: {e}")
+        return None
 
 
 # Function for quick setup

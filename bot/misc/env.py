@@ -31,6 +31,8 @@ class EnvKeys(ABC):
     POSTGRES_PASSWORD: Final = _get_required("POSTGRES_PASSWORD")
     DB_PORT: Final = int(_get_optional("DB_PORT", "5432"))
     POSTGRES_HOST: Final = _get_optional("POSTGRES_HOST", "localhost")
+    DB_POOL_SIZE: Final = int(_get_optional("DB_POOL_SIZE", "10"))
+    DB_MAX_OVERFLOW: Final = int(_get_optional("DB_MAX_OVERFLOW", "20"))
 
     # Redis
     REDIS_ENABLED: Final = _get_optional("REDIS_ENABLED", "1")

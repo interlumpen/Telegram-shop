@@ -122,61 +122,74 @@ async def statistics_callback_handler(call: CallbackQuery):
     """
     today_str = datetime.date.today().isoformat()
 
-    # Collect new metrics (not cached — lightweight queries)
-    unique_buyers = await select_unique_buyers()
-    avg_order = await select_avg_order()
-    today_sold_count = await select_today_orders_count(today_str)
-    blocked_count = await select_blocked_users_count()
+    shared_reads = [
+        select_unique_buyers(),
+        select_avg_order(),
+        select_today_orders_count(today_str),
+        select_blocked_users_count(),
+        select_users_balance(),
+        select_all_operations(),
+        select_count_categories(),
+        select_count_bought_items(),
+        get_roles_with_user_counts(),
+    ]
 
-    # Use cached statistics
     if stats_cache:
-        daily_stats = await stats_cache.get_daily_stats(today_str)
-        global_stats = await stats_cache.get_global_stats()
-
-        text = localize(
-            "admin.shop.stats.template",
-            today_users=daily_stats['users'],
-            users=global_stats['total_users'],
-            buyers=unique_buyers,
-            blocked=blocked_count,
-            today_orders=daily_stats['orders'],
-            today_sold_count=today_sold_count,
-            all_orders=global_stats['total_revenue'],
-            avg_order=f"{avg_order:.2f}",
-            today_topups=daily_stats['operations'],
-            system_balance=await select_users_balance(),
-            all_topups=await select_all_operations(),
-            items=global_stats['total_items'],
-            goods=global_stats['total_goods'],
-            categories=await select_count_categories(),
-            sold_count=await select_count_bought_items(),
-            currency=EnvKeys.PAY_CURRENCY
-        )
-
+        extra_reads = [
+            stats_cache.get_daily_stats(today_str),
+            stats_cache.get_global_stats(),
+        ]
     else:
         # Fallback on direct requests if cache is unavailable
-        text = localize(
-            "admin.shop.stats.template",
-            today_users=await select_today_users(today_str),
-            users=await get_user_count(),
-            buyers=unique_buyers,
-            blocked=blocked_count,
-            today_orders=await select_today_orders(today_str),
-            today_sold_count=today_sold_count,
-            all_orders=await select_all_orders(),
-            avg_order=f"{avg_order:.2f}",
-            today_topups=await select_today_operations(today_str),
-            system_balance=await select_users_balance(),
-            all_topups=await select_all_operations(),
-            items=await select_count_items(),
-            goods=await select_count_goods(),
-            categories=await select_count_categories(),
-            sold_count=await select_count_bought_items(),
-            currency=EnvKeys.PAY_CURRENCY
-        )
+        extra_reads = [
+            select_today_users(today_str),
+            select_today_orders(today_str),
+            select_today_operations(today_str),
+            get_user_count(),
+            select_all_orders(),
+            select_count_items(),
+            select_count_goods(),
+        ]
+
+    results = await asyncio.gather(*shared_reads, *extra_reads)
+
+    (unique_buyers, avg_order, today_sold_count, blocked_count,
+     system_balance, all_topups, categories, sold_count, roles) = results[:9]
+
+    if stats_cache:
+        daily_stats, global_stats = results[9:]
+        today_users = daily_stats['users']
+        today_orders = daily_stats['orders']
+        today_topups = daily_stats['operations']
+        users = global_stats['total_users']
+        all_orders = global_stats['total_revenue']
+        items = global_stats['total_items']
+        goods = global_stats['total_goods']
+    else:
+        (today_users, today_orders, today_topups,
+         users, all_orders, items, goods) = results[9:]
+
+    text = localize(
+        "admin.shop.stats.template",
+        today_users=today_users,
+        users=users,
+        buyers=unique_buyers,
+        blocked=blocked_count,
+        today_orders=today_orders,
+        today_sold_count=today_sold_count,
+        all_orders=all_orders,
+        avg_order=f"{avg_order:.2f}",
+        today_topups=today_topups,
+        system_balance=system_balance,
+        all_topups=all_topups,
+        items=items,
+        goods=goods,
+        categories=categories,
+        sold_count=sold_count,
+        currency=EnvKeys.PAY_CURRENCY
+    )
 
     # Append role breakdown
-    roles = await get_roles_with_user_counts()
     if roles:
         text += "\n" + localize("admin.shop.stats.roles_header")
         for r in roles:

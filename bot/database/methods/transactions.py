@@ -577,13 +577,8 @@ async def replace_item_stock_and_meta(
 
     Returns ``(success, error_code, values_added)``
     """
-    seen: set[str] = set()
-    normalized: list[str] = []
-    for v in values:
-        v_norm = (v or "").strip()
-        if v_norm and v_norm not in seen:
-            seen.add(v_norm)
-            normalized.append(v_norm)
+    from bot.database.methods.create import normalize_values
+    normalized, _skipped_dup, _skipped_invalid = normalize_values(values)
 
     try:
         async with Database().session() as s:

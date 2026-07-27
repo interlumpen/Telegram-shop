@@ -1,44 +1,12 @@
 import logging
-from typing import Optional, Literal
+from typing import Optional
 from redis.asyncio import Redis
-from aiogram.fsm.storage.redis import RedisStorage, StorageKey
+from aiogram.fsm.storage.redis import RedisStorage
 from bot.misc import EnvKeys
 
-
-class CustomRedisStorage(RedisStorage):
-    """
-    Custom Redis storage with TTL support for FSM states.
-    States will expire after the specified TTL to prevent memory leaks.
-    """
-
-    def __init__(
-            self,
-            redis: Redis,
-            state_ttl: Optional[int] = 3600,  # 1 hour by default
-            data_ttl: Optional[int] = 3600,
-    ):
-        super().__init__(redis=redis)
-        self.state_ttl = state_ttl
-        self.data_ttl = data_ttl
-
-    async def set_state(self, key: StorageKey, state: str = None) -> None:
-        """Set state with TTL"""
-        await super().set_state(key, state)
-        if state and self.state_ttl:
-            redis_key = self._build_key(key, "state")
-            await self.redis.expire(redis_key, self.state_ttl)
-
-    async def set_data(self, key: StorageKey, data: dict) -> None:
-        """Set data with TTL"""
-        await super().set_data(key, data)
-        if data and self.data_ttl:
-            redis_key = self._build_key(key, "data")
-            await self.redis.expire(redis_key, self.data_ttl)
-
-    def _build_key(self, key: StorageKey, part: Literal["data", "state", "lock"]) -> str:
-        """Build Redis key"""
-        assert self.key_builder is not None, "KeyBuilder should be initialized"
-        return self.key_builder.build(key, part)
+# Expire FSM state/data after an hour of inactivity so abandoned conversations do not accumulate in Redis.
+# RedisStorage applies these in the same SET that writes the value, so the TTL costs no extra round-trip.
+FSM_TTL = 3600
 
 
 async def get_redis_storage() -> Optional[RedisStorage]:
@@ -66,11 +34,10 @@ async def get_redis_storage() -> Optional[RedisStorage]:
 
         await redis.ping()
 
-        # Use custom storage with TTL
-        storage = CustomRedisStorage(
+        storage = RedisStorage(
             redis=redis,
-            state_ttl=3600,  # 1 hour
-            data_ttl=3600,  # 1 hour
+            state_ttl=FSM_TTL,
+            data_ttl=FSM_TTL,
         )
 
         logging.info(f"Redis storage configured: {EnvKeys.REDIS_HOST}:{EnvKeys.REDIS_PORT}")

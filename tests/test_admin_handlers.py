@@ -412,3 +412,115 @@ class TestAtomicStockReplacement:
         assert (ok, err) == (True, None)
         assert added == 2
         assert await select_item_values_amount("DedupStock") == 2
+
+
+class TestStatsAggregates:
+    async def _stats_cache(self, fake_cache):
+        from bot.misc.caching.stats_cache import StatsCache
+        return StatsCache(fake_cache)
+
+    async def test_global_stats_counts_every_table(
+        self, fake_cache, user_factory, item_factory
+    ):
+        await user_factory(telegram_id=930001)
+        await user_factory(telegram_id=930002)
+        await item_factory(
+            name="StatItem", price=100, category="StatCat",
+            values=[("a", False), ("b", False)],
+        )
+        await item_factory(name="StatItem2", price=50, category="StatCat", values=[])
+
+        stats = await (await self._stats_cache(fake_cache)).get_global_stats()
+
+        assert stats["total_users"] == 2
+        assert stats["total_goods"] == 2
+        assert stats["total_items"] == 2  # stock rows, not positions
+        assert stats["total_revenue"] == Decimal(0)
+
+    async def test_global_revenue_sums_purchases(
+        self, fake_cache, user_factory, item_factory
+    ):
+        from bot.database.methods.transactions import buy_item_transaction
+
+        await user_factory(telegram_id=930003, balance=1000)
+        await item_factory(
+            name="SoldItem", price=150, category="StatCat2",
+            values=[("v1", False), ("v2", False)],
+        )
+
+        assert (await buy_item_transaction(930003, "SoldItem"))[0] is True
+        assert (await buy_item_transaction(930003, "SoldItem"))[0] is True
+
+        stats = await (await self._stats_cache(fake_cache)).get_global_stats()
+
+        assert stats["total_revenue"] == Decimal("300.00")
+        # Both stock rows were consumed.
+        assert stats["total_items"] == 0
+
+    async def test_daily_stats_respects_the_day_window(
+        self, fake_cache, user_factory
+    ):
+        import datetime as _dt
+        from bot.database.main import Database
+        from bot.database.models.main import Operations
+
+        await user_factory(telegram_id=930004)
+
+        today = _dt.datetime.now(_dt.timezone.utc)
+        yesterday = today - _dt.timedelta(days=1)
+
+        async with Database().session() as s:
+            s.add(Operations(user_id=930004, operation_value=Decimal("70.00"),
+                             operation_time=today))
+            s.add(Operations(user_id=930004, operation_value=Decimal("500.00"),
+                             operation_time=yesterday))
+
+        stats = await (await self._stats_cache(fake_cache)).get_daily_stats(
+            today.date().isoformat()
+        )
+
+        # Yesterday's 500 must not leak into today's figure.
+        assert stats["operations"] == Decimal("70.00")
+        assert stats["users"] == 1
+        assert stats["orders"] == Decimal(0)
+
+    async def test_daily_stats_are_zero_on_an_empty_day(self, fake_cache):
+        stats = await (await self._stats_cache(fake_cache)).get_daily_stats("2020-01-01")
+
+        assert stats == {
+            "users": 0,
+            "orders": Decimal(0),
+            "operations": Decimal(0),
+        }
+
+
+class TestStatisticsScreen:
+
+    async def test_renders_with_the_stats_cache(
+        self, make_callback_query, fake_cache, user_factory, item_factory
+    ):
+        from bot.handlers.admin import shop_management
+        from bot.misc.caching.stats_cache import StatsCache
+
+        await user_factory(telegram_id=931001)
+        await item_factory(name="ScreenItem", price=100, category="ScreenCat",
+                           values=[("x", False)])
+
+        call = make_callback_query(data="statistics", user_id=931001)
+        with patch.object(shop_management, "stats_cache", StatsCache(fake_cache)):
+            await shop_management.statistics_callback_handler(call)
+
+        call.message.edit_text.assert_called_once()
+
+    async def test_renders_without_the_stats_cache(
+        self, make_callback_query, fake_cache, user_factory
+    ):
+        from bot.handlers.admin import shop_management
+
+        await user_factory(telegram_id=931002)
+
+        call = make_callback_query(data="statistics", user_id=931002)
+        with patch.object(shop_management, "stats_cache", None):
+            await shop_management.statistics_callback_handler(call)
+
+        call.message.edit_text.assert_called_once()

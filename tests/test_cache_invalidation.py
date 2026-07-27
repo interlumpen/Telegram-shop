@@ -30,18 +30,35 @@ class TestCacheInvalidationFunctions:
 
     async def test_invalidate_user_cache(self, fake_cache):
         fake_cache.store["user:123"] = {"telegram_id": 123, "balance": 0}
-        fake_cache.store["role:123"] = 1
         fake_cache.store["auth:role:123"] = 1
-        fake_cache.store["user_stats:123:x"] = 42
-        fake_cache.store["user_items:123:y"] = [1, 2]
+        fake_cache.store["count:bought:123"] = 3
+        fake_cache.store["count:ops:123"] = 7
+        # A different user's entries must survive.
+        fake_cache.store["user:124"] = {"telegram_id": 124}
 
         await invalidate_user_cache(123)
 
         assert "user:123" not in fake_cache.store
-        assert "role:123" not in fake_cache.store
         assert "auth:role:123" not in fake_cache.store
-        assert "user_stats:123:x" not in fake_cache.store
-        assert "user_items:123:y" not in fake_cache.store
+        # The paginator counts are per-user and go stale on any purchase/topup.
+        assert "count:bought:123" not in fake_cache.store
+        assert "count:ops:123" not in fake_cache.store
+        assert "user:124" in fake_cache.store
+
+    async def test_invalidate_user_cache_takes_no_scan(self, fake_cache, monkeypatch):
+        """This runs on every purchase/payment/checkout, so it must stay on
+        targeted deletes — a pattern delete here is a Redis SCAN per write."""
+        patterns = []
+
+        async def _record(pattern):
+            patterns.append(pattern)
+            return 0
+
+        monkeypatch.setattr(fake_cache, "invalidate_pattern", _record)
+
+        await invalidate_user_cache(123)
+
+        assert patterns == []
 
     async def test_invalidate_user_cache_drops_middleware_role_entry(self, fake_cache):
         import time as _time
@@ -102,16 +119,32 @@ class TestCacheInvalidationFunctions:
 
     async def test_invalidate_category_cache(self, fake_cache):
         fake_cache.store["category:Cat"] = {"name": "Cat"}
-        fake_cache.store["category_items:Cat:page1"] = [1, 2, 3]
         fake_cache.store["category_items:Cat:count"] = 3
         fake_cache.store["categories:count"] = 7
+        # Another category's count must survive.
+        fake_cache.store["category_items:Other:count"] = 1
 
         await invalidate_category_cache("Cat")
 
         assert "category:Cat" not in fake_cache.store
-        assert "category_items:Cat:page1" not in fake_cache.store
         assert "category_items:Cat:count" not in fake_cache.store
         assert "categories:count" not in fake_cache.store
+        assert "category_items:Other:count" in fake_cache.store
+
+    async def test_invalidate_category_cache_takes_no_scan(self, fake_cache, monkeypatch):
+        """:count is the only key in the category_items namespace, so this runs
+        on named deletes — a pattern would be a Redis SCAN per catalog edit."""
+        patterns = []
+
+        async def _record(pattern):
+            patterns.append(pattern)
+            return 0
+
+        monkeypatch.setattr(fake_cache, "invalidate_pattern", _record)
+
+        await invalidate_category_cache("Cat")
+
+        assert patterns == []
 
     async def test_paginator_counts_are_cached_and_invalidated(self, fake_cache, category_factory):
 
@@ -134,6 +167,44 @@ class TestCacheInvalidationFunctions:
         await asyncio.gather(*pending)
         assert "category_items:CountCat:count" not in fake_cache.store
         assert await query_items_in_category("CountCat", count_only=True) == 1
+
+    async def test_history_count_is_cached_across_page_turns(self, fake_cache, user_factory):
+        """The operations history counts a UNION over three tables; the
+        paginator asks for it on every page turn, so it must not re-run."""
+        from sqlalchemy import event
+        from bot.database.main import Database
+        from bot.database.methods.lazy_queries import query_user_operations_history
+
+        await user_factory(telegram_id=940100)
+
+        assert await query_user_operations_history(940100, count_only=True) == 0
+        assert "count:ops:940100" in fake_cache.store
+
+        statements = []
+
+        def _record(conn, cursor, statement, params, context, executemany):
+            statements.append(statement)
+
+        engine = Database().engine.sync_engine
+        event.listen(engine, "before_cursor_execute", _record)
+        try:
+            for _ in range(5):
+                await query_user_operations_history(940100, count_only=True)
+        finally:
+            event.remove(engine, "before_cursor_execute", _record)
+
+        assert statements == []
+
+    async def test_history_count_is_dropped_when_the_user_transacts(
+        self, fake_cache, user_factory
+    ):
+        fake_cache.store["count:ops:940101"] = 4
+        fake_cache.store["count:bought:940101"] = 2
+
+        await invalidate_user_cache(940101)
+
+        assert "count:ops:940101" not in fake_cache.store
+        assert "count:bought:940101" not in fake_cache.store
 
     async def test_invalidate_stats_cache(self, fake_cache):
         import datetime as _dt
@@ -508,8 +579,8 @@ class TestCacheManagerRedisDegradation:
         list would survive an outage as stale data."""
 
         for prefix in ("item_info:", "item_values:", "item_infinite:", "avg_rating:",
-                       "category:", "category_items:", "user:", "role:", "auth:role:",
-                       "user_count:", "admin_count:", "stats:"):
+                       "category:", "category_items:", "user:", "auth:role:",
+                       "user_count:", "admin_count:", "count:", "stats:"):
             assert prefix in CacheManager._KNOWN_PREFIXES
 
 

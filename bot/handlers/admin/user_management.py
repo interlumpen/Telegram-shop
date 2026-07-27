@@ -20,7 +20,7 @@ from bot.keyboards import back, close, simple_buttons, lazy_paginated_keyboard
 from bot.database.methods.audit import log_audit
 from bot.filters import HasPermissionFilter
 from bot.handlers.admin._common import user_profile_lines
-from bot.handlers.other import display_name
+from bot.handlers.other import display_name, caller_name
 from bot.middleware.security import get_auth_middleware
 from bot.states import UserMgmtStates
 from bot.misc import EnvKeys, LazyPaginator, validate_telegram_id, validate_money_amount, UserDataUpdate
@@ -461,7 +461,7 @@ async def process_replenish_user_balance(message: Message, state: FSMContext):
         )
 
         # Audit logging
-        admin_name = await display_name(message.bot, message.from_user.id)
+        admin_name = caller_name(message)
         await log_audit("balance_topup", user_id=message.from_user.id, resource_type="User", resource_id=str(user_id),
                         details=f"admin={admin_name}, target={target_name}, amount={int(amount)}")
 
@@ -552,7 +552,7 @@ async def process_deduct_user_balance(message: Message, state: FSMContext):
         )
 
         # Audit logging
-        admin_name = await display_name(message.bot, message.from_user.id)
+        admin_name = caller_name(message)
         await log_audit("balance_deduct", user_id=message.from_user.id, resource_type="User", resource_id=str(user_id),
                         details=f"admin={admin_name}, target={target_name}, amount={int(amount)}")
 
@@ -615,7 +615,7 @@ async def block_user_handler(call: CallbackQuery):
         reply_markup=back(f'check-user_{user_id}')
     )
 
-    admin_name = await display_name(call.message.bot, call.from_user.id)
+    admin_name = caller_name(call)
     await log_audit("block_user", user_id=call.from_user.id, resource_type="User", resource_id=str(user_id),
                     details=f"admin={admin_name}, target={target_name}")
 
@@ -645,6 +645,6 @@ async def unblock_user_handler(call: CallbackQuery):
         reply_markup=back(f'check-user_{user_id}')
     )
 
-    admin_name = await display_name(call.message.bot, call.from_user.id)
+    admin_name = caller_name(call)
     await log_audit("unblock_user", user_id=call.from_user.id, resource_type="User", resource_id=str(user_id),
                     details=f"admin={admin_name}, target={target_name}")
