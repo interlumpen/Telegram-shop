@@ -8,6 +8,7 @@ from bot.database.methods import check_role_cached
 from bot.filters import HasPermissionFilter
 from bot.database.models import Permission
 from bot.database.methods.audit import log_audit
+from bot.handlers.other import transition_to_text
 from bot.middleware.security import get_auth_middleware
 
 router = Router()
@@ -23,7 +24,8 @@ async def console_callback_handler(call: CallbackQuery, state: FSMContext):
     if Permission.has_any_admin_perm(role):
         mw = get_auth_middleware()
         maintenance = mw.maintenance_mode if mw else False
-        await call.message.edit_text(
+        await transition_to_text(
+            call.message,
             localize("admin.menu.main"),
             reply_markup=admin_console_keyboard(maintenance_mode=maintenance, role=role),
         )

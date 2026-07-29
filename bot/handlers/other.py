@@ -3,7 +3,7 @@ import re
 from urllib.parse import urlparse
 
 from aiogram import Router, F
-from aiogram.types import CallbackQuery
+from aiogram.types import CallbackQuery, Message
 from aiogram.exceptions import TelegramBadRequest, TelegramForbiddenError
 from aiogram.enums import ChatMemberStatus
 
@@ -11,6 +11,41 @@ from bot.misc import EnvKeys
 from bot.logger_mesh import logger
 
 router = Router()
+
+_EXPECTED_DELETE_FAILURES = (
+    "message can't be deleted",
+    "message to delete not found",
+    "not enough rights to delete",
+)
+
+
+def _is_expected_delete_failure(error: Exception) -> bool:
+    description = (getattr(error, "message", "") or str(error)).lower()
+    return any(marker in description for marker in _EXPECTED_DELETE_FAILURES)
+
+
+async def delete_for_text_transition(message: Message) -> None:
+    """Delete an obsolete media message before sending a text destination.
+
+    Telegram can legitimately refuse deletion for old/already-removed messages
+    or missing delete rights. Those cases may fall back to sending the new
+    screen alongside the old one; unrelated API errors must still propagate.
+    """
+    try:
+        await message.delete()
+    except (TelegramBadRequest, TelegramForbiddenError) as error:
+        if not _is_expected_delete_failure(error):
+            raise
+
+
+async def transition_to_text(message: Message, text: str, **kwargs) -> None:
+    """Edit a text message in place, or replace a media message with text."""
+    if getattr(message, "text", None) is not None:
+        await message.edit_text(text, **kwargs)
+        return
+
+    await delete_for_text_transition(message)
+    await message.answer(text, **kwargs)
 
 
 # Close message

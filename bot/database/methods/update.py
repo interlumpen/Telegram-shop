@@ -1,3 +1,5 @@
+import hashlib
+
 from sqlalchemy import exc, select, update
 
 from bot.database.methods.read import invalidate_user_cache, invalidate_item_cache, \
@@ -5,9 +7,66 @@ from bot.database.methods.read import invalidate_user_cache, invalidate_item_cac
 from bot.database.methods.cache_utils import safe_create_task
 from bot.database.methods.create import CART_MAX_QTY_PER_ITEM
 from bot.database.models import User, Goods, Categories, BoughtGoods, Role
-from bot.database.models.main import PromoCodes, CartItems
+from bot.database.models.main import PromoCodes, CartItems, StorefrontSettings, AuditLog
 from bot.database import Database
+from bot.database.methods.audit import log_audit
 from bot.logger_mesh import logger
+
+
+async def set_start_image_file_id(
+    file_id: str | None,
+    admin_id: int,
+    *,
+    expected_file_id_fingerprint: str | None = None,
+) -> bool | None:
+    """Atomically set or clear the /start image and its required audit row.
+
+    Returns whether an image was configured before this change, or None when a
+    removal confirmation is stale. The singleton row is seeded by the migration;
+    its absence is an operational error rather than a condition to repair
+    silently in a request handler.
+    """
+    async with Database().session() as s:
+        settings = (await s.execute(
+            select(StorefrontSettings)
+            .where(StorefrontSettings.id == 1)
+            .with_for_update()
+        )).scalars().one_or_none()
+        if settings is None:
+            raise RuntimeError("storefront settings row is missing")
+
+        previously_configured = bool(settings.start_image_file_id)
+        if file_id is None:
+            if expected_file_id_fingerprint is None:
+                return None
+            current_fingerprint = (
+                hashlib.sha256(settings.start_image_file_id.encode()).hexdigest()
+                if settings.start_image_file_id else None
+            )
+            if current_fingerprint != expected_file_id_fingerprint:
+                return None
+        if file_id is None and not previously_configured:
+            return False
+
+        settings.start_image_file_id = file_id
+        action = (
+            "start_image_removed" if file_id is None
+            else "start_image_replaced" if previously_configured
+            else "start_image_added"
+        )
+        await log_audit(
+            action,
+            user_id=admin_id,
+            details=f"previously_configured={str(previously_configured).lower()}",
+            session=s,
+        )
+        if not any(
+            isinstance(obj, AuditLog) and obj.action == action
+            for obj in s.new
+        ):
+            raise RuntimeError("required storefront audit row was not added")
+
+        return previously_configured
 
 
 async def set_role(telegram_id: int, role: int) -> None:

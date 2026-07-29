@@ -280,6 +280,17 @@ class ReferralEarnings(Database.BASE):
         return f"#{self.id}"
 
 
+class StorefrontSettings(Database.BASE):
+    """Singleton settings row for storefront appearance."""
+    __tablename__ = 'storefront_settings'
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    start_image_file_id: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+
+    __table_args__ = (
+        CheckConstraint('id = 1', name='ck_storefront_settings_singleton'),
+    )
+
+
 class AuditLog(Database.BASE):
     __tablename__ = 'audit_log'
     id: Mapped[int] = mapped_column(Integer, primary_key=True)

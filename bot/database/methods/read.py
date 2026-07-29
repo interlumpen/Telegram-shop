@@ -8,7 +8,10 @@ from sqlalchemy import func, exists, select, inspect as sa_inspect
 
 from bot.database.models import Database, User, ItemValues, Goods, Categories, Role, BoughtGoods, \
     Operations, ReferralEarnings, Permission
-from bot.database.models.main import PromoCodes, PromoCodeUsages, CartItems, Reviews, StockSubscriptions
+from bot.database.models.main import (
+    PromoCodes, PromoCodeUsages, CartItems, Reviews, StockSubscriptions,
+    StorefrontSettings,
+)
 from bot.misc.caching import get_cache_manager, single_flight
 
 F = TypeVar('F', bound=Callable[..., Coroutine[Any, Any, Any]])
@@ -66,6 +69,15 @@ async def _fetch_one_dict(model, *whereclauses) -> dict | None:
     async with Database().session() as s:
         obj = (await s.execute(select(model).where(*whereclauses))).scalars().first()
         return _obj_to_dict(obj, model) if obj else None
+
+
+async def get_start_image_file_id() -> str | None:
+    """Return the configured /start Telegram photo file_id, if any."""
+    async with Database().session() as s:
+        return (await s.execute(
+            select(StorefrontSettings.start_image_file_id)
+            .where(StorefrontSettings.id == 1)
+        )).scalar()
 
 
 # --- Async implementations ---

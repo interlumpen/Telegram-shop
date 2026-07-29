@@ -24,6 +24,7 @@ from bot.database.methods.lazy_queries import query_item_reviews, query_goods_se
 from bot.database.methods.transactions import redeem_balance_promo
 from bot.database.methods.audit import log_audit_bg
 from bot.database.models import Permission
+from bot.handlers.other import transition_to_text
 from bot.keyboards import item_info, back, lazy_paginated_keyboard
 from bot.keyboards.inline import simple_buttons, rating_keyboard
 from aiogram.types import InlineKeyboardButton
@@ -187,7 +188,11 @@ async def _show_categories_page(call: CallbackQuery, state: FSMContext, page: in
         )]],
     )
 
-    await call.message.edit_text(localize("shop.categories.title"), reply_markup=markup)
+    await transition_to_text(
+        call.message,
+        localize("shop.categories.title"),
+        reply_markup=markup,
+    )
     await state.update_data(
         category_page_items=list(page_items),
         category_page_num=page,

@@ -9,11 +9,13 @@ from .user_management import router as user_management_router
 from .role_management import router as role_management_router
 from .promo_management import router as promo_management_router
 from .sale_management import router as sale_management_router
+from .start_image_settings import router as start_image_settings_router
 
 from aiogram import Router
 
 router = Router()
 router.include_router(main_router)
+router.include_router(start_image_settings_router)
 router.include_router(adding_position_router)
 router.include_router(broadcast_router)
 router.include_router(categories_management_router)

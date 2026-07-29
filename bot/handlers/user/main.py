@@ -13,8 +13,14 @@ from bot.database.methods import (
     select_user_operations_total, select_user_items, check_user_cached
 )
 from bot.database.methods.read import get_cart_count, invalidate_user_cache
+from bot.database.methods.read import get_start_image_file_id
 from bot.database.methods.lazy_queries import query_user_operations_history
-from bot.handlers.other import check_sub_channel, _parse_channel_username
+from bot.handlers.other import (
+    check_sub_channel,
+    delete_for_text_transition,
+    transition_to_text,
+    _parse_channel_username,
+)
 from bot.keyboards import main_menu, back, profile_keyboard, check_sub
 from bot.misc import EnvKeys
 from bot.misc.metrics import get_metrics
@@ -22,6 +28,54 @@ from bot.i18n import localize
 from bot.logger_mesh import logger
 
 router = Router()
+
+TELEGRAM_PHOTO_CAPTION_LIMIT = 1024
+_UNUSABLE_START_IMAGE_ERRORS = (
+    "wrong file identifier/http url specified",
+    "wrong file identifier",
+    "file reference expired",
+    "file_reference_expired",
+)
+
+
+def _is_unusable_start_image_error(error: TelegramBadRequest) -> bool:
+    description = (getattr(error, "message", "") or str(error)).lower()
+    return any(marker in description for marker in _UNUSABLE_START_IMAGE_ERRORS)
+
+
+async def render_start_screen(
+    message: Message,
+    role: int,
+    *,
+    replace_current: bool = False,
+) -> None:
+    """Render the production start screen for /start and admin preview."""
+    text = localize("menu.title")
+    channel_username = _parse_channel_username()
+    markup = main_menu(role=role, channel=channel_username, helper=EnvKeys.HELPER_ID)
+    file_id = await get_start_image_file_id()
+
+    if not file_id:
+        if replace_current:
+            await transition_to_text(message, text, reply_markup=markup)
+        else:
+            await message.answer(text, reply_markup=markup)
+        return
+
+    if replace_current:
+        await delete_for_text_transition(message)
+
+    try:
+        if len(text) <= TELEGRAM_PHOTO_CAPTION_LIMIT:
+            await message.answer_photo(photo=file_id, caption=text, reply_markup=markup)
+        else:
+            await message.answer_photo(photo=file_id)
+            await message.answer(text, reply_markup=markup)
+    except TelegramBadRequest as error:
+        if not _is_unusable_start_image_error(error):
+            raise
+        logger.warning("start_screen_image_unusable")
+        await message.answer(text, reply_markup=markup)
 
 
 async def _ensure_user(user_id: int) -> dict | None:
@@ -146,8 +200,7 @@ async def start(message: Message, state: FSMContext):
             await _delete_quietly(message)
             return
 
-    markup = main_menu(role=role_data, channel=channel_username, helper=EnvKeys.HELPER_ID)
-    await message.answer(localize("menu.title"), reply_markup=markup)
+    await render_start_screen(message, role_data)
     await _delete_quietly(message)
     await state.clear()
 
@@ -162,10 +215,7 @@ async def back_to_menu_callback_handler(call: CallbackQuery, state: FSMContext):
 
     role = await check_role_cached(user_id) or 0
 
-    channel_username = _parse_channel_username()
-
-    markup = main_menu(role=role, channel=channel_username, helper=EnvKeys.HELPER_ID)
-    await call.message.edit_text(localize("menu.title"), reply_markup=markup)
+    await render_start_screen(call.message, role, replace_current=True)
     await state.clear()
 
 
@@ -176,7 +226,11 @@ async def rules_callback_handler(call: CallbackQuery, state: FSMContext):
     """
     rules_data = EnvKeys.RULES
     if rules_data:
-        await call.message.edit_text(rules_data, reply_markup=back("back_to_menu"))
+        await transition_to_text(
+            call.message,
+            rules_data,
+            reply_markup=back("back_to_menu"),
+        )
     else:
         await call.answer(localize("rules.not_set"))
     await state.clear()
@@ -211,7 +265,12 @@ async def profile_callback_handler(call: CallbackQuery, state: FSMContext):
         f"{localize('profile.purchased_count', count=items)}"
     )
     try:
-        await call.message.edit_text(text, reply_markup=markup, parse_mode='HTML')
+        await transition_to_text(
+            call.message,
+            text,
+            reply_markup=markup,
+            parse_mode='HTML',
+        )
     except TelegramBadRequest as e:
         if "message is not modified" not in str(e):
             raise
@@ -304,5 +363,3 @@ async def _show_operations_page(call: CallbackQuery, state: FSMContext, user_id:
     kb.row(InlineKeyboardButton(text=localize("btn.back"), callback_data="profile"))
 
     await call.message.edit_text("\n".join(lines), reply_markup=kb.as_markup())
-
-

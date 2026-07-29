@@ -61,11 +61,29 @@ def admin_console_keyboard(maintenance_mode: bool = False, role: int = 127) -> I
     if role & Permission.BROADCAST:
         kb.button(text=localize("admin.menu.broadcast"), callback_data="send_message")
     if role & Permission.SETTINGS_MANAGE:
+        kb.button(text=localize("admin.menu.start_image"), callback_data="start_image_settings")
         maintenance_key = "admin.menu.maintenance_on" if maintenance_mode else "admin.menu.maintenance_off"
         kb.button(text=localize(maintenance_key), callback_data="toggle_maintenance")
     kb.button(text=localize("btn.back"), callback_data="back_to_menu")
     kb.adjust(1)
     return kb.as_markup()
+
+
+def start_image_settings_keyboard(configured: bool) -> InlineKeyboardMarkup:
+    """Actions for the single configurable /start image."""
+    actions = []
+    if configured:
+        actions.extend([
+            (localize("admin.start_image.replace"), "start_image_upload"),
+            (localize("admin.start_image.remove"), "start_image_remove"),
+        ])
+    else:
+        actions.append((localize("admin.start_image.add"), "start_image_upload"))
+    actions.extend([
+        (localize("admin.start_image.preview"), "start_image_preview"),
+        (localize("btn.back"), "console"),
+    ])
+    return simple_buttons(actions, per_row=1)
 
 
 def simple_buttons(buttons: Iterable[Tuple[str, str]], per_row: int = 1) -> InlineKeyboardMarkup:

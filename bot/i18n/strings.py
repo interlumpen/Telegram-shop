@@ -402,6 +402,26 @@ TRANSLATIONS: dict[str, dict[str, str]] = {
         "admin.maintenance.enabled": "✅ Режим тех. работ включён",
         "admin.maintenance.disabled": "✅ Режим тех. работ выключён",
 
+        # === Admin: Start Screen Image ===
+        "admin.menu.start_image": "🖼 Изображение экрана /start",
+        "admin.start_image.title": "🖼 <b>Изображение экрана /start</b>",
+        "admin.start_image.status_configured": "Статус: изображение настроено.",
+        "admin.start_image.status_empty": "Статус: изображение не настроено.",
+        "admin.start_image.add": "➕ Добавить изображение",
+        "admin.start_image.replace": "🔄 Заменить изображение",
+        "admin.start_image.remove": "🗑 Удалить изображение",
+        "admin.start_image.preview": "👁 Предпросмотр",
+        "admin.start_image.prompt": "Отправьте фотографию для экрана /start.",
+        "admin.start_image.photo_required": "⚠️ Требуется фотография. Отправьте её как фото.",
+        "admin.start_image.added": "✅ Изображение добавлено.",
+        "admin.start_image.replaced": "✅ Изображение заменено.",
+        "admin.start_image.removed": "✅ Изображение удалено.",
+        "admin.start_image.already_empty": "ℹ️ Изображение уже не настроено.",
+        "admin.start_image.save_failed": "❌ Не удалось сохранить настройку. Попробуйте ещё раз.",
+        "admin.start_image.remove_confirm": "Удалить изображение экрана /start?",
+        "admin.start_image.stale": "⚠️ Настройка изменилась. Откройте её снова.",
+        "admin.start_image.preview_label": "👁 Предпросмотр экрана /start:",
+
         # === Promo Codes ===
         "btn.apply_promo": "🏷 Применить промокод",
         "btn.remove_promo": "❌ Убрать промокод",
@@ -938,6 +958,26 @@ TRANSLATIONS: dict[str, dict[str, str]] = {
         "admin.menu.maintenance_off": "🔧 Maintenance: OFF",
         "admin.maintenance.enabled": "✅ Maintenance mode enabled",
         "admin.maintenance.disabled": "✅ Maintenance mode disabled",
+
+        # === Admin: Start Screen Image ===
+        "admin.menu.start_image": "🖼 /start screen image",
+        "admin.start_image.title": "🖼 <b>/start screen image</b>",
+        "admin.start_image.status_configured": "Status: an image is configured.",
+        "admin.start_image.status_empty": "Status: no image is configured.",
+        "admin.start_image.add": "➕ Add image",
+        "admin.start_image.replace": "🔄 Replace image",
+        "admin.start_image.remove": "🗑 Remove image",
+        "admin.start_image.preview": "👁 Preview",
+        "admin.start_image.prompt": "Send a photo for the /start screen.",
+        "admin.start_image.photo_required": "⚠️ A photo is required. Send it as a photo.",
+        "admin.start_image.added": "✅ Image added.",
+        "admin.start_image.replaced": "✅ Image replaced.",
+        "admin.start_image.removed": "✅ Image removed.",
+        "admin.start_image.already_empty": "ℹ️ No image is currently configured.",
+        "admin.start_image.save_failed": "❌ Could not save the setting. Please try again.",
+        "admin.start_image.remove_confirm": "Remove the /start screen image?",
+        "admin.start_image.stale": "⚠️ The setting changed. Open it again.",
+        "admin.start_image.preview_label": "👁 /start screen preview:",
 
         # === Promo Codes ===
         "btn.apply_promo": "🏷 Apply promo code",
