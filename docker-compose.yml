@@ -1,6 +1,8 @@
 services:
   redis:
     image: redis:7-alpine
+    environment:
+      REDIS_PASSWORD: ${REDIS_PASSWORD:-changeme_redis_pass}
     command: redis-server --appendonly yes --requirepass "${REDIS_PASSWORD:-changeme_redis_pass}"
     volumes:
       - redis_data:/data
